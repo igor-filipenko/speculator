@@ -1,0 +1,17 @@
+# Environment
+.env
+.env.local
+
+# Dependencies / build
+node_modules/
+dist/
+
+# Logs / local state
+*.log
+signals.jsonl
+paper-state.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

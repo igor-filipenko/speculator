@@ -1,0 +1,48 @@
+# AGENTS.md
+
+Guidance for AI coding agents working in this repository.
+
+## Project
+
+**speculator** — TypeScript CLI that emits Solana swing/intraday trade *recommendations* (`BUY` / `SELL` / `HOLD`) using EMA/RSI on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes.
+
+Canonical product plan: [PLANS.md](./PLANS.md). Build/run: [README.md](./README.md).
+
+## Hard constraints (v1)
+
+- **Do not** add backtesting, live Jupiter swaps, wallet signing, Executor/dry-run layers, or `TradeIntent` unless the user explicitly expands scope.
+- **Do not** add shorts, leverage, or multi-position sizing.
+- Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
+- Comments and user-facing docs in this repo are **English**.
+- Keep the dependency surface small: prefer `fetch` + zod + tsx. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
+- Never commit secrets (`.env`, private keys). Use `.env.example` only.
+
+## Layout
+
+```
+src/
+  index.ts              # CLI entry: watch | paper
+  config.ts             # zod + dotenv
+  types.ts              # Candle, Signal, Position
+  market/gecko-terminal.ts
+  jupiter/client.ts     # quote only
+  strategy/indicators.ts
+  strategy/ema-rsi.ts
+  paper/portfolio.ts
+  notify/console.ts
+  engine/watch.ts
+```
+
+## Conventions
+
+- Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, jupiter, engine).
+- Paper fills must be labeled **simulated** in logs; they are not real on-chain prices after fees/slippage.
+- One long position per pair: ignore BUY when already long; ignore SELL when flat.
+- When changing strategy defaults, update `PLANS.md` and `.env.example` together.
+- After substantive code changes, run `pnpm typecheck` (and a quick `pnpm watch` smoke if APIs are reachable).
+
+## Security
+
+- Treat `JUPITER_API_KEY` as secret.
+- Do not introduce code paths that load or log private keys in v1.
+- Prefer high-trust, maintained packages; avoid adding deps with known high/critical CVEs.

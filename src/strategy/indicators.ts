@@ -3,12 +3,12 @@
  */
 
 /** Exponential moving average over `period` closes. Returns nulls until warm. */
-export function ema(values: number[], period: number): Array<number | null> {
+export function ema(values: number[], period: number): (number | null)[] {
   if (period < 1) {
     throw new Error("EMA period must be >= 1");
   }
 
-  const out: Array<number | null> = new Array(values.length).fill(null);
+  const out: (number | null)[] = Array.from({ length: values.length }, () => null);
   if (values.length < period) {
     return out;
   }
@@ -34,12 +34,12 @@ export function ema(values: number[], period: number): Array<number | null> {
  * Wilder RSI. Returns nulls until the period is warm.
  * Standard formula: RSI = 100 - 100 / (1 + RS), RS = avgGain / avgLoss.
  */
-export function rsi(values: number[], period: number): Array<number | null> {
+export function rsi(values: number[], period: number): (number | null)[] {
   if (period < 1) {
     throw new Error("RSI period must be >= 1");
   }
 
-  const out: Array<number | null> = new Array(values.length).fill(null);
+  const out: (number | null)[] = Array.from({ length: values.length }, () => null);
   if (values.length <= period) {
     return out;
   }

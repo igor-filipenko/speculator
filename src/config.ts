@@ -82,10 +82,8 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
 
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();
   const chatId = env.TELEGRAM_CHAT_ID.trim();
-  const telegram =
-    botToken && chatId ? { botToken, chatId } : undefined;
 
-  return {
+  const config: AppConfig = {
     mode: overrides?.mode ?? env.MODE,
     strategy: env.STRATEGY,
     jupiterApiKey: env.JUPITER_API_KEY,
@@ -93,8 +91,13 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
     pollIntervalMs: env.POLL_INTERVAL_MS,
     paperCashUsdc: env.PAPER_CASH_USDC,
     pairs,
-    telegram,
   };
+
+  if (botToken && chatId) {
+    config.telegram = { botToken, chatId };
+  }
+
+  return config;
 }
 
 export interface StrategyParams {

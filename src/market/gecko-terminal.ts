@@ -6,7 +6,7 @@ const GECKO_BASE = "https://api.geckoterminal.com/api/v2";
 interface GeckoOhlcvResponse {
   data?: {
     attributes?: {
-      ohlcv_list?: Array<[number, number, number, number, number, number]>;
+      ohlcv_list?: [number, number, number, number, number, number][];
     };
   };
 }

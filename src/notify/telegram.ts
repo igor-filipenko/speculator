@@ -24,7 +24,7 @@ export async function sendTelegramMessage(
     await getBot(config.botToken).api.sendMessage(config.chatId, text);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Telegram send failed: ${message}`);
+    throw new Error(`Telegram send failed: ${message}`, { cause: err });
   }
 }
 

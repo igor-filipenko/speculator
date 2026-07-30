@@ -40,7 +40,8 @@ src/
 - Paper fills must be labeled **simulated** in logs; they are not real on-chain prices after fees/slippage.
 - One long position per pair: ignore BUY when already long; ignore SELL when flat.
 - When changing strategy defaults, update `PLANS.md` and `.env.example` together.
-- After substantive code changes, run `pnpm typecheck` (and a quick `pnpm watch` smoke if APIs are reachable).
+- After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0`).
+- Keep TypeScript strict flags in `tsconfig.json` and type-aware rules in `eslint.config.js`; do not weaken them without discussion.
 
 ## Security
 

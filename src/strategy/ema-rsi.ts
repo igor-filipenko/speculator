@@ -34,15 +34,16 @@ export function evaluateEmaRsi(input: EmaRsiInput): Signal {
   const emaSlowPrev = prev >= 0 ? slowSeries[prev] : null;
   const rsiNow = rsiSeries[i];
 
+  const meta: NonNullable<Signal["meta"]> = {};
+  if (emaFast != null) meta.emaFast = emaFast;
+  if (emaSlow != null) meta.emaSlow = emaSlow;
+  if (rsiNow != null) meta.rsi = rsiNow;
+
   const base = {
     pair,
     price,
     at,
-    meta: {
-      emaFast: emaFast ?? undefined,
-      emaSlow: emaSlow ?? undefined,
-      rsi: rsiNow ?? undefined,
-    },
+    meta,
   };
 
   if (

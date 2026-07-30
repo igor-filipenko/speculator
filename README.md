@@ -49,10 +49,17 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable outbound alerts v
 
 ## Build
 
-Typecheck:
+Typecheck + type-aware ESLint (zero warnings allowed):
+
+```bash
+pnpm check
+```
+
+Or separately:
 
 ```bash
 pnpm typecheck
+pnpm lint
 ```
 
 Compile to `dist/`:
@@ -61,7 +68,7 @@ Compile to `dist/`:
 pnpm build
 ```
 
-Day-to-day development uses `tsx` (no build required for `watch` / `paper`).
+Day-to-day development uses `tsx` (no build required for `watch` / `paper`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
 
 ## Run
 

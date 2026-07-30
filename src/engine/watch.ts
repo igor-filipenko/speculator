@@ -55,7 +55,11 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     console.error("Failed to send start message to Telegram");
     process.exit(1);
   }
-  const shutdown = once ? async () => {} : installLifecycleNotifiers(config.telegram);
+  const shutdown = once
+    ? async (): Promise<void> => {
+        /* no-op for --once */
+      }
+    : installLifecycleNotifiers(config.telegram);
 
   const tick = async (): Promise<void> => {
     for (const pair of config.pairs) {

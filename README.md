@@ -86,6 +86,130 @@ pnpm exec tsx src/index.ts paper --once
 
 Signals are printed to the console and appended to `signals.jsonl` in the project root. With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat.
 
+## Deploy (Ubuntu VPS + systemd)
+
+Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history is also written to `signals.jsonl` in the app directory.
+
+### 1. Install runtime on the VPS
+
+```bash
+# Node 24 LTS (or any Node >= 24)
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+
+sudo corepack enable
+corepack prepare pnpm@10.14.0 --activate
+```
+
+Confirm `pnpm` is on the path systemd will use (often `/usr/bin/pnpm`):
+
+```bash
+which pnpm
+```
+
+If it differs, edit `ExecStart=` in the unit file accordingly.
+
+### 2. Clone and configure
+
+```bash
+git clone git@github.com:igor-filipenko/speculator.git ~/speculator
+cd ~/speculator
+pnpm install
+cp .env.example .env
+chmod 600 .env
+nano .env   # set JUPITER_API_KEY (and optional Telegram vars)
+```
+
+Smoke-test once before enabling the service:
+
+```bash
+pnpm exec tsx src/index.ts paper --once
+```
+
+### 3. Install `speculator.service`
+
+```bash
+# Adjust User, Group, WorkingDirectory, EnvironmentFile, ExecStart paths
+nano deploy/speculator.service
+
+sudo cp deploy/speculator.service /etc/systemd/system/speculator.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now speculator
+sudo systemctl status speculator
+```
+
+The unit defaults to **`pnpm paper`**. For signals only, change `ExecStart` to `/usr/bin/pnpm watch`.
+
+### Alternative: clone the repo, then install runtime files to `/opt/speculator`
+
+If you clone the repo on the VPS but want the actual runtime installed in `/opt/speculator`, you can build from the clone and copy only the runtime files there. This avoids `rsync` and lets you remove the clone afterward.
+
+```bash
+git clone git@github.com:igor-filipenko/speculator.git ~/speculator-src
+cd ~/speculator-src
+pnpm install
+pnpm build
+
+sudo mkdir -p /opt/speculator
+sudo cp -R dist /opt/speculator/
+sudo cp package.json pnpm-lock.yaml .env.example /opt/speculator/
+sudo cp deploy/speculator.service /opt/speculator/speculator.service
+
+sudo cp /opt/speculator/.env.example /opt/speculator/.env
+sudo chmod 600 /opt/speculator/.env
+sudo pnpm install --prod --dir /opt/speculator
+```
+
+Then point the service to that directory:
+
+```ini
+WorkingDirectory=/opt/speculator
+EnvironmentFile=/opt/speculator/.env
+ExecStart=/usr/bin/node /opt/speculator/dist/index.js paper
+```
+
+This layout lets you remove the source repo after deployment. The runtime directory only needs:
+
+```text
+/opt/speculator/
+  dist/
+  node_modules/
+  package.json
+  pnpm-lock.yaml
+  .env
+  signals.jsonl
+```
+
+Optional cleanup after the service is working:
+
+```bash
+rm -rf ~/speculator-src
+```
+
+### 4. Monitor logs
+
+```bash
+# Follow live ticks, fills, and errors
+journalctl -u speculator -f
+
+# Recent history
+journalctl -u speculator --since "1 hour ago"
+
+# JSONL signal history (WorkingDirectory)
+tail -f ~/speculator/signals.jsonl
+```
+
+### 5. Update after `git pull`
+
+```bash
+cd ~/speculator
+git pull
+pnpm install
+sudo systemctl restart speculator
+```
+
+Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart speculator` · `sudo systemctl disable speculator`.
+
 ## Strategy (v1)
 
 EMA crossover + RSI filter, one virtual long per pair (`flat → long → flat`):
@@ -100,6 +224,8 @@ Paper fills are **simulated** (no on-chain fees, slippage, or MEV).
 ## Project layout
 
 ```
+deploy/
+  speculator.service       # systemd unit template
 src/
   index.ts                 # CLI
   config.ts                # zod + env

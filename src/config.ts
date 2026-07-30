@@ -19,7 +19,14 @@ const envSchema = z.object({
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
   GECKO_POOL_ADDRESS: z.string().optional().default(""),
+  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+  TELEGRAM_CHAT_ID: z.string().optional().default(""),
 });
+
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+}
 
 export interface AppConfig {
   mode: RunMode;
@@ -29,6 +36,8 @@ export interface AppConfig {
   pollIntervalMs: number;
   paperCashUsdc: number;
   pairs: PairConfig[];
+  /** Present only when both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set. */
+  telegram?: TelegramConfig;
 }
 
 function resolvePair(symbol: string, geckoPoolOverride: string): PairConfig {
@@ -71,6 +80,11 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
     resolvePair(symbol, env.GECKO_POOL_ADDRESS),
   );
 
+  const botToken = env.TELEGRAM_BOT_TOKEN.trim();
+  const chatId = env.TELEGRAM_CHAT_ID.trim();
+  const telegram =
+    botToken && chatId ? { botToken, chatId } : undefined;
+
   return {
     mode: overrides?.mode ?? env.MODE,
     strategy: env.STRATEGY,
@@ -79,6 +93,7 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
     pollIntervalMs: env.POLL_INTERVAL_MS,
     paperCashUsdc: env.PAPER_CASH_USDC,
     pairs,
+    telegram,
   };
 }
 

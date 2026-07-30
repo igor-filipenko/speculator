@@ -13,7 +13,7 @@ CLI bot that:
 2. Computes lightweight EMA/RSI indicators and prints `BUY` / `SELL` / `HOLD`.
 3. In **paper** mode, maintains a virtual portfolio and P&L using Jupiter quotes as simulated fill prices.
 
-**Out of scope for v1:** backtest, Executor / dry-run / live swaps, `TradeIntent`, shorts, Telegram.
+**Out of scope for v1:** backtest, Executor / dry-run / live swaps, `TradeIntent`, shorts.
 
 ### Why GeckoTerminal (even without backtest)
 
@@ -38,6 +38,7 @@ flowchart LR
 | Strategy | EMA/RSI → Signal |
 | Engine | Poll loop: data → signal → notify / paper |
 | PaperLedger | Virtual cash/position and P&L |
+| Notify | Console + JSONL; optional Telegram (BUY/SELL + paper fills via grammY) |
 
 ### Strategy (EMA crossover + RSI filter)
 
@@ -70,6 +71,8 @@ WATCHLIST=SOL/USDC
 POLL_INTERVAL_MS=60000
 PAPER_CASH_USDC=1000
 GECKO_POOL_ADDRESS=  # optional explicit Solana pool
+TELEGRAM_BOT_TOKEN=  # optional; with CHAT_ID enables Telegram alerts
+TELEGRAM_CHAT_ID=
 ```
 
 ### Risks

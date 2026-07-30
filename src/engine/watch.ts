@@ -1,4 +1,4 @@
-import type { AppConfig } from "../config.js";
+import type { AppConfig, TelegramConfig } from "../config.js";
 import { strategyParams } from "../config.js";
 import { JupiterClient } from "../jupiter/client.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
@@ -8,9 +8,14 @@ import {
   logPaperTrade,
   logSignal,
 } from "../notify/console.js";
-import { PaperPortfolio } from "../paper/portfolio.js";
+import {
+  formatPaperTradeMessage,
+  formatSignalMessage,
+  sendTelegramMessage,
+} from "../notify/telegram.js";
+import { PaperPortfolio, type PaperTrade } from "../paper/portfolio.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import type { PairConfig } from "../types.js";
+import type { PairConfig, Signal } from "../types.js";
 
 export interface WatchOptions {
   config: AppConfig;
@@ -99,6 +104,7 @@ async function processPair(args: {
 
   logSignal(signal);
   await appendSignalJsonl(signal);
+  await notifyTelegramSignal(config.telegram, signal);
 
   if (config.mode !== "paper") {
     return;
@@ -112,8 +118,39 @@ async function processPair(args: {
   const trade = portfolio.applySignal(signal);
   if (trade) {
     logPaperTrade(trade);
+    await notifyTelegramPaperTrade(config.telegram, trade);
   }
   logPaperSnapshot(portfolio.getSnapshot(price));
+}
+
+async function notifyTelegramSignal(
+  telegram: TelegramConfig | undefined,
+  signal: Signal,
+): Promise<void> {
+  if (!telegram || signal.side === "HOLD") {
+    return;
+  }
+  try {
+    await sendTelegramMessage(telegram, formatSignalMessage(signal));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Telegram signal notify failed: ${message}`);
+  }
+}
+
+async function notifyTelegramPaperTrade(
+  telegram: TelegramConfig | undefined,
+  trade: PaperTrade,
+): Promise<void> {
+  if (!telegram) {
+    return;
+  }
+  try {
+    await sendTelegramMessage(telegram, formatPaperTradeMessage(trade));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Telegram paper notify failed: ${message}`);
+  }
 }
 
 function sleep(ms: number): Promise<void> {

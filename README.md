@@ -36,6 +36,16 @@ Edit `.env`:
 | `POLL_INTERVAL_MS` | Poll interval (default `60000`) |
 | `PAPER_CASH_USDC` | Starting virtual USDC for paper mode |
 | `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV |
+| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_CHAT_ID` | Optional chat id to receive alerts |
+
+### Telegram (optional)
+
+Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable outbound alerts via [grammY](https://grammy.dev/) (`sendMessage` only — no polling). You get messages for **BUY/SELL** signals and paper fills; **HOLD** stays console/JSONL only.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
+2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
+3. Put both values in `.env`.
 
 ## Build
 
@@ -74,7 +84,7 @@ pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
 ```
 
-Signals are printed to the console and appended to `signals.jsonl` in the project root.
+Signals are printed to the console and appended to `signals.jsonl` in the project root. With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat.
 
 ## Strategy (v1)
 
@@ -100,5 +110,6 @@ src/
   strategy/ema-rsi.ts
   paper/portfolio.ts
   notify/console.ts
+  notify/telegram.ts       # optional grammY outbound alerts
   engine/watch.ts
 ```

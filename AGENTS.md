@@ -14,7 +14,7 @@ Canonical product plan: [PLANS.md](./PLANS.md). Build/run: [README.md](./README.
 - **Do not** add shorts, leverage, or multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
 - Comments and user-facing docs in this repo are **English**.
-- Keep the dependency surface small: prefer `fetch` + zod + tsx. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
+- Keep the dependency surface small: prefer `fetch` + zod + tsx; `grammy` is allowed for optional Telegram notify. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
 - Never commit secrets (`.env`, private keys). Use `.env.example` only.
 
 ## Layout
@@ -30,6 +30,7 @@ src/
   strategy/ema-rsi.ts
   paper/portfolio.ts
   notify/console.ts
+  notify/telegram.ts    # optional outbound alerts (grammY, no polling)
   engine/watch.ts
 ```
 
@@ -43,6 +44,6 @@ src/
 
 ## Security
 
-- Treat `JUPITER_API_KEY` as secret.
+- Treat `JUPITER_API_KEY` and `TELEGRAM_BOT_TOKEN` as secrets.
 - Do not introduce code paths that load or log private keys in v1.
 - Prefer high-trust, maintained packages; avoid adding deps with known high/critical CVEs.

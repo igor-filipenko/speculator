@@ -47,12 +47,15 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     }
   }
 
-  console.log(
-    `Starting ${config.mode} mode | strategy=${config.strategy} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`,
-  );
+  const startMsg = `Starting ${config.mode} mode | strategy=${config.strategy} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  console.log(startMsg);
 
-  await notifyTelegram(config.telegram, 
-    `Starting ${config.mode} mode with strategy=${config.strategy} (${params.timeframe})\nState: pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`);
+  const ok = once ? true : await notifyTelegram(config.telegram, startMsg);
+  if (!ok) {
+    console.error("Failed to send start message to Telegram");
+    process.exit(1);
+  }
+  const shutdown = once ? async () => {} : installLifecycleNotifiers(config.telegram);
 
   const tick = async (): Promise<void> => {
     for (const pair of config.pairs) {
@@ -65,14 +68,20 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     }
   };
 
-  await tick();
-  if (once) {
-    return;
-  }
-
-  for (;;) {
-    await sleep(config.pollIntervalMs);
+  try {
     await tick();
+    if (once) {
+      await shutdown("once complete", 0);
+      return;
+    }
+
+    for (;;) {
+      await sleep(config.pollIntervalMs);
+      await tick();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await shutdown(`crash: ${message}`, 1);
   }
 }
 
@@ -126,18 +135,65 @@ async function processPair(args: {
   logPaperSnapshot(portfolio.getSnapshot(price));
 }
 
+/**
+ * Notify Telegram on SIGINT/SIGTERM and uncaught crashes, then exit.
+ * Returns a callable used for orderly stops (e.g. --once) and fatal errors inside runWatch.
+ */
+function installLifecycleNotifiers(
+  telegram: TelegramConfig | undefined,
+): (reason: string, exitCode: number) => Promise<void> {
+  let shuttingDown = false;
+
+  const shutdown = async (reason: string, exitCode: number): Promise<void> => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+
+    const text = `Stopped (${reason})`;
+    console.log(text);
+    await notifyTelegram(telegram, text);
+
+    // Allow a clean exit after --once without forcing process.exit (lets main resolve).
+    if (reason === "once complete") {
+      return;
+    }
+    process.exit(exitCode);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT", 130);
+  });
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM", 0);
+  });
+  process.once("uncaughtException", (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    void shutdown(`crash: ${message}`, 1);
+  });
+  process.once("unhandledRejection", (reason) => {
+    const message =
+      reason instanceof Error ? reason.message : String(reason);
+    void shutdown(`crash: ${message}`, 1);
+  });
+
+  return shutdown;
+}
+
 async function notifyTelegram(
   telegram: TelegramConfig | undefined,
-  message: string
-): Promise<void> {
+  text: string,
+): Promise<boolean> {
   if (!telegram) {
-    return;
+    return true;
   }
   try {
-    await sendTelegramMessage(telegram, message);
+    await sendTelegramMessage(telegram, text);
+    return true;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`Telegram bot started notification failed: ${message}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`Telegram notify failed: ${errMsg}`);
+    return false;
   }
 }
 

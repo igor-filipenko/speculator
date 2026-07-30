@@ -5,16 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Replace with the Linux user that owns the clone
+# Replace with the Linux user that owns the runtime directory
 User=YOUR_USER
 Group=YOUR_USER
-WorkingDirectory=/home/YOUR_USER/speculator
+WorkingDirectory=/opt/speculator
 
 # Loads JUPITER_API_KEY, TELEGRAM_*, STRATEGY, etc.
-EnvironmentFile=/home/YOUR_USER/speculator/.env
+EnvironmentFile=/opt/speculator/.env
 
-# paper = virtual portfolio; use `pnpm watch` for signals only
-ExecStart=/usr/bin/pnpm paper
+# Built runtime (deployed via README one-shot command)
+ExecStart=/usr/bin/node /opt/speculator/dist/index.js paper
 
 Restart=always
 RestartSec=10

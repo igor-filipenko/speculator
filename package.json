@@ -12,7 +12,8 @@
     "watch": "tsx src/index.ts watch",
     "paper": "tsx src/index.ts paper",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "install-runtime": "node scripts/install-runtime.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

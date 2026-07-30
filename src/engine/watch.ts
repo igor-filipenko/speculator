@@ -51,6 +51,9 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     `Starting ${config.mode} mode | strategy=${config.strategy} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`,
   );
 
+  await notifyTelegram(config.telegram, 
+    `Starting ${config.mode} mode with strategy=${config.strategy} (${params.timeframe})\nState: pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`);
+
   const tick = async (): Promise<void> => {
     for (const pair of config.pairs) {
       try {
@@ -121,6 +124,21 @@ async function processPair(args: {
     await notifyTelegramPaperTrade(config.telegram, trade);
   }
   logPaperSnapshot(portfolio.getSnapshot(price));
+}
+
+async function notifyTelegram(
+  telegram: TelegramConfig | undefined,
+  message: string
+): Promise<void> {
+  if (!telegram) {
+    return;
+  }
+  try {
+    await sendTelegramMessage(telegram, message);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Telegram bot started notification failed: ${message}`);
+  }
 }
 
 async function notifyTelegramSignal(

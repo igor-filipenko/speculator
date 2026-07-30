@@ -15,10 +15,13 @@
     "build": "tsc"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "dependencies": {
     "dotenv": "^16.6.1",
+    "grammy": "^1.45.1",
     "zod": "^4.0.5"
   },
   "devDependencies": {

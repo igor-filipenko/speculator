@@ -83,10 +83,12 @@ function normalizePortfolio(
  * Load paper state from disk.
  * Missing file → null. Corrupt/invalid → warn and return null.
  */
-export async function loadPaperState(): Promise<PersistedPaperState | null> {
+export async function loadPaperState(
+  path = PAPER_STATE_PATH,
+): Promise<PersistedPaperState | null> {
   let raw: string;
   try {
-    raw = await readFile(PAPER_STATE_PATH, "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
     if (
       err !== null &&
@@ -97,7 +99,7 @@ export async function loadPaperState(): Promise<PersistedPaperState | null> {
       return null;
     }
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Warning: could not read ${PAPER_STATE_PATH}: ${message}`);
+    console.warn(`Warning: could not read ${path}: ${message}`);
     return null;
   }
 
@@ -106,7 +108,7 @@ export async function loadPaperState(): Promise<PersistedPaperState | null> {
     json = JSON.parse(raw);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Warning: invalid JSON in ${PAPER_STATE_PATH}: ${message}`);
+    console.warn(`Warning: invalid JSON in ${path}: ${message}`);
     return null;
   }
 
@@ -115,7 +117,7 @@ export async function loadPaperState(): Promise<PersistedPaperState | null> {
     const details = parsed.error.issues
       .map((i) => `${i.path.join(".")}: ${i.message}`)
       .join("; ");
-    console.warn(`Warning: invalid ${PAPER_STATE_PATH}: ${details}`);
+    console.warn(`Warning: invalid ${path}: ${details}`);
     return null;
   }
 
@@ -136,6 +138,7 @@ export async function loadPaperState(): Promise<PersistedPaperState | null> {
  */
 export async function savePaperState(
   portfolios: Map<string, PaperPortfolio>,
+  path = PAPER_STATE_PATH,
 ): Promise<void> {
   const state: PersistedPaperState = {
     version: 1,
@@ -147,8 +150,8 @@ export async function savePaperState(
     state.portfolios[pair] = portfolio.toPersisted();
   }
 
-  const tmpPath = `${PAPER_STATE_PATH}.${process.pid}.tmp`;
+  const tmpPath = `${path}.${process.pid}.tmp`;
   const body = `${JSON.stringify(state, null, 2)}\n`;
   await writeFile(tmpPath, body, "utf8");
-  await rename(tmpPath, PAPER_STATE_PATH);
+  await rename(tmpPath, path);
 }

@@ -4,7 +4,13 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "scripts/**", "eslint.config.js"],
+    ignores: [
+      "dist/**",
+      "dist-test/**",
+      "node_modules/**",
+      "scripts/**",
+      "eslint.config.js",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -31,6 +37,13 @@ export default tseslint.config(
           varsIgnorePattern: "^_",
         },
       ],
+    },
+  },
+  {
+    files: ["**/*.test.ts"],
+    rules: {
+      // node:test describe/it/before/after return thenables; the runner awaits them.
+      "@typescript-eslint/no-floating-promises": "off",
     },
   },
 );

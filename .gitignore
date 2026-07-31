@@ -5,6 +5,7 @@
 # Dependencies / build
 node_modules/
 dist/
+dist-test/
 
 # Logs / local state
 *.log

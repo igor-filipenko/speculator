@@ -13,8 +13,9 @@
     "paper": "tsx src/index.ts paper",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "check": "pnpm typecheck && pnpm lint",
-    "build": "tsc",
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "test": "rm -rf dist-test && tsc -p tsconfig.test.json && node --test dist-test/**/*.test.js",
+    "build": "tsc -p tsconfig.build.json",
     "install-runtime": "node scripts/install-runtime.mjs"
   },
   "pnpm": {

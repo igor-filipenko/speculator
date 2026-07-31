@@ -26,6 +26,7 @@
   "dependencies": {
     "dotenv": "^16.6.1",
     "grammy": "^1.45.1",
+    "ts-pattern": "5.9.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {

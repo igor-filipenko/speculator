@@ -12,6 +12,8 @@ import {
   formatPaperTradeMessage,
   formatSignalMessage,
   sendTelegramMessage,
+  startTelegramCommands,
+  type TelegramCommandState,
 } from "../notify/telegram.js";
 import { PaperPortfolio, type PaperTrade } from "../paper/portfolio.js";
 import { loadPaperState, savePaperState } from "../paper/store.js";
@@ -63,6 +65,13 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     }
   }
 
+  const lastSignals = new Map<string, Signal>();
+  const telegramState: TelegramCommandState = {
+    mode: config.mode,
+    lastSignals,
+    portfolios,
+  };
+
   const startMsg = `Starting ${config.mode} mode | strategy=${config.strategy} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
@@ -71,16 +80,29 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     console.error("Failed to send start message to Telegram");
     process.exit(1);
   }
+
+  let stopTelegramCommands: (() => Promise<void>) | undefined;
+  if (config.telegram && !once) {
+    stopTelegramCommands = startTelegramCommands(config.telegram, telegramState);
+  }
+
   const shutdown = once
     ? async (): Promise<void> => {
         /* no-op for --once */
       }
-    : installLifecycleNotifiers(config.telegram);
+    : installLifecycleNotifiers(config.telegram, stopTelegramCommands);
 
   const tick = async (): Promise<void> => {
     for (const pair of config.pairs) {
       try {
-        await processPair({ config, pair, params, jupiter, portfolios });
+        await processPair({
+          config,
+          pair,
+          params,
+          jupiter,
+          portfolios,
+          lastSignals,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[${pair.symbol}] tick failed: ${message}`);
@@ -111,8 +133,9 @@ async function processPair(args: {
   params: ReturnType<typeof strategyParams>;
   jupiter: JupiterClient;
   portfolios: Map<string, PaperPortfolio>;
+  lastSignals: Map<string, Signal>;
 }): Promise<void> {
-  const { config, pair, params, jupiter, portfolios } = args;
+  const { config, pair, params, jupiter, portfolios, lastSignals } = args;
 
   const candles = await fetchCandles({
     poolAddress: pair.geckoPoolAddress,
@@ -134,6 +157,7 @@ async function processPair(args: {
     price,
   });
 
+  lastSignals.set(pair.symbol, signal);
   logSignal(signal);
   await appendSignalJsonl(signal);
   await notifyTelegramSignal(config.telegram, signal);
@@ -162,6 +186,7 @@ async function processPair(args: {
  */
 function installLifecycleNotifiers(
   telegram: TelegramConfig | undefined,
+  stopTelegramCommands?: () => Promise<void>,
 ): (reason: string, exitCode: number) => Promise<void> {
   let shuttingDown = false;
 
@@ -170,6 +195,15 @@ function installLifecycleNotifiers(
       return;
     }
     shuttingDown = true;
+
+    if (stopTelegramCommands) {
+      try {
+        await stopTelegramCommands();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Telegram command polling stop failed: ${message}`);
+      }
+    }
 
     const text = `Stopped (${reason})`;
     console.log(text);

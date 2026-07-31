@@ -37,11 +37,17 @@ Edit `.env`:
 | `PAPER_CASH_USDC` | Starting virtual USDC for paper mode (when `paper-state.json` is absent) |
 | `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV |
 | `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather) |
-| `TELEGRAM_CHAT_ID` | Optional chat id to receive alerts |
+| `TELEGRAM_CHAT_ID` | Optional chat id for alerts and commands |
 
 ### Telegram (optional)
 
-Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable outbound alerts via [grammY](https://grammy.dev/) (`sendMessage` only — no polling). You get messages for **BUY/SELL** signals and paper fills; **HOLD** stays console/JSONL only.
+Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/JSONL only), plus inbound commands from the configured chat:
+
+| Command | Reply |
+|---------|--------|
+| `/start` | Greeting and command list |
+| `/report` | Last signal per pair (including HOLD) |
+| `/portfolio` | Current paper portfolio (paper mode only) |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -91,7 +97,7 @@ pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
 ```
 
-Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat.
+Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report` and `/portfolio` from that chat.
 
 ## Deploy (Ubuntu VPS + systemd)
 
@@ -244,6 +250,6 @@ src/
   paper/portfolio.ts
   paper/store.ts
   notify/console.ts
-  notify/telegram.ts       # optional grammY outbound alerts
+  notify/telegram.ts       # optional grammY alerts + /start /report /portfolio
   engine/watch.ts
 ```

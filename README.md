@@ -153,9 +153,18 @@ sudo systemctl status speculator
 
 The unit defaults to **`pnpm paper`**. For signals only, change `ExecStart` to `/usr/bin/pnpm watch`.
 
-### Alternative: clone the repo, then install runtime to `/opt/speculator`
+### Alternative: runtime install under `/opt/speculator`
 
-Clone on the VPS, build, then use the custom `install-runtime` script (not `pnpm deploy`) to copy runtime files and install production deps:
+Install a production layout (`dist/` + prod `node_modules`) instead of running from a full source clone. After install, edit secrets once:
+
+```bash
+sudo nano /opt/speculator/.env
+sudo chmod 600 /opt/speculator/.env
+```
+
+Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env` / `signals.jsonl` / `paper-state.json`.
+
+#### A. From the VPS (git clone + `install-runtime`)
 
 ```bash
 git clone git@github.com:igor-filipenko/speculator.git ~/speculator-src
@@ -163,12 +172,17 @@ cd ~/speculator-src
 pnpm install
 pnpm build
 sudo pnpm install-runtime -- /opt/speculator
-# edit secrets once:
-sudo nano /opt/speculator/.env
-sudo chmod 600 /opt/speculator/.env
 ```
 
-`pnpm install-runtime -- <path>` copies `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, runs `pnpm install --prod` in the target, and **preserves** an existing `.env` / `signals.jsonl` / `paper-state.json`.
+#### B. From your machine (no git on the VPS)
+
+Requires SSH access and `pnpm` on the host. Builds locally, then scp’s the runtime and installs prod deps remotely:
+
+```bash
+./deploy/deploy.sh user@vps.example.com
+# or a custom path:
+./deploy/deploy.sh user@vps.example.com /opt/speculator
+```
 
 Point the service at that directory (see [deploy/speculator.service](./deploy/speculator.service)):
 
@@ -207,14 +221,21 @@ tail -f /opt/speculator/signals.jsonl
 cat /opt/speculator/paper-state.json
 ```
 
-### 5. Redeploy after `git pull` (one shot)
+### 5. Redeploy
 
-From the **source clone** on the VPS:
+**From a source clone on the VPS:**
 
 ```bash
 git pull && pnpm install && pnpm build && \
   sudo pnpm install-runtime -- /opt/speculator && \
   sudo systemctl restart speculator
+```
+
+**From your machine** (no git pull on the VPS):
+
+```bash
+./deploy/deploy.sh user@vps.example.com /opt/speculator
+ssh user@vps.example.com 'sudo systemctl restart speculator'
 ```
 
 Change `/opt/speculator` if you use another runtime path.
@@ -236,6 +257,7 @@ Paper fills are **simulated** (no on-chain fees, slippage, or MEV).
 
 ```
 deploy/
+  deploy.sh                # build + scp runtime to a remote host
   speculator.service       # systemd unit template
 scripts/
   install-runtime.mjs      # copy runtime + pnpm install --prod to a path

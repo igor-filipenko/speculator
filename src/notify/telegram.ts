@@ -1,7 +1,15 @@
 import { Bot } from "grammy";
+import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import type { PaperPortfolio, PaperTrade } from "../paper/portfolio.js";
 import type { RunMode, Signal } from "../types.js";
+
+/** Tagged payloads for outbound Telegram notifications. */
+type TelegramInfo =
+  | { type: "start" }
+  | { type: "shutdown"; code: number; reason?: string }
+  | { type: "signal"; signal: Signal }
+  | { type: "paperTrade"; trade: PaperTrade };
 
 /** Live state the command handlers read (owned by the watch engine). */
 export interface TelegramCommandState {
@@ -24,8 +32,44 @@ function getBot(token: string): Bot {
   return bot;
 }
 
+/**
+ * Format and send a Telegram notification. No-ops when config is missing.
+ * Returns false if the send failed (caller may treat start failure as fatal).
+ */
+export async function notifyTelegram(
+  config: TelegramConfig | undefined,
+  info: TelegramInfo,
+): Promise<boolean> {
+  if (!config) {
+    return true;
+  }
+
+  try {
+    const text = match(info)
+      .with({ type: "start" }, () => formatStartMessage())
+      .with({ type: "shutdown" }, (shutdown) => formatShutdownMessage(shutdown))
+      .with({ type: "signal", signal: { side: "HOLD" } }, () => null)
+      .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
+      .with({ type: "paperTrade" }, ({ trade }) => formatPaperTradeMessage(trade),
+      )
+      .exhaustive();
+
+    if (text == null) {
+      // skip hold
+      return true;
+    }
+
+    await sendTelegramMessage(config, text);
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Telegram notify failed: ${message}`);
+    return false;
+  }
+}
+
 /** Send a plain-text Telegram message via grammY. */
-export async function sendTelegramMessage(
+async function sendTelegramMessage(
   config: TelegramConfig,
   text: string,
 ): Promise<void> {
@@ -37,7 +81,7 @@ export async function sendTelegramMessage(
   }
 }
 
-export function formatSignalMessage(signal: Signal): string {
+function formatSignalMessage(signal: Signal): string {
   const ts = signal.at.toISOString();
   const meta = signal.meta
     ? ` emaFast=${fmt(signal.meta.emaFast)} emaSlow=${fmt(signal.meta.emaSlow)} rsi=${fmt(signal.meta.rsi)}`
@@ -45,7 +89,7 @@ export function formatSignalMessage(signal: Signal): string {
   return `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)} — ${signal.reason}${meta}`;
 }
 
-export function formatPaperTradeMessage(trade: PaperTrade): string {
+function formatPaperTradeMessage(trade: PaperTrade): string {
   const pnl =
     trade.realizedPnl != null
       ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC`
@@ -53,7 +97,7 @@ export function formatPaperTradeMessage(trade: PaperTrade): string {
   return `PAPER ${trade.side} ${trade.pair} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)} (simulated)${pnl}`;
 }
 
-export function formatStartMessage(): string {
+function formatStartMessage(): string {
   return [
     "Speculator bot is running.",
     "",
@@ -64,14 +108,23 @@ export function formatStartMessage(): string {
   ].join("\n");
 }
 
-export function formatReportMessage(lastSignals: Map<string, Signal>): string {
+function formatShutdownMessage(shutdown: {
+  code: number;
+  reason?: string;
+}): string {
+  return shutdown.reason != null
+    ? `Stopped (${shutdown.reason}) code=${shutdown.code}`
+    : `Shutdown with code ${shutdown.code}.`;
+}
+
+function formatReportMessage(lastSignals: Map<string, Signal>): string {
   if (lastSignals.size === 0) {
     return "No signal yet. Wait for the next poll tick.";
   }
   return [...lastSignals.values()].map(formatSignalMessage).join("\n");
 }
 
-export function formatPortfolioMessage(
+function formatPortfolioMessage(
   mode: RunMode,
   portfolios: Map<string, PaperPortfolio>,
   lastSignals: Map<string, Signal>,

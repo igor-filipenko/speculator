@@ -9,13 +9,11 @@ import {
   logSignal,
 } from "../notify/console.js";
 import {
-  formatPaperTradeMessage,
-  formatSignalMessage,
-  sendTelegramMessage,
+  notifyTelegram,
   startTelegramCommands,
   type TelegramCommandState,
 } from "../notify/telegram.js";
-import { PaperPortfolio, type PaperTrade } from "../paper/portfolio.js";
+import { PaperPortfolio } from "../paper/portfolio.js";
 import { loadPaperState, savePaperState } from "../paper/store.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
 import type { PairConfig, Signal } from "../types.js";
@@ -75,7 +73,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
   const startMsg = `Starting ${config.mode} mode | strategy=${config.strategy} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
-  const ok = once ? true : await notifyTelegram(config.telegram, startMsg);
+  const ok = once ? true : await notifyTelegram(config.telegram, { type: "start" });
   if (!ok) {
     console.error("Failed to send start message to Telegram");
     process.exit(1);
@@ -160,7 +158,7 @@ async function processPair(args: {
   lastSignals.set(pair.symbol, signal);
   logSignal(signal);
   await appendSignalJsonl(signal);
-  await notifyTelegramSignal(config.telegram, signal);
+  await notifyTelegram(config.telegram, { type: "signal", signal });
 
   if (config.mode !== "paper") {
     return;
@@ -174,7 +172,7 @@ async function processPair(args: {
   const trade = portfolio.applySignal(signal);
   if (trade) {
     logPaperTrade(trade);
-    await notifyTelegramPaperTrade(config.telegram, trade);
+    await notifyTelegram(config.telegram, { type: "paperTrade", trade });
     await savePaperState(portfolios);
   }
   logPaperSnapshot(portfolio.getSnapshot(price));
@@ -205,9 +203,12 @@ function installLifecycleNotifiers(
       }
     }
 
-    const text = `Stopped (${reason})`;
-    console.log(text);
-    await notifyTelegram(telegram, text);
+    console.log(`Stopped (${reason})`);
+    await notifyTelegram(telegram, {
+      type: "shutdown",
+      code: exitCode,
+      reason,
+    });
 
     // Allow a clean exit after --once without forcing process.exit (lets main resolve).
     if (reason === "once complete") {
@@ -233,53 +234,6 @@ function installLifecycleNotifiers(
   });
 
   return shutdown;
-}
-
-async function notifyTelegram(
-  telegram: TelegramConfig | undefined,
-  text: string,
-): Promise<boolean> {
-  if (!telegram) {
-    return true;
-  }
-  try {
-    await sendTelegramMessage(telegram, text);
-    return true;
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`Telegram notify failed: ${errMsg}`);
-    return false;
-  }
-}
-
-async function notifyTelegramSignal(
-  telegram: TelegramConfig | undefined,
-  signal: Signal,
-): Promise<void> {
-  if (!telegram || signal.side === "HOLD") {
-    return;
-  }
-  try {
-    await sendTelegramMessage(telegram, formatSignalMessage(signal));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`Telegram signal notify failed: ${message}`);
-  }
-}
-
-async function notifyTelegramPaperTrade(
-  telegram: TelegramConfig | undefined,
-  trade: PaperTrade,
-): Promise<void> {
-  if (!telegram) {
-    return;
-  }
-  try {
-    await sendTelegramMessage(telegram, formatPaperTradeMessage(trade));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`Telegram paper notify failed: ${message}`);
-  }
 }
 
 function sleep(ms: number): Promise<void> {

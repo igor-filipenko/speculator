@@ -7,7 +7,7 @@
  *   pnpm install-runtime /opt/speculator
  *
  * Copies dist/, package.json, pnpm-lock.yaml, .env.example.
- * Preserves existing .env and signals.jsonl.
+ * Preserves existing .env, signals.jsonl, and paper-state.json.
  * Runs `pnpm install --prod` in the target.
  */
 import { spawnSync } from "node:child_process";

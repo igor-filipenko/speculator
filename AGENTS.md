@@ -29,6 +29,7 @@ src/
   strategy/indicators.ts
   strategy/ema-rsi.ts
   paper/portfolio.ts
+  paper/store.ts        # paper-state.json load/save
   notify/console.ts
   notify/telegram.ts    # optional outbound alerts (grammY, no polling)
   engine/watch.ts

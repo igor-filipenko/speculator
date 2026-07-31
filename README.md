@@ -34,7 +34,7 @@ Edit `.env`:
 | `JUPITER_API_KEY` | From [portal.jup.ag](https://portal.jup.ag/) — recommended |
 | `WATCHLIST` | `SOL/USDC` (only pair in v1) |
 | `POLL_INTERVAL_MS` | Poll interval (default `60000`) |
-| `PAPER_CASH_USDC` | Starting virtual USDC for paper mode |
+| `PAPER_CASH_USDC` | Starting virtual USDC for paper mode (when `paper-state.json` is absent) |
 | `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV |
 | `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather) |
 | `TELEGRAM_CHAT_ID` | Optional chat id to receive alerts |
@@ -91,11 +91,11 @@ pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
 ```
 
-Signals are printed to the console and appended to `signals.jsonl` in the project root. With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat.
+Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat.
 
 ## Deploy (Ubuntu VPS + systemd)
 
-Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history is also written to `signals.jsonl` in the app directory.
+Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history is written to `signals.jsonl` and paper portfolio state to `paper-state.json` in the app directory.
 
 ### 1. Install runtime on the VPS
 
@@ -162,7 +162,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-`pnpm install-runtime -- <path>` copies `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, runs `pnpm install --prod` in the target, and **preserves** an existing `.env` / `signals.jsonl`.
+`pnpm install-runtime -- <path>` copies `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, runs `pnpm install --prod` in the target, and **preserves** an existing `.env` / `signals.jsonl` / `paper-state.json`.
 
 Point the service at that directory (see [deploy/speculator.service](./deploy/speculator.service)):
 
@@ -182,6 +182,7 @@ Runtime layout:
   pnpm-lock.yaml
   .env
   signals.jsonl
+  paper-state.json
 ```
 
 ### 4. Monitor logs
@@ -195,6 +196,9 @@ journalctl -u speculator --since "1 hour ago"
 
 # JSONL signal history (WorkingDirectory)
 tail -f /opt/speculator/signals.jsonl
+
+# Paper portfolio snapshot
+cat /opt/speculator/paper-state.json
 ```
 
 ### 5. Redeploy after `git pull` (one shot)
@@ -238,6 +242,7 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI
   strategy/ema-rsi.ts
   paper/portfolio.ts
+  paper/store.ts
   notify/console.ts
   notify/telegram.ts       # optional grammY outbound alerts
   engine/watch.ts

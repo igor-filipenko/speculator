@@ -20,6 +20,41 @@ export interface PaperSnapshot {
   trades: PaperTrade[];
 }
 
+/** Serializable position (dates as ISO strings). */
+export interface PersistedPosition {
+  pair: string;
+  side: "flat" | "long";
+  size: number;
+  entryPrice: number;
+  openedAt?: string;
+}
+
+/** Serializable trade (dates as ISO strings). */
+export interface PersistedTrade {
+  pair: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  realizedPnl?: number;
+  at: string;
+  simulated: true;
+}
+
+/** One pair's durable paper ledger. */
+export interface PersistedPortfolio {
+  cashUsdc: number;
+  realizedPnl: number;
+  position: PersistedPosition;
+  trades: PersistedTrade[];
+}
+
+/** On-disk paper state file shape (`paper-state.json`). */
+export interface PersistedPaperState {
+  version: 1;
+  updatedAt: string;
+  portfolios: Record<string, PersistedPortfolio>;
+}
+
 /**
  * Single-pair virtual long-only portfolio.
  * Fills are simulated at the provided price (typically a Jupiter quote).
@@ -37,6 +72,76 @@ export class PaperPortfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+    };
+  }
+
+  /** Restore a portfolio from persisted state. */
+  static fromPersisted(data: PersistedPortfolio): PaperPortfolio {
+    const portfolio = new PaperPortfolio(data.position.pair, 0);
+    portfolio.cashUsdc = data.cashUsdc;
+    portfolio.realizedPnl = data.realizedPnl;
+
+    const position: Position = {
+      pair: data.position.pair,
+      side: data.position.side,
+      size: data.position.size,
+      entryPrice: data.position.entryPrice,
+    };
+    if (data.position.openedAt !== undefined) {
+      position.openedAt = new Date(data.position.openedAt);
+    }
+    portfolio.position = position;
+
+    for (const t of data.trades) {
+      const trade: PaperTrade = {
+        pair: t.pair,
+        side: t.side,
+        price: t.price,
+        size: t.size,
+        at: new Date(t.at),
+        simulated: true,
+      };
+      if (t.realizedPnl !== undefined) {
+        trade.realizedPnl = t.realizedPnl;
+      }
+      portfolio.trades.push(trade);
+    }
+
+    return portfolio;
+  }
+
+  /** Snapshot suitable for JSON persistence (no mark-to-market equity). */
+  toPersisted(): PersistedPortfolio {
+    const position: PersistedPosition = {
+      pair: this.position.pair,
+      side: this.position.side,
+      size: this.position.size,
+      entryPrice: this.position.entryPrice,
+    };
+    if (this.position.openedAt !== undefined) {
+      position.openedAt = this.position.openedAt.toISOString();
+    }
+
+    const trades: PersistedTrade[] = this.trades.map((t) => {
+      const trade: PersistedTrade = {
+        pair: t.pair,
+        side: t.side,
+        price: t.price,
+        size: t.size,
+        at: t.at.toISOString(),
+        simulated: true,
+      };
+      if (t.realizedPnl !== undefined) {
+        trade.realizedPnl = t.realizedPnl;
+      }
+      return trade;
+    });
+
+    return {
+      cashUsdc: this.cashUsdc,
+      realizedPnl: this.realizedPnl,
+      position,
+      trades,
     };
   }
 

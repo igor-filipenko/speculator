@@ -37,7 +37,7 @@ flowchart LR
 | JupiterClient | Spot quote for paper fills |
 | Strategy | EMA/RSI → Signal |
 | Engine | Poll loop: data → signal → notify / paper |
-| PaperLedger | Virtual cash/position and P&L |
+| PaperLedger | Virtual cash/position and P&L; persisted to `paper-state.json` |
 | Notify | Console + JSONL; optional Telegram (BUY/SELL + paper fills via grammY) |
 
 ### Strategy (EMA crossover + RSI filter)
@@ -69,11 +69,13 @@ STRATEGY=intraday    # intraday | swing
 JUPITER_API_KEY=
 WATCHLIST=SOL/USDC
 POLL_INTERVAL_MS=60000
-PAPER_CASH_USDC=1000
+PAPER_CASH_USDC=1000   # seeds paper portfolio when paper-state.json is absent
 GECKO_POOL_ADDRESS=  # optional explicit Solana pool
 TELEGRAM_BOT_TOKEN=  # optional; with CHAT_ID enables Telegram alerts
 TELEGRAM_CHAT_ID=
 ```
+
+Paper portfolio state (cash, open position, realized P&L, trades) is saved to `paper-state.json` after each fill and restored on restart. Delete that file to reset to `PAPER_CASH_USDC`.
 
 ### Risks
 

@@ -14,6 +14,7 @@ import {
   sendTelegramMessage,
 } from "../notify/telegram.js";
 import { PaperPortfolio, type PaperTrade } from "../paper/portfolio.js";
+import { loadPaperState, savePaperState } from "../paper/store.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
 import type { PairConfig, Signal } from "../types.js";
 
@@ -39,11 +40,26 @@ export async function runWatch(options: WatchOptions): Promise<void> {
 
   const portfolios = new Map<string, PaperPortfolio>();
   if (config.mode === "paper") {
+    const saved = await loadPaperState();
     for (const pair of config.pairs) {
-      portfolios.set(
-        pair.symbol,
-        new PaperPortfolio(pair.symbol, config.paperCashUsdc),
-      );
+      const persisted = saved?.portfolios[pair.symbol];
+      if (persisted) {
+        const portfolio = PaperPortfolio.fromPersisted(persisted);
+        portfolios.set(pair.symbol, portfolio);
+        const snap = portfolio.toPersisted();
+        const pos =
+          snap.position.side === "long"
+            ? `long ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`
+            : "flat";
+        console.log(
+          `Restored paper ${pair.symbol}: cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
+        );
+      } else {
+        portfolios.set(
+          pair.symbol,
+          new PaperPortfolio(pair.symbol, config.paperCashUsdc),
+        );
+      }
     }
   }
 
@@ -135,6 +151,7 @@ async function processPair(args: {
   if (trade) {
     logPaperTrade(trade);
     await notifyTelegramPaperTrade(config.telegram, trade);
+    await savePaperState(portfolios);
   }
   logPaperSnapshot(portfolio.getSnapshot(price));
 }

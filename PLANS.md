@@ -38,7 +38,7 @@ flowchart LR
 | Strategy | EMA/RSI → Signal |
 | Engine | Poll loop: data → signal → notify / paper |
 | PaperLedger | Virtual cash/position and P&L; persisted to `paper-state.json` |
-| Notify | Console + JSONL; optional Telegram (BUY/SELL + paper fills; `/start` `/report` `/portfolio` via grammY) |
+| Notify | Console + JSONL; optional Telegram (BUY/SELL + paper fills; `/start` `/report` with candle chart `/portfolio` via grammY) |
 
 ### Strategy (EMA crossover + RSI filter)
 

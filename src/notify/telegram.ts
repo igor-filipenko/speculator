@@ -1,8 +1,9 @@
-import { Bot } from "grammy";
+import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
-import type { TelegramConfig } from "../config.js";
+import type { StrategyParams, TelegramConfig } from "../config.js";
+import { renderOhlcvPng } from "../chart/render-png.js";
 import type { PaperPortfolio, PaperTrade } from "../paper/portfolio.js";
-import type { RunMode, Signal } from "../types.js";
+import type { Candle, RunMode, Signal } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
@@ -14,7 +15,9 @@ type TelegramInfo =
 /** Live state the command handlers read (owned by the watch engine). */
 export interface TelegramCommandState {
   mode: RunMode;
+  params: StrategyParams;
   lastSignals: Map<string, Signal>;
+  lastCandles: Map<string, Candle[]>;
   portfolios: Map<string, PaperPortfolio>;
 }
 
@@ -103,7 +106,7 @@ function formatStartMessage(): string {
     "",
     "Commands:",
     "/start — this help",
-    "/report — last signal per pair",
+    "/report — last signal per pair + candle chart (EMA/RSI)",
     "/portfolio — current paper portfolio",
   ].join("\n");
 }
@@ -186,6 +189,7 @@ export function startTelegramCommands(
   instance.command("report", async (ctx) => {
     try {
       await ctx.reply(formatReportMessage(state.lastSignals));
+      await sendReportCharts(ctx, state);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Telegram /report failed: ${message}`);
@@ -224,6 +228,40 @@ export function startTelegramCommands(
     await instance.stop();
     commandsStarted = false;
   };
+}
+
+/** Send one OHLCV chart photo per pair that has cached candles. */
+async function sendReportCharts(
+  ctx: Context,
+  state: TelegramCommandState,
+): Promise<void> {
+  for (const [pair, candles] of state.lastCandles) {
+    if (candles.length === 0) {
+      continue;
+    }
+    try {
+      const png = renderOhlcvPng({
+        pair,
+        candles,
+        params: state.params,
+      });
+      const signal = state.lastSignals.get(pair);
+      const caption = signal
+        ? `${pair} ${signal.side} @ ${signal.price.toFixed(6)}`
+        : pair;
+      await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-report.png`), {
+        caption,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Telegram /report chart failed for ${pair}: ${message}`);
+      try {
+        await ctx.reply(`Chart failed for ${pair} (text report above is still valid).`);
+      } catch {
+        /* ignore secondary reply failure */
+      }
+    }
+  }
 }
 
 function fmt(n: number | undefined): string {

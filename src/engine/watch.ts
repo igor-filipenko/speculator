@@ -16,7 +16,7 @@ import {
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { loadPaperState, savePaperState } from "../paper/store.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import type { PairConfig, Signal } from "../types.js";
+import type { Candle, PairConfig, Signal } from "../types.js";
 
 export interface WatchOptions {
   config: AppConfig;
@@ -64,9 +64,12 @@ export async function runWatch(options: WatchOptions): Promise<void> {
   }
 
   const lastSignals = new Map<string, Signal>();
+  const lastCandles = new Map<string, Candle[]>();
   const telegramState: TelegramCommandState = {
     mode: config.mode,
+    params,
     lastSignals,
+    lastCandles,
     portfolios,
   };
 
@@ -100,6 +103,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
           jupiter,
           portfolios,
           lastSignals,
+          lastCandles,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -132,13 +136,22 @@ async function processPair(args: {
   jupiter: JupiterClient;
   portfolios: Map<string, PaperPortfolio>;
   lastSignals: Map<string, Signal>;
+  lastCandles: Map<string, Candle[]>;
 }): Promise<void> {
-  const { config, pair, params, jupiter, portfolios, lastSignals } = args;
+  const {
+    config,
+    pair,
+    params,
+    jupiter,
+    portfolios,
+    lastSignals,
+    lastCandles,
+  } = args;
 
   const candles = await fetchCandles({
     poolAddress: pair.geckoPoolAddress,
     timeframe: params.timeframe,
-    limit: Math.max(params.emaSlow + params.rsiPeriod + 5, 50),
+    limit: Math.max(params.emaSlow + params.rsiPeriod + 5, 120),
   });
 
   const price = await jupiter.spotPrice({
@@ -155,6 +168,7 @@ async function processPair(args: {
     price,
   });
 
+  lastCandles.set(pair.symbol, candles);
   lastSignals.set(pair.symbol, signal);
   logSignal(signal);
   await appendSignalJsonl(signal);

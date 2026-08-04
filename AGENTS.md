@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana swing/intraday trade *recommendations* (`BUY` / `SELL` / `HOLD`) using EMA/RSI on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes.
+**speculator** — TypeScript CLI that emits Solana swing/intraday trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes.
 
 Canonical product plan: [PLANS.md](./PLANS.md). Build/run: [README.md](./README.md).
 
@@ -14,6 +14,7 @@ Canonical product plan: [PLANS.md](./PLANS.md). Build/run: [README.md](./README.
 - **Do not** add shorts, leverage, or multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
 - Comments and user-facing docs in this repo are **English**.
+- Format with **Prettier** (`pnpm format`); `pnpm check` includes `format:check`. Prefer the Prettier VS Code/Cursor extension (format on save is enabled in `.vscode/settings.json`).
 - Keep the dependency surface small: prefer `fetch` + zod + tsx; `grammy` is allowed for optional Telegram notify/commands. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
 - Never commit secrets (`.env`, private keys). Use `.env.example` only.
 

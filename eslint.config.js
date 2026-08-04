@@ -1,16 +1,11 @@
 import eslint from "@eslint/js";
+import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [
-      "dist/**",
-      "dist-test/**",
-      "node_modules/**",
-      "scripts/**",
-      "eslint.config.js",
-    ],
+    ignores: ["dist/**", "dist-test/**", "node_modules/**", "scripts/**", "eslint.config.js"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -46,4 +41,6 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "off",
     },
   },
+  // Disable ESLint rules that conflict with Prettier (must be last).
+  eslintConfigPrettier,
 );

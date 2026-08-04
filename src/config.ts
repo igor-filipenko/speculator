@@ -1,6 +1,6 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
-import type { PairConfig, RunMode, StrategyMode } from "./types.js";
+import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.js";
 
 loadDotenv();
 
@@ -100,18 +100,10 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
   return config;
 }
 
-export interface StrategyParams {
-  timeframe: "15m" | "4h";
-  emaFast: number;
-  emaSlow: number;
-  rsiPeriod: number;
-  rsiBuyMax: number;
-  rsiSellMin: number;
-}
-
 export function strategyParams(mode: StrategyMode): StrategyParams {
   if (mode === "swing") {
     return {
+      mode: "swing",
       timeframe: "4h",
       emaFast: 12,
       emaSlow: 26,
@@ -122,6 +114,7 @@ export function strategyParams(mode: StrategyMode): StrategyParams {
   }
 
   return {
+    mode: "intraday",
     timeframe: "15m",
     emaFast: 9,
     emaSlow: 21,

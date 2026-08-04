@@ -1,12 +1,45 @@
 import { rename, readFile, writeFile } from "node:fs/promises";
 import { z } from "zod";
-import {
-  PaperPortfolio,
-  type PersistedPaperState,
-  type PersistedPortfolio,
-  type PersistedPosition,
-  type PersistedTrade,
-} from "./portfolio.js";
+
+/** Serializable position (dates as ISO strings). */
+export interface PersistedPosition {
+  pair: string;
+  side: "flat" | "long";
+  size: number;
+  entryPrice: number;
+  openedAt?: string;
+}
+
+/** Serializable trade (dates as ISO strings). */
+export interface PersistedTrade {
+  pair: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  realizedPnl?: number;
+  at: string;
+  simulated: true;
+}
+
+/** One pair's durable paper ledger. */
+export interface PersistedPortfolio {
+  cashUsdc: number;
+  realizedPnl: number;
+  position: PersistedPosition;
+  trades: PersistedTrade[];
+}
+
+/** On-disk paper state file shape (`paper-state.json`). */
+export interface PersistedPaperState {
+  version: 1;
+  updatedAt: string;
+  portfolios: Record<string, PersistedPortfolio>;
+}
+
+/** Anything that can be written into `paper-state.json`. */
+export interface PersistablePortfolio {
+  toPersisted(): PersistedPortfolio;
+}
 
 export const PAPER_STATE_PATH = "paper-state.json";
 
@@ -40,8 +73,6 @@ const persistedPaperStateSchema = z.object({
   updatedAt: z.string().min(1),
   portfolios: z.record(z.string(), persistedPortfolioSchema),
 });
-
-export type { PersistedPaperState, PersistedPortfolio };
 
 function normalizePortfolio(
   raw: z.infer<typeof persistedPortfolioSchema>,
@@ -137,7 +168,7 @@ export async function loadPaperState(
  * Atomically persist all paper portfolios (temp file + rename).
  */
 export async function savePaperState(
-  portfolios: Map<string, PaperPortfolio>,
+  portfolios: Map<string, PersistablePortfolio>,
   path = PAPER_STATE_PATH,
 ): Promise<void> {
   const state: PersistedPaperState = {

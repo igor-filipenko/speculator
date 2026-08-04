@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { StrategyParams } from "../config.js";
-import type { Candle } from "../types.js";
+import type { Candle, StrategyParams } from "../types.js";
 import { buildOhlcvSvg } from "./ohlcv-svg.js";
 
-const params: StrategyParams = {
+const strategy: StrategyParams = {
+  mode: "intraday",
   timeframe: "15m",
   emaFast: 9,
   emaSlow: 21,
@@ -39,7 +39,7 @@ describe("buildOhlcvSvg", () => {
     const svg = buildOhlcvSvg({
       pair: "SOL/USDC",
       candles: makeCandles(40),
-      params,
+      strategy,
     });
     assert.ok(svg.includes("<svg"));
     assert.ok(svg.includes("SOL/USDC"));
@@ -53,19 +53,19 @@ describe("buildOhlcvSvg", () => {
     const small = buildOhlcvSvg({
       pair: "SOL/USDC",
       candles: makeCandles(20),
-      params,
+      strategy,
     });
     const large = buildOhlcvSvg({
       pair: "SOL/USDC",
       candles: makeCandles(80),
-      params,
+      strategy,
     });
     assert.ok(large.length > small.length);
   });
 
   it("rejects an empty series", () => {
     assert.throws(
-      () => buildOhlcvSvg({ pair: "SOL/USDC", candles: [], params }),
+      () => buildOhlcvSvg({ pair: "SOL/USDC", candles: [], strategy }),
       /empty candle series/,
     );
   });

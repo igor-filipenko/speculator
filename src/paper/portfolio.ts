@@ -1,58 +1,26 @@
-import type { Position, Signal } from "../types.js";
+import { match } from "ts-pattern";
+import type { PairConfig, Portfolio, Position, Signal, Snapshot, Trade } from "../types.js";
+import {
+  loadPaperState,
+  savePaperState,
+  type PersistedPortfolio,
+  type PersistedPosition,
+  type PersistedTrade,
+} from "./store.js";
 
-export interface PaperTrade {
-  pair: string;
-  side: "BUY" | "SELL";
-  price: number;
-  size: number;
-  /** Realized P&L in quote currency (set on SELL). */
-  realizedPnl?: number;
-  at: Date;
+export type {
+  PersistedPaperState,
+  PersistedPortfolio,
+  PersistedPosition,
+  PersistedTrade,
+} from "./store.js";
+
+export interface PaperTrade extends Trade {
   simulated: true;
 }
 
-export interface PaperSnapshot {
-  cashUsdc: number;
-  position: Position;
-  realizedPnl: number;
-  /** Mark-to-market equity = cash + position * markPrice. */
-  equity: number;
-  trades: PaperTrade[];
-}
-
-/** Serializable position (dates as ISO strings). */
-export interface PersistedPosition {
-  pair: string;
-  side: "flat" | "long";
-  size: number;
-  entryPrice: number;
-  openedAt?: string;
-}
-
-/** Serializable trade (dates as ISO strings). */
-export interface PersistedTrade {
-  pair: string;
-  side: "BUY" | "SELL";
-  price: number;
-  size: number;
-  realizedPnl?: number;
-  at: string;
+export interface PaperSnapshot extends Snapshot {
   simulated: true;
-}
-
-/** One pair's durable paper ledger. */
-export interface PersistedPortfolio {
-  cashUsdc: number;
-  realizedPnl: number;
-  position: PersistedPosition;
-  trades: PersistedTrade[];
-}
-
-/** On-disk paper state file shape (`paper-state.json`). */
-export interface PersistedPaperState {
-  version: 1;
-  updatedAt: string;
-  portfolios: Record<string, PersistedPortfolio>;
 }
 
 /**
@@ -73,6 +41,32 @@ export class PaperPortfolio {
       size: 0,
       entryPrice: 0,
     };
+  }
+
+  static async load(pairs: PairConfig[], defaultCashUsdc: number): Promise<Map<string, Portfolio>> {
+    const portfolios = new Map<string, Portfolio>();
+    const saved = await loadPaperState();
+    for (const pair of pairs) {
+      const persisted = saved?.portfolios[pair.symbol];
+      if (persisted) {
+        const portfolio = PaperPortfolio.fromPersisted(persisted);
+        portfolios.set(pair.symbol, portfolio);
+        const snap = portfolio.toPersisted();
+        const pos =
+          snap.position.side === "long"
+            ? `long ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`
+            : "flat";
+        console.log(
+          `Restored paper ${pair.symbol}: cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
+        );
+      } else {
+        portfolios.set(
+          pair.symbol,
+          new PaperPortfolio(pair.symbol, defaultCashUsdc),
+        );
+      }
+    }
+    return portfolios;
   }
 
   /** Restore a portfolio from persisted state. */
@@ -149,6 +143,7 @@ export class PaperPortfolio {
     const positionValue =
       this.position.side === "long" ? this.position.size * markPrice : 0;
     return {
+      simulated: true,
       cashUsdc: this.cashUsdc,
       position: { ...this.position },
       realizedPnl: this.realizedPnl,
@@ -161,16 +156,17 @@ export class PaperPortfolio {
    * Apply a signal. BUY opens a long with all cash; SELL closes to cash.
    * Returns a trade if a fill happened, otherwise null.
    */
-  applySignal(signal: Signal): PaperTrade | null {
-    if (signal.side === "HOLD") {
-      return null;
-    }
+  async applySignal(signal: Signal): Promise<PaperTrade | null> {
+    const nextTrade = match(signal.side)
+      .with("HOLD", () => null)
+      .with("BUY", () => this.openLong(signal))
+      .with("SELL", () => this.closeLong(signal))
+      .exhaustive();
+    
+    if (nextTrade != null)
+      await savePaperState(new Map([[signal.pair, this]]));
 
-    if (signal.side === "BUY") {
-      return this.openLong(signal);
-    }
-
-    return this.closeLong(signal);
+    return nextTrade;
   }
 
   private openLong(signal: Signal): PaperTrade | null {

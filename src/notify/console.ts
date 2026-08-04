@@ -1,6 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import type { Signal } from "../types.js";
-import type { PaperSnapshot, PaperTrade } from "../paper/portfolio.js";
+import type { Signal, Snapshot, Trade } from "../types.js";
 
 const JSONL_PATH = "signals.jsonl";
 
@@ -14,7 +13,7 @@ export function logSignal(signal: Signal): void {
   );
 }
 
-export function logPaperTrade(trade: PaperTrade): void {
+export function logTrade(trade: Trade): void {
   const pnl =
     trade.realizedPnl != null
       ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC`
@@ -24,7 +23,7 @@ export function logPaperTrade(trade: PaperTrade): void {
   );
 }
 
-export function logPaperSnapshot(snapshot: PaperSnapshot): void {
+export function logSnapshot(snapshot: Snapshot): void {
   const pos =
     snapshot.position.side === "long"
       ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`

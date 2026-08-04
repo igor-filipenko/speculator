@@ -24,6 +24,7 @@
     ]
   },
   "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "dotenv": "^16.6.1",
     "grammy": "^1.45.1",
     "ts-pattern": "5.9.0",

@@ -1,5 +1,4 @@
-import type { Candle } from "../types.js";
-import type { StrategyParams } from "../config.js";
+import type { Candle, StrategyParams } from "../types.js";
 
 const GECKO_BASE = "https://api.geckoterminal.com/api/v2";
 

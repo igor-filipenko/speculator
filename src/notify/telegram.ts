@@ -1,24 +1,41 @@
 import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
-import type { StrategyParams, TelegramConfig } from "../config.js";
+import type { TelegramConfig } from "../config.js";
 import { renderOhlcvPng } from "../chart/render-png.js";
-import type { PaperPortfolio, PaperTrade } from "../paper/portfolio.js";
-import type { Candle, RunMode, Signal } from "../types.js";
+import type { Portfolio, ProgramState, RunMode, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
   | { type: "start" }
   | { type: "shutdown"; code: number; reason?: string }
   | { type: "signal"; signal: Signal }
-  | { type: "paperTrade"; trade: PaperTrade };
+  | { type: "trade"; trade: Trade };
 
-/** Live state the command handlers read (owned by the watch engine). */
-export interface TelegramCommandState {
-  mode: RunMode;
-  params: StrategyParams;
-  lastSignals: Map<string, Signal>;
-  lastCandles: Map<string, Candle[]>;
-  portfolios: Map<string, PaperPortfolio>;
+
+export class Telegram {
+  private readonly config: TelegramConfig | undefined;
+  private readonly onStop: () => Promise<void>;
+
+  private constructor(
+    config: TelegramConfig | undefined,
+    onStop: () => Promise<void>,
+  ) {
+    this.config = config;
+    this.onStop = onStop;
+  }
+
+  static start(config: TelegramConfig | undefined, state: ProgramState): Telegram {
+    const onStop = startTelegramCommands(config, state);
+    return new Telegram(config, onStop);
+  }
+
+  async notify(info: TelegramInfo): Promise<boolean> {
+    return notifyTelegram(this.config, info);
+  }
+
+  async stop(): Promise<void> {
+    await this.onStop();
+  }
 }
 
 /** One Bot per process — avoid constructing on every tick. */
@@ -39,7 +56,7 @@ function getBot(token: string): Bot {
  * Format and send a Telegram notification. No-ops when config is missing.
  * Returns false if the send failed (caller may treat start failure as fatal).
  */
-export async function notifyTelegram(
+async function notifyTelegram(
   config: TelegramConfig | undefined,
   info: TelegramInfo,
 ): Promise<boolean> {
@@ -53,7 +70,7 @@ export async function notifyTelegram(
       .with({ type: "shutdown" }, (shutdown) => formatShutdownMessage(shutdown))
       .with({ type: "signal", signal: { side: "HOLD" } }, () => null)
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
-      .with({ type: "paperTrade" }, ({ trade }) => formatPaperTradeMessage(trade),
+      .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade),
       )
       .exhaustive();
 
@@ -92,7 +109,7 @@ function formatSignalMessage(signal: Signal): string {
   return `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)} — ${signal.reason}${meta}`;
 }
 
-function formatPaperTradeMessage(trade: PaperTrade): string {
+function formatTradeMessage(trade: Trade): string {
   const pnl =
     trade.realizedPnl != null
       ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC`
@@ -129,7 +146,7 @@ function formatReportMessage(lastSignals: Map<string, Signal>): string {
 
 function formatPortfolioMessage(
   mode: RunMode,
-  portfolios: Map<string, PaperPortfolio>,
+  portfolios: Map<string, Portfolio>,
   lastSignals: Map<string, Signal>,
 ): string {
   if (mode !== "paper") {
@@ -158,10 +175,16 @@ function formatPortfolioMessage(
  * Register /start, /report, /portfolio and begin long polling.
  * Only the configured chatId is answered. Returns a stop function for shutdown.
  */
-export function startTelegramCommands(
-  config: TelegramConfig,
-  state: TelegramCommandState,
+function startTelegramCommands(
+  config: TelegramConfig | undefined,
+  state: ProgramState,
 ): () => Promise<void> {
+  if (!config) {
+    return async () => {
+      /* no-op when config is missing */
+    };
+  }
+
   const instance = getBot(config.botToken);
   if (commandsStarted) {
     return async () => {
@@ -233,7 +256,7 @@ export function startTelegramCommands(
 /** Send one OHLCV chart photo per pair that has cached candles. */
 async function sendReportCharts(
   ctx: Context,
-  state: TelegramCommandState,
+  state: ProgramState,
 ): Promise<void> {
   for (const [pair, candles] of state.lastCandles) {
     if (candles.length === 0) {
@@ -243,7 +266,7 @@ async function sendReportCharts(
       const png = renderOhlcvPng({
         pair,
         candles,
-        params: state.params,
+        strategy: state.strategy,
       });
       const signal = state.lastSignals.get(pair);
       const caption = signal

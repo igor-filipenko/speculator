@@ -1,12 +1,11 @@
 import { Resvg } from "@resvg/resvg-js";
-import type { StrategyParams } from "../config.js";
-import type { Candle } from "../types.js";
+import type { Candle, StrategyParams } from "../types.js";
 import { buildOhlcvSvg } from "./ohlcv-svg.js";
 
 export interface RenderOhlcvPngInput {
   pair: string;
   candles: Candle[];
-  params: StrategyParams;
+  strategy: StrategyParams;
 }
 
 /** Render OHLCV + EMA/RSI chart to a PNG buffer for Telegram photos. */

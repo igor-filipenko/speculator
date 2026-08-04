@@ -53,9 +53,7 @@ export class JupiterClient {
     const response = await fetch(url, { headers });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(
-        `Jupiter quote failed (${response.status}): ${body.slice(0, 300)}`,
-      );
+      throw new Error(`Jupiter quote failed (${response.status}): ${body.slice(0, 300)}`);
     }
 
     const raw = (await response.json()) as {
@@ -98,8 +96,7 @@ export class JupiterClient {
     /** Native base units to quote (default: 1 whole base token). */
     amountNative?: bigint;
   }): Promise<number> {
-    const amount =
-      params.amountNative ?? 10n ** BigInt(params.baseDecimals);
+    const amount = params.amountNative ?? 10n ** BigInt(params.baseDecimals);
     const q = await this.quote({
       inputMint: params.baseMint,
       outputMint: params.quoteMint,

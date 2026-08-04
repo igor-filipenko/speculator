@@ -1,11 +1,10 @@
-import type { StrategyParams } from "../config.js";
 import { ema, rsi } from "../strategy/indicators.js";
-import type { Candle } from "../types.js";
+import type { Candle, StrategyParams } from "../types.js";
 
 export interface OhlcvChartInput {
   pair: string;
   candles: Candle[];
-  params: StrategyParams;
+  strategy: StrategyParams;
   width?: number;
   height?: number;
 }
@@ -20,16 +19,16 @@ const PRICE_RATIO = 0.68;
 export function buildOhlcvSvg(input: OhlcvChartInput): string {
   const width = input.width ?? 900;
   const height = input.height ?? 520;
-  const { pair, candles, params } = input;
+  const { pair, candles, strategy } = input;
 
   if (candles.length === 0) {
     throw new Error("Cannot chart empty candle series");
   }
 
   const closes = candles.map((c) => c.close);
-  const emaFast = ema(closes, params.emaFast);
-  const emaSlow = ema(closes, params.emaSlow);
-  const rsiSeries = rsi(closes, params.rsiPeriod);
+  const emaFast = ema(closes, strategy.emaFast);
+  const emaSlow = ema(closes, strategy.emaSlow);
+  const rsiSeries = rsi(closes, strategy.rsiPeriod);
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom - GAP;
@@ -69,8 +68,7 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
   const bodyW = Math.max(1, step * 0.6);
 
   const xAt = (i: number): number => PAD.left + step * (i + 0.5);
-  const yPrice = (p: number): number =>
-    priceTop + ((maxP - p) / (maxP - minP)) * priceH;
+  const yPrice = (p: number): number => priceTop + ((maxP - p) / (maxP - minP)) * priceH;
   const yRsi = (v: number): number => rsiTop + ((100 - v) / 100) * rsiH;
 
   const candleParts: string[] = [];
@@ -91,10 +89,7 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
     );
   }
 
-  const linePath = (
-    series: (number | null)[],
-    yMap: (v: number) => number,
-  ): string => {
+  const linePath = (series: (number | null)[], yMap: (v: number) => number): string => {
     const parts: string[] = [];
     for (let i = 0; i < series.length; i++) {
       const v = series[i];
@@ -109,7 +104,7 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
   const emaSlowPath = linePath(emaSlow, yPrice);
   const rsiPath = linePath(rsiSeries, yRsi);
 
-  const title = `${escapeXml(pair)} · ${params.timeframe} · EMA${params.emaFast}/${params.emaSlow} · RSI${params.rsiPeriod}`;
+  const title = `${escapeXml(pair)} · ${strategy.timeframe} · EMA${strategy.emaFast}/${strategy.emaSlow} · RSI${strategy.rsiPeriod}`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
 
@@ -123,13 +118,13 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
   ${candleParts.join("\n  ")}
   ${emaFastPath ? `<path d="${emaFastPath}" fill="none" stroke="#38bdf8" stroke-width="1.5"/>` : ""}
   ${emaSlowPath ? `<path d="${emaSlowPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaFast}</text>
-  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaSlow}</text>
+  <text x="${PAD.left}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${strategy.emaFast}</text>
+  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${strategy.emaSlow}</text>
   <rect x="${PAD.left}" y="${rsiTop}" width="${plotW}" height="${rsiH}" fill="none" stroke="#1e293b"/>
   <line x1="${PAD.left}" y1="${yRsi(70)}" x2="${PAD.left + plotW}" y2="${yRsi(70)}" stroke="#475569" stroke-dasharray="4 3"/>
   <line x1="${PAD.left}" y1="${yRsi(30)}" x2="${PAD.left + plotW}" y2="${yRsi(30)}" stroke="#475569" stroke-dasharray="4 3"/>
   ${rsiPath ? `<path d="${rsiPath}" fill="none" stroke="#a78bfa" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${rsiTop + 14}" fill="#a78bfa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">RSI${params.rsiPeriod}</text>
+  <text x="${PAD.left}" y="${rsiTop + 14}" fill="#a78bfa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">RSI${strategy.rsiPeriod}</text>
   <text x="${width - PAD.right + 4}" y="${yRsi(70) + 4}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10">70</text>
   <text x="${width - PAD.right + 4}" y="${yRsi(30) + 4}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10">30</text>
 </svg>`;

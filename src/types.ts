@@ -50,3 +50,54 @@ export interface PairConfig {
   /** GeckoTerminal pool used for OHLCV. */
   geckoPoolAddress: string;
 }
+
+export interface StrategyParams {
+  mode: StrategyMode;
+  timeframe: "15m" | "4h";
+  emaFast: number;
+  emaSlow: number;
+  rsiPeriod: number;
+  rsiBuyMax: number;
+  rsiSellMin: number;
+}
+
+export interface Trade {
+  pair: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  /** Realized P&L in quote currency (set on SELL). */
+  realizedPnl?: number;
+  at: Date;
+  simulated: true;
+}
+
+export interface Snapshot {
+  cashUsdc: number;
+  position: Position;
+  realizedPnl: number;
+  /** Mark-to-market equity = cash + position * markPrice. */
+  equity: number;
+  trades: Trade[];
+}
+
+export interface Portfolio {
+  //cashUsdc: number;
+  //position: Position;
+  //realizedPnl: number;
+  //trades: Trade[];
+
+  getSnapshot(markPrice: number): Snapshot;
+
+  applySignal(signal: Signal): Promise<Trade | null>;
+}
+
+export interface ProgramState {
+  mode: RunMode;
+  strategy: StrategyParams;
+  lastSignals: Map<string, Signal>;
+  lastCandles: Map<string, Candle[]>;
+  portfolios: Map<string, Portfolio>;
+}
+
+export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

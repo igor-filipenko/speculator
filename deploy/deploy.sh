@@ -10,7 +10,7 @@
 #
 # Copies dist/, package.json, pnpm-lock.yaml, .env.example.
 # Does not overwrite remote .env, signals.jsonl, or paper-state.json.
-# Runs `pnpm install --prod` on the host after upload.
+# Runs `pnpm install --prod` on the host after upload, then restarts the service.
 set -euo pipefail
 
 usage() {
@@ -71,5 +71,8 @@ fi
 
 pnpm install --prod --dir "$target"
 echo "Runtime deployed at $target"
-echo "Run: node $target/dist/index.js paper"
 REMOTE
+
+echo "Restarting speculator service…"
+ssh "$HOST" "sudo systemctl restart speculator"
+echo "Deploy complete."

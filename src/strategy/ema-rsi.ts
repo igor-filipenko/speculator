@@ -1,11 +1,10 @@
-import type { StrategyParams } from "../config.js";
-import type { Candle, Signal, SignalSide } from "../types.js";
+import type { Candle, Signal, SignalSide, StrategyParams } from "../types.js";
 import { ema, rsi } from "./indicators.js";
 
 export interface EmaRsiInput {
   pair: string;
   candles: Candle[];
-  params: StrategyParams;
+  strategy: StrategyParams;
   /** Spot price used in the signal (usually Jupiter quote). */
   price: number;
   at?: Date;
@@ -17,13 +16,13 @@ export interface EmaRsiInput {
  * SELL when fast crosses below slow and RSI > rsiSellMin.
  */
 export function evaluateEmaRsi(input: EmaRsiInput): Signal {
-  const { pair, candles, params, price } = input;
+  const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
   const closes = candles.map((c) => c.close);
 
-  const fastSeries = ema(closes, params.emaFast);
-  const slowSeries = ema(closes, params.emaSlow);
-  const rsiSeries = rsi(closes, params.rsiPeriod);
+  const fastSeries = ema(closes, strategy.emaFast);
+  const slowSeries = ema(closes, strategy.emaSlow);
+  const rsiSeries = rsi(closes, strategy.rsiPeriod);
 
   const i = closes.length - 1;
   const prev = i - 1;
@@ -64,21 +63,21 @@ export function evaluateEmaRsi(input: EmaRsiInput): Signal {
   const crossedDown = emaFastPrev >= emaSlowPrev && emaFast < emaSlow;
 
   let side: SignalSide = "HOLD";
-  let reason = `No crossover (EMA${params.emaFast}=${fmt(emaFast)}, EMA${params.emaSlow}=${fmt(emaSlow)}, RSI=${fmt(rsiNow)})`;
+  let reason = `No crossover (EMA${strategy.emaFast}=${fmt(emaFast)}, EMA${strategy.emaSlow}=${fmt(emaSlow)}, RSI=${fmt(rsiNow)})`;
 
   if (crossedUp) {
-    if (rsiNow < params.rsiBuyMax) {
+    if (rsiNow < strategy.rsiBuyMax) {
       side = "BUY";
-      reason = `EMA${params.emaFast} crossed above EMA${params.emaSlow}; RSI ${fmt(rsiNow)} < ${params.rsiBuyMax}`;
+      reason = `EMA${strategy.emaFast} crossed above EMA${strategy.emaSlow}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     } else {
-      reason = `Bullish cross ignored: RSI ${fmt(rsiNow)} >= ${params.rsiBuyMax}`;
+      reason = `Bullish cross ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax}`;
     }
   } else if (crossedDown) {
-    if (rsiNow > params.rsiSellMin) {
+    if (rsiNow > strategy.rsiSellMin) {
       side = "SELL";
-      reason = `EMA${params.emaFast} crossed below EMA${params.emaSlow}; RSI ${fmt(rsiNow)} > ${params.rsiSellMin}`;
+      reason = `EMA${strategy.emaFast} crossed below EMA${strategy.emaSlow}; RSI ${fmt(rsiNow)} > ${strategy.rsiSellMin}`;
     } else {
-      reason = `Bearish cross ignored: RSI ${fmt(rsiNow)} <= ${params.rsiSellMin}`;
+      reason = `Bearish cross ignored: RSI ${fmt(rsiNow)} <= ${strategy.rsiSellMin}`;
     }
   }
 

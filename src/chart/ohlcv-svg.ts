@@ -68,8 +68,7 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
   const bodyW = Math.max(1, step * 0.6);
 
   const xAt = (i: number): number => PAD.left + step * (i + 0.5);
-  const yPrice = (p: number): number =>
-    priceTop + ((maxP - p) / (maxP - minP)) * priceH;
+  const yPrice = (p: number): number => priceTop + ((maxP - p) / (maxP - minP)) * priceH;
   const yRsi = (v: number): number => rsiTop + ((100 - v) / 100) * rsiH;
 
   const candleParts: string[] = [];
@@ -90,10 +89,7 @@ export function buildOhlcvSvg(input: OhlcvChartInput): string {
     );
   }
 
-  const linePath = (
-    series: (number | null)[],
-    yMap: (v: number) => number,
-  ): string => {
+  const linePath = (series: (number | null)[], yMap: (v: number) => number): string => {
     const parts: string[] = [];
     for (let i = 0; i < series.length; i++) {
       const v = series[i];

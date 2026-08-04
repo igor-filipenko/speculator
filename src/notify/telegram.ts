@@ -11,15 +11,11 @@ type TelegramInfo =
   | { type: "signal"; signal: Signal }
   | { type: "trade"; trade: Trade };
 
-
 export class Telegram {
   private readonly config: TelegramConfig | undefined;
   private readonly onStop: () => Promise<void>;
 
-  private constructor(
-    config: TelegramConfig | undefined,
-    onStop: () => Promise<void>,
-  ) {
+  private constructor(config: TelegramConfig | undefined, onStop: () => Promise<void>) {
     this.config = config;
     this.onStop = onStop;
   }
@@ -70,8 +66,7 @@ async function notifyTelegram(
       .with({ type: "shutdown" }, (shutdown) => formatShutdownMessage(shutdown))
       .with({ type: "signal", signal: { side: "HOLD" } }, () => null)
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
-      .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade),
-      )
+      .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
       .exhaustive();
 
     if (text == null) {
@@ -89,10 +84,7 @@ async function notifyTelegram(
 }
 
 /** Send a plain-text Telegram message via grammY. */
-async function sendTelegramMessage(
-  config: TelegramConfig,
-  text: string,
-): Promise<void> {
+async function sendTelegramMessage(config: TelegramConfig, text: string): Promise<void> {
   try {
     await getBot(config.botToken).api.sendMessage(config.chatId, text);
   } catch (err) {
@@ -110,10 +102,7 @@ function formatSignalMessage(signal: Signal): string {
 }
 
 function formatTradeMessage(trade: Trade): string {
-  const pnl =
-    trade.realizedPnl != null
-      ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC`
-      : "";
+  const pnl = trade.realizedPnl != null ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC` : "";
   return `PAPER ${trade.side} ${trade.pair} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)} (simulated)${pnl}`;
 }
 
@@ -128,10 +117,7 @@ function formatStartMessage(): string {
   ].join("\n");
 }
 
-function formatShutdownMessage(shutdown: {
-  code: number;
-  reason?: string;
-}): string {
+function formatShutdownMessage(shutdown: { code: number; reason?: string }): string {
   return shutdown.reason != null
     ? `Stopped (${shutdown.reason}) code=${shutdown.code}`
     : `Shutdown with code ${shutdown.code}.`;
@@ -226,9 +212,7 @@ function startTelegramCommands(
 
   instance.command("portfolio", async (ctx) => {
     try {
-      await ctx.reply(
-        formatPortfolioMessage(state.mode, state.portfolios, state.lastSignals),
-      );
+      await ctx.reply(formatPortfolioMessage(state.mode, state.portfolios, state.lastSignals));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Telegram /portfolio failed: ${message}`);
@@ -254,10 +238,7 @@ function startTelegramCommands(
 }
 
 /** Send one OHLCV chart photo per pair that has cached candles. */
-async function sendReportCharts(
-  ctx: Context,
-  state: ProgramState,
-): Promise<void> {
+async function sendReportCharts(ctx: Context, state: ProgramState): Promise<void> {
   for (const [pair, candles] of state.lastCandles) {
     if (candles.length === 0) {
       continue;
@@ -269,9 +250,7 @@ async function sendReportCharts(
         strategy: state.strategy,
       });
       const signal = state.lastSignals.get(pair);
-      const caption = signal
-        ? `${pair} ${signal.side} @ ${signal.price.toFixed(6)}`
-        : pair;
+      const caption = signal ? `${pair} ${signal.side} @ ${signal.price.toFixed(6)}` : pair;
       await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-report.png`), {
         caption,
       });

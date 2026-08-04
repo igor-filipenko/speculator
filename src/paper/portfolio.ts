@@ -60,10 +60,7 @@ export class PaperPortfolio {
           `Restored paper ${pair.symbol}: cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
         );
       } else {
-        portfolios.set(
-          pair.symbol,
-          new PaperPortfolio(pair.symbol, defaultCashUsdc),
-        );
+        portfolios.set(pair.symbol, new PaperPortfolio(pair.symbol, defaultCashUsdc));
       }
     }
     return portfolios;
@@ -140,8 +137,7 @@ export class PaperPortfolio {
   }
 
   getSnapshot(markPrice: number): PaperSnapshot {
-    const positionValue =
-      this.position.side === "long" ? this.position.size * markPrice : 0;
+    const positionValue = this.position.side === "long" ? this.position.size * markPrice : 0;
     return {
       simulated: true,
       cashUsdc: this.cashUsdc,
@@ -162,9 +158,8 @@ export class PaperPortfolio {
       .with("BUY", () => this.openLong(signal))
       .with("SELL", () => this.closeLong(signal))
       .exhaustive();
-    
-    if (nextTrade != null)
-      await savePaperState(new Map([[signal.pair, this]]));
+
+    if (nextTrade != null) await savePaperState(new Map([[signal.pair, this]]));
 
     return nextTrade;
   }

@@ -11,14 +11,7 @@
  * Runs `pnpm install --prod` in the target.
  */
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  rmSync,
-  copyFileSync,
-  chmodSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, copyFileSync, chmodSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,11 +61,10 @@ if (!existsSync(envDest) && existsSync(envExampleSrc)) {
 }
 
 console.log(`Installing production dependencies in ${target} ...`);
-const install = spawnSync(
-  "pnpm",
-  ["install", "--prod", "--dir", target],
-  { stdio: "inherit", shell: false },
-);
+const install = spawnSync("pnpm", ["install", "--prod", "--dir", target], {
+  stdio: "inherit",
+  shell: false,
+});
 
 if (install.status !== 0) {
   console.error("pnpm install --prod failed");

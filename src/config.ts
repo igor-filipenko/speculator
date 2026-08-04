@@ -5,8 +5,7 @@ import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.
 loadDotenv();
 
 /** Well-known SOL/USDC Raydium pool on GeckoTerminal (Solana). */
-export const DEFAULT_SOL_USDC_POOL =
-  "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
+export const DEFAULT_SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -43,9 +42,7 @@ export interface AppConfig {
 function resolvePair(symbol: string, geckoPoolOverride: string): PairConfig {
   const normalized = symbol.trim().toUpperCase();
   if (normalized !== "SOL/USDC") {
-    throw new Error(
-      `Unsupported pair "${symbol}". v1 only supports SOL/USDC.`,
-    );
+    throw new Error(`Unsupported pair "${symbol}". v1 only supports SOL/USDC.`);
   }
 
   return {
@@ -61,9 +58,7 @@ function resolvePair(symbol: string, geckoPoolOverride: string): PairConfig {
 export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
-    const details = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
+    const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Invalid configuration: ${details}`);
   }
 
@@ -76,9 +71,7 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
     throw new Error("WATCHLIST must contain at least one pair");
   }
 
-  const pairs = watchlist.map((symbol) =>
-    resolvePair(symbol, env.GECKO_POOL_ADDRESS),
-  );
+  const pairs = watchlist.map((symbol) => resolvePair(symbol, env.GECKO_POOL_ADDRESS));
 
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();
   const chatId = env.TELEGRAM_CHAT_ID.trim();

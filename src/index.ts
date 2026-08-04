@@ -28,7 +28,7 @@ async function main(): Promise<void> {
 
   const mode: RunMode = command === "paper" ? "paper" : "signal";
   const config = loadConfig({ mode });
-  
+
   const portfolios: Map<string, Portfolio> =
     mode === "paper"
       ? await PaperPortfolio.load(config.pairs, config.paperCashUsdc)
@@ -103,8 +103,7 @@ function installLifecycleNotifiers(telegram: Telegram): ShutdownCb {
     void shutdown(`crash: ${message}`, 1);
   });
   process.once("unhandledRejection", (reason) => {
-    const message =
-      reason instanceof Error ? reason.message : String(reason);
+    const message = reason instanceof Error ? reason.message : String(reason);
     void shutdown(`crash: ${message}`, 1);
   });
 

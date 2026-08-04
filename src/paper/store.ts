@@ -74,9 +74,7 @@ const persistedPaperStateSchema = z.object({
   portfolios: z.record(z.string(), persistedPortfolioSchema),
 });
 
-function normalizePortfolio(
-  raw: z.infer<typeof persistedPortfolioSchema>,
-): PersistedPortfolio {
+function normalizePortfolio(raw: z.infer<typeof persistedPortfolioSchema>): PersistedPortfolio {
   const position: PersistedPosition = {
     pair: raw.position.pair,
     side: raw.position.side,
@@ -114,19 +112,12 @@ function normalizePortfolio(
  * Load paper state from disk.
  * Missing file → null. Corrupt/invalid → warn and return null.
  */
-export async function loadPaperState(
-  path = PAPER_STATE_PATH,
-): Promise<PersistedPaperState | null> {
+export async function loadPaperState(path = PAPER_STATE_PATH): Promise<PersistedPaperState | null> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
   } catch (err) {
-    if (
-      err !== null &&
-      typeof err === "object" &&
-      "code" in err &&
-      err.code === "ENOENT"
-    ) {
+    if (err !== null && typeof err === "object" && "code" in err && err.code === "ENOENT") {
       return null;
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -145,9 +136,7 @@ export async function loadPaperState(
 
   const parsed = persistedPaperStateSchema.safeParse(json);
   if (!parsed.success) {
-    const details = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
+    const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     console.warn(`Warning: invalid ${path}: ${details}`);
     return null;
   }

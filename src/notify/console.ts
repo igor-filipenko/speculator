@@ -14,10 +14,7 @@ export function logSignal(signal: Signal): void {
 }
 
 export function logTrade(trade: Trade): void {
-  const pnl =
-    trade.realizedPnl != null
-      ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC`
-      : "";
+  const pnl = trade.realizedPnl != null ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC` : "";
   console.log(
     `  → PAPER ${trade.side} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)} (simulated)${pnl}`,
   );

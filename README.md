@@ -27,27 +27,27 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable | Meaning |
-|----------|---------|
-| `MODE` | `signal` (default via `pnpm watch`) or `paper` |
-| `STRATEGY` | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26) |
-| `JUPITER_API_KEY` | From [portal.jup.ag](https://portal.jup.ag/) — recommended |
-| `WATCHLIST` | `SOL/USDC` (only pair in v1) |
-| `POLL_INTERVAL_MS` | Poll interval (default `60000`) |
-| `PAPER_CASH_USDC` | Starting virtual USDC for paper mode (when `paper-state.json` is absent) |
-| `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV |
-| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather) |
-| `TELEGRAM_CHAT_ID` | Optional chat id for alerts and commands |
+| Variable             | Meaning                                                                  |
+| -------------------- | ------------------------------------------------------------------------ |
+| `MODE`               | `signal` (default via `pnpm watch`) or `paper`                           |
+| `STRATEGY`           | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26)                      |
+| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended               |
+| `WATCHLIST`          | `SOL/USDC` (only pair in v1)                                             |
+| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                          |
+| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when `paper-state.json` is absent) |
+| `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV                                  |
+| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)             |
+| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                 |
 
 ### Telegram (optional)
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/JSONL only), plus inbound commands from the configured chat:
 
-| Command | Reply |
-|---------|--------|
-| `/start` | Greeting and command list |
-| `/report` | Last signal per pair (including HOLD) + candle chart (EMA/RSI) |
-| `/portfolio` | Current paper portfolio (paper mode only) |
+| Command      | Reply                                                          |
+| ------------ | -------------------------------------------------------------- |
+| `/start`     | Greeting and command list                                      |
+| `/report`    | Last signal per pair (including HOLD) + candle chart (EMA/RSI) |
+| `/portfolio` | Current paper portfolio (paper mode only)                      |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -246,10 +246,10 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 EMA crossover + RSI filter, one virtual long per pair (`flat → long → flat`):
 
-| Mode | Timeframe | EMA | RSI filter |
-|------|-----------|-----|------------|
-| `intraday` | 15m | 9 / 21 | BUY if RSI &lt; 70; SELL if RSI &gt; 30 |
-| `swing` | 4h | 12 / 26 | same |
+| Mode       | Timeframe | EMA     | RSI filter                              |
+| ---------- | --------- | ------- | --------------------------------------- |
+| `intraday` | 15m       | 9 / 21  | BUY if RSI &lt; 70; SELL if RSI &gt; 30 |
+| `swing`    | 4h        | 12 / 26 | same                                    |
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV).
 

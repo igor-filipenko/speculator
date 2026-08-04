@@ -11,9 +11,10 @@ interface GeckoOhlcvResponse {
 }
 
 /** Map strategy timeframe to GeckoTerminal path + aggregate. */
-function geckoTimeframe(
-  timeframe: StrategyParams["timeframe"],
-): { path: "minute" | "hour"; aggregate: number } {
+function geckoTimeframe(timeframe: StrategyParams["timeframe"]): {
+  path: "minute" | "hour";
+  aggregate: number;
+} {
   if (timeframe === "4h") {
     return { path: "hour", aggregate: 4 };
   }
@@ -31,15 +32,11 @@ export interface FetchCandlesOptions {
  * Fetch OHLCV candles for a Solana pool from GeckoTerminal.
  * Candles are returned oldest → newest.
  */
-export async function fetchCandles(
-  options: FetchCandlesOptions,
-): Promise<Candle[]> {
+export async function fetchCandles(options: FetchCandlesOptions): Promise<Candle[]> {
   const { poolAddress, timeframe, limit = 200 } = options;
   const { path, aggregate } = geckoTimeframe(timeframe);
 
-  const url = new URL(
-    `${GECKO_BASE}/networks/solana/pools/${poolAddress}/ohlcv/${path}`,
-  );
+  const url = new URL(`${GECKO_BASE}/networks/solana/pools/${poolAddress}/ohlcv/${path}`);
   url.searchParams.set("aggregate", String(aggregate));
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("currency", "usd");
@@ -54,9 +51,7 @@ export async function fetchCandles(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(
-      `GeckoTerminal OHLCV failed (${response.status}): ${body.slice(0, 200)}`,
-    );
+    throw new Error(`GeckoTerminal OHLCV failed (${response.status}): ${body.slice(0, 200)}`);
   }
 
   const json = (await response.json()) as GeckoOhlcvResponse;
@@ -75,9 +70,7 @@ export async function fetchCandles(
     .sort((a, b) => a.time - b.time);
 
   if (candles.length === 0) {
-    throw new Error(
-      `No OHLCV returned for pool ${poolAddress} (${timeframe})`,
-    );
+    throw new Error(`No OHLCV returned for pool ${poolAddress} (${timeframe})`);
   }
 
   return candles;

@@ -2,17 +2,18 @@ import type { AppConfig } from "../config.js";
 import { strategyParams } from "../config.js";
 import { JupiterClient } from "../jupiter/client.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import {
-  appendSignalJsonl,
-  logSignal,
-  logSnapshot,
-  logTrade,
-} from "../notify/console.js";
-import {
-  Telegram,
-} from "../notify/telegram.js";
+import { appendSignalJsonl, logSignal, logSnapshot, logTrade } from "../notify/console.js";
+import { Telegram } from "../notify/telegram.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import type { Candle, PairConfig, Portfolio, ProgramState, ShutdownCb, Signal, StrategyParams } from "../types.js";
+import type {
+  Candle,
+  PairConfig,
+  Portfolio,
+  ProgramState,
+  ShutdownCb,
+  Signal,
+  StrategyParams,
+} from "../types.js";
 
 export interface WatchOptions {
   config: AppConfig;
@@ -32,9 +33,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
   const jupiter = new JupiterClient({ apiKey: config.jupiterApiKey });
 
   if (!config.jupiterApiKey) {
-    console.warn(
-      "Warning: JUPITER_API_KEY is empty; quotes may fail or be rate-limited.",
-    );
+    console.warn("Warning: JUPITER_API_KEY is empty; quotes may fail or be rate-limited.");
   }
 
   const portfolios = options.state.portfolios;
@@ -98,16 +97,7 @@ async function processPair(args: {
   lastCandles: Map<string, Candle[]>;
   telegram: Telegram;
 }): Promise<void> {
-  const {
-    config,
-    pair,
-    strategy,
-    jupiter,
-    portfolios,
-    lastSignals,
-    lastCandles,
-    telegram,
-  } = args;
+  const { config, pair, strategy, jupiter, portfolios, lastSignals, lastCandles, telegram } = args;
 
   const candles = await fetchCandles({
     poolAddress: pair.geckoPoolAddress,

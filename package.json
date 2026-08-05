@@ -2,7 +2,7 @@
   "name": "speculator",
   "version": "0.1.0",
   "private": true,
-  "description": "Solana swing/intraday signal bot with Jupiter paper trading",
+  "description": "Solana swing/intraday signal bot with Jupiter paper trading and offline backtest",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -11,6 +11,7 @@
   "scripts": {
     "watch": "tsx src/index.ts watch",
     "paper": "tsx src/index.ts paper",
+    "backtest": "tsx src/index.ts backtest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",

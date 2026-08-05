@@ -1,4 +1,5 @@
 import { loadConfig, strategyParams } from "./config.js";
+import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
@@ -6,13 +7,17 @@ import type { Candle, Portfolio, ProgramState, RunMode, ShutdownCb, Signal } fro
 
 function usage(): never {
   console.log(`Usage:
-  pnpm watch   # MODE=signal (or override via CLI)
-  pnpm paper   # MODE=paper
+  pnpm watch     # MODE=signal (or override via CLI)
+  pnpm paper     # MODE=paper
+  pnpm backtest  # Replay OHLCV with emulated Jupiter fills
 
   tsx src/index.ts watch|paper [--once]
+  tsx src/index.ts backtest [--days <n>] [--force-refresh]
 
 Options:
-  --once   Run a single poll iteration and exit
+  --once            Run a single poll iteration and exit (watch/paper)
+  --days <n>        Backtest lookback in days (default: 30 intraday / 90 swing)
+  --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
 `);
   process.exit(1);
 }
@@ -20,6 +25,12 @@ Options:
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
+
+  if (command === "backtest") {
+    await runBacktestCommand(argv.slice(1));
+    return;
+  }
+
   const once = argv.includes("--once");
 
   if (command !== "watch" && command !== "paper") {
@@ -50,6 +61,20 @@ async function main(): Promise<void> {
     : installLifecycleNotifiers(telegram);
 
   await runWatch({ config, state: programState, telegram, once, shutdownCb });
+}
+
+async function runBacktestCommand(argv: string[]): Promise<void> {
+  const flags = parseBacktestArgs(argv);
+  const config = loadConfig({ mode: "signal" });
+  const results = await runBacktest({
+    config,
+    forceRefresh: flags.forceRefresh,
+    ...(flags.days > 0 ? { days: flags.days } : {}),
+  });
+
+  for (const result of results) {
+    printBacktestReport(result);
+  }
 }
 
 main().catch((err: unknown) => {

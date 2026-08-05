@@ -11,6 +11,7 @@ dist-test/
 *.log
 signals.jsonl
 paper-state.json
+data/ohlcv/
 
 # OS / editor
 .DS_Store

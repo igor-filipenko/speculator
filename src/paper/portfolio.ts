@@ -23,6 +23,12 @@ export interface PaperSnapshot extends Snapshot {
   simulated: true;
 }
 
+/** Optional costs applied on fill (e.g. Solana priority fee in backtests). */
+export interface FillOptions {
+  /** Deducted from cash before sizing (BUY) or from proceeds (SELL). */
+  priorityFeeUsdc?: number;
+}
+
 /**
  * Single-pair virtual long-only portfolio.
  * Fills are simulated at the provided price (typically a Jupiter quote).
@@ -149,22 +155,30 @@ export class PaperPortfolio {
   }
 
   /**
-   * Apply a signal. BUY opens a long with all cash; SELL closes to cash.
+   * Apply a signal without persisting (for backtests and unit tests).
+   * BUY opens a long with all cash; SELL closes to cash.
+   */
+  applySignalSync(signal: Signal, options: FillOptions = {}): PaperTrade | null {
+    return match(signal.side)
+      .with("HOLD", () => null)
+      .with("BUY", () => this.openLong(signal, options))
+      .with("SELL", () => this.closeLong(signal, options))
+      .exhaustive();
+  }
+
+  /**
+   * Apply a signal and persist paper state when a fill happens.
    * Returns a trade if a fill happened, otherwise null.
    */
-  async applySignal(signal: Signal): Promise<PaperTrade | null> {
-    const nextTrade = match(signal.side)
-      .with("HOLD", () => null)
-      .with("BUY", () => this.openLong(signal))
-      .with("SELL", () => this.closeLong(signal))
-      .exhaustive();
+  async applySignal(signal: Signal, options: FillOptions = {}): Promise<PaperTrade | null> {
+    const nextTrade = this.applySignalSync(signal, options);
 
     if (nextTrade != null) await savePaperState(new Map([[signal.pair, this]]));
 
     return nextTrade;
   }
 
-  private openLong(signal: Signal): PaperTrade | null {
+  private openLong(signal: Signal, options: FillOptions): PaperTrade | null {
     if (this.position.side === "long") {
       return null;
     }
@@ -172,7 +186,13 @@ export class PaperPortfolio {
       return null;
     }
 
-    const size = this.cashUsdc / signal.price;
+    const priorityFeeUsdc = options.priorityFeeUsdc ?? 0;
+    const spendable = this.cashUsdc - priorityFeeUsdc;
+    if (spendable <= 0) {
+      return null;
+    }
+
+    const size = spendable / signal.price;
     const trade: PaperTrade = {
       pair: signal.pair,
       side: "BUY",
@@ -194,12 +214,13 @@ export class PaperPortfolio {
     return trade;
   }
 
-  private closeLong(signal: Signal): PaperTrade | null {
+  private closeLong(signal: Signal, options: FillOptions): PaperTrade | null {
     if (this.position.side !== "long" || this.position.size <= 0) {
       return null;
     }
 
-    const proceeds = this.position.size * signal.price;
+    const priorityFeeUsdc = options.priorityFeeUsdc ?? 0;
+    const proceeds = this.position.size * signal.price - priorityFeeUsdc;
     const cost = this.position.size * this.position.entryPrice;
     const pnl = proceeds - cost;
 
@@ -213,7 +234,7 @@ export class PaperPortfolio {
       simulated: true,
     };
 
-    this.cashUsdc = proceeds;
+    this.cashUsdc = Math.max(0, proceeds);
     this.realizedPnl += pnl;
     this.position = {
       pair: signal.pair,

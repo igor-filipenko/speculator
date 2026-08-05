@@ -4,9 +4,10 @@ TypeScript CLI bot for Solana swing / intraday **trade recommendations** (`BUY` 
 
 - **OHLCV:** GeckoTerminal (candles for EMA/RSI)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
-- **v1 scope:** signals + optional paper portfolio (no live swaps, no backtest)
+- **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
+- **v1 scope:** signals + optional paper portfolio + backtest (no live swaps)
 
-See [PLANS.md](./PLANS.md) for the product plan and [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
+See [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
 
 ## Requirements
 
@@ -75,7 +76,7 @@ Compile to `dist/`:
 pnpm build
 ```
 
-Day-to-day development uses `tsx` (no build required for `watch` / `paper`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
+Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
 
 ## Run
 
@@ -90,6 +91,28 @@ Paper trading (virtual long-only portfolio, simulated fills from Jupiter quotes)
 ```bash
 pnpm paper
 ```
+
+Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
+
+```bash
+pnpm backtest
+pnpm backtest -- --days 14
+pnpm backtest -- --days 90 --force-refresh
+```
+
+| Flag              | Meaning                                                         |
+| ----------------- | --------------------------------------------------------------- |
+| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing) |
+| `--force-refresh` | Ignore `data/ohlcv/` cache and refetch from GeckoTerminal       |
+
+Candles are stored under `data/ohlcv/{pool}-{timeframe}.json` and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+
+| Pair tier           | Slippage | Pool fee | Priority fee                |
+| ------------------- | -------- | -------- | --------------------------- |
+| Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
+| Meme (future pairs) | 2.0%     | 0.30%    | same                        |
+
+The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes `paper-state.json`.
 
 Single iteration (smoke test):
 

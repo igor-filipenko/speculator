@@ -26,7 +26,7 @@ describe("paper store", () => {
 
   it("saves and loads a portfolio round-trip", async () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
-    const trade = portfolio.applySignal({
+    const trade = portfolio.applySignalSync({
       pair: "SOL/USDC",
       side: "BUY",
       reason: "test buy",

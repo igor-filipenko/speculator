@@ -43,11 +43,12 @@ Edit `.env`:
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/JSONL only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                                          |
-| ------------ | -------------------------------------------------------------- |
-| `/start`     | Greeting and command list                                      |
-| `/report`    | Last signal per pair (including HOLD) + candle chart (EMA/RSI) |
-| `/portfolio` | Current paper portfolio (paper mode only)                      |
+| Command      | Reply                                     |
+| ------------ | ----------------------------------------- |
+| `/start`     | Greeting and command list                 |
+| `/report`    | Last signal per pair (including HOLD)     |
+| `/chart`     | OHLCV candle chart with EMA/RSI           |
+| `/portfolio` | Current paper portfolio (paper mode only) |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -97,7 +98,7 @@ pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
 ```
 
-Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report` (text + candle chart) and `/portfolio` from that chat.
+Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
 
 ## Deploy (Ubuntu VPS + systemd)
 
@@ -269,11 +270,11 @@ src/
   jupiter/client.ts
   strategy/indicators.ts   # hand-rolled EMA/RSI
   strategy/ema-rsi.ts
-  chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /report
+  chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts
   notify/console.ts
-  notify/telegram.ts       # optional grammY alerts + /start /report /portfolio
+  notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
   engine/watch.ts
 ```

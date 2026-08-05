@@ -29,7 +29,7 @@ src/
   jupiter/client.ts     # quote only
   strategy/indicators.ts
   strategy/ema-rsi.ts
-  chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /report
+  chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /chart
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts
   paper/store.ts        # paper-state.json load/save

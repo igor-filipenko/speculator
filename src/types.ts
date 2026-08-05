@@ -82,11 +82,6 @@ export interface Snapshot {
 }
 
 export interface Portfolio {
-  //cashUsdc: number;
-  //position: Position;
-  //realizedPnl: number;
-  //trades: Trade[];
-
   getSnapshot(markPrice: number): Snapshot;
 
   applySignal(signal: Signal): Promise<Trade | null>;

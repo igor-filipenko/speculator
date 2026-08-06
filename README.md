@@ -4,9 +4,10 @@ TypeScript CLI bot for Solana swing / intraday **trade recommendations** (`BUY` 
 
 - **OHLCV:** GeckoTerminal (candles for EMA/RSI)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
-- **v1 scope:** signals + optional paper portfolio (no live swaps, no backtest)
+- **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
+- **v1 scope:** signals + optional paper portfolio + backtest (no live swaps)
 
-See [PLANS.md](./PLANS.md) for the product plan and [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
+See [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
 
 ## Requirements
 
@@ -75,7 +76,7 @@ Compile to `dist/`:
 pnpm build
 ```
 
-Day-to-day development uses `tsx` (no build required for `watch` / `paper`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
+Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
 
 ## Run
 
@@ -90,6 +91,33 @@ Paper trading (virtual long-only portfolio, simulated fills from Jupiter quotes)
 ```bash
 pnpm paper
 ```
+
+Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
+
+```bash
+pnpm backtest
+pnpm backtest -- --days 14
+pnpm backtest -- --from 01-01-2026 --to 01-08-2026
+pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
+```
+
+| Flag              | Meaning                                                                |
+| ----------------- | ---------------------------------------------------------------------- |
+| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing)        |
+| `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
+| `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
+| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
+
+Use either `--days` or `--from`/`--to`, not both.
+
+OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` table) and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+
+| Pair tier           | Slippage | Pool fee | Priority fee                |
+| ------------------- | -------- | -------- | --------------------------- |
+| Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
+| Meme (future pairs) | 2.0%     | 0.30%    | same                        |
+
+The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes `paper-state.json`.
 
 Single iteration (smoke test):
 

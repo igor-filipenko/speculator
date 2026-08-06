@@ -26,6 +26,9 @@ export interface LoadCachedCandlesOptions {
 /**
  * Load OHLCV from disk cache, fetch any missing range from GeckoTerminal, rewrite cache,
  * and return candles in `[fromTime, toTime)`.
+ *
+ * Missing windows are fetched fully (page retries are infinite with increasing timeouts).
+ * Each successful page is persisted to disk immediately.
  */
 export async function loadCachedCandles(options: LoadCachedCandlesOptions): Promise<Candle[]> {
   const toTime = options.toTime ?? Math.floor(Date.now() / 1000);
@@ -41,9 +44,8 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
   }
 
   const interval = candleIntervalSeconds(options.timeframe);
-  const fetchWindows = missingWindows(cached, options.fromTime, toTime, interval);
-
   let merged = cached;
+
   const persist = async (extra: Candle[]): Promise<void> => {
     merged = mergeCandles(merged, extra);
     await writeCacheFile(cachePath, {
@@ -54,12 +56,21 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
     });
   };
 
-  for (const window of fetchWindows) {
-    console.log(
-      `Fetching OHLCV ${options.timeframe} ${options.poolAddress.slice(0, 8)}… ` +
-        `[${new Date(window.from * 1000).toISOString()} → ${new Date(window.to * 1000).toISOString()}]`,
-    );
-    try {
+  // Recompute gaps after each full pass. Stop when covered, or when Gecko has no more history.
+  for (;;) {
+    const fetchWindows = missingWindows(merged, options.fromTime, toTime, interval);
+    if (fetchWindows.length === 0) {
+      break;
+    }
+
+    const priorCount = merged.length;
+    const priorOldest = oldestInRange(merged, options.fromTime, toTime);
+
+    for (const window of fetchWindows) {
+      console.log(
+        `Fetching OHLCV ${options.timeframe} ${options.poolAddress.slice(0, 8)}… ` +
+          `[${new Date(window.from * 1000).toISOString()} → ${new Date(window.to * 1000).toISOString()}]`,
+      );
       const batch = await fetchCandlesRange({
         poolAddress: options.poolAddress,
         timeframe: options.timeframe,
@@ -68,17 +79,34 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
         onPage: persist,
       });
       merged = mergeCandles(merged, batch);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      await writeCacheFile(cachePath, {
+        poolAddress: options.poolAddress,
+        timeframe: options.timeframe,
+        fetchedAt: new Date().toISOString(),
+        candles: merged,
+      });
+    }
+
+    const nextWindows = missingWindows(merged, options.fromTime, toTime, interval);
+    if (nextWindows.length === 0) {
+      break;
+    }
+
+    const nextOldest = oldestInRange(merged, options.fromTime, toTime);
+    const grew = merged.length > priorCount;
+    const extendedOlder =
+      nextOldest !== undefined && (priorOldest === undefined || nextOldest < priorOldest);
+    if (!grew && !extendedOlder) {
       console.warn(
-        `OHLCV fetch interrupted (${message}). Cached ${merged.length} candles; re-run to resume.`,
+        `OHLCV history exhausted before covering ` +
+          `${new Date(options.fromTime * 1000).toISOString()} → ${new Date(toTime * 1000).toISOString()} ` +
+          `(have ${merged.length} candles). Continuing with available data.`,
       );
-      // Continue with whatever we have if the window is partially filled.
       break;
     }
   }
 
-  if (fetchWindows.length > 0 || options.forceRefresh) {
+  if (options.forceRefresh) {
     await writeCacheFile(cachePath, {
       poolAddress: options.poolAddress,
       timeframe: options.timeframe,
@@ -134,6 +162,19 @@ async function writeCacheFile(path: string, data: OhlcvCacheFile): Promise<void>
 interface TimeWindow {
   from: number;
   to: number;
+}
+
+function oldestInRange(candles: Candle[], fromTime: number, toTime: number): number | undefined {
+  let oldest: number | undefined;
+  for (const c of candles) {
+    if (c.time < fromTime || c.time >= toTime) {
+      continue;
+    }
+    if (oldest === undefined || c.time < oldest) {
+      oldest = c.time;
+    }
+  }
+  return oldest;
 }
 
 /**

@@ -5,7 +5,7 @@ import { DEFAULT_SOL_USDC_POOL, strategyParams } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../jupiter/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import type { Candle } from "../types.js";
-import { parseBacktestArgs, runBacktest } from "./backtest.js";
+import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
@@ -78,9 +78,38 @@ describe("parseBacktestArgs", () => {
     });
   });
 
-  it("rejects invalid flags", () => {
+  it("parses --from/--to as DD-MM-YYYY and YYYY-MM-DD", () => {
+    const dmy = parseBacktestArgs(["--from", "01-01-2026", "--to", "01-08-2026"]);
+    assert.equal(dmy.days, 0);
+    assert.equal(dmy.fromTime, Date.UTC(2026, 0, 1) / 1000);
+    // --to is exclusive end of next day after 01-08-2026 → 2026-08-02 00:00 UTC
+    assert.equal(dmy.toTime, Date.UTC(2026, 7, 2) / 1000);
+
+    const ymd = parseBacktestArgs(["--from=2026-01-01", "--to=2026-08-01"]);
+    assert.equal(ymd.fromTime, Date.UTC(2026, 0, 1) / 1000);
+    assert.equal(ymd.toTime, Date.UTC(2026, 7, 2) / 1000);
+  });
+
+  it("rejects invalid flags and conflicting window options", () => {
     assert.throws(() => parseBacktestArgs(["--days"]), /requires/);
     assert.throws(() => parseBacktestArgs(["--unknown"]), /Unknown/);
+    assert.throws(() => parseBacktestArgs(["--to", "2026-08-01"]), /requires --from/);
+    assert.throws(
+      () => parseBacktestArgs(["--days", "7", "--from", "2026-01-01"]),
+      /either --days or --from/,
+    );
+    assert.throws(
+      () => parseBacktestArgs(["--from", "01-08-2026", "--to", "01-01-2026"]),
+      /from must be before/,
+    );
+  });
+});
+
+describe("parseBacktestDate", () => {
+  it("treats date-only --from as UTC midnight and --to as next-day exclusive", () => {
+    assert.equal(parseBacktestDate("2026-01-01", "from"), Date.UTC(2026, 0, 1) / 1000);
+    assert.equal(parseBacktestDate("01-01-2026", "from"), Date.UTC(2026, 0, 1) / 1000);
+    assert.equal(parseBacktestDate("01-08-2026", "to"), Date.UTC(2026, 7, 2) / 1000);
   });
 });
 

@@ -12,11 +12,13 @@ function usage(): never {
   pnpm backtest  # Replay OHLCV with emulated Jupiter fills
 
   tsx src/index.ts watch|paper [--once]
-  tsx src/index.ts backtest [--days <n>] [--force-refresh]
+  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper)
   --days <n>        Backtest lookback in days (default: 30 intraday / 90 swing)
+  --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
+  --to <date>       Backtest range end inclusive (default: now; requires --from)
   --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
 `);
   process.exit(1);
@@ -70,6 +72,8 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     config,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
+    ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
+    ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
   });
 
   for (const result of results) {

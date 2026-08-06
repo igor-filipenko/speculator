@@ -11,8 +11,12 @@ import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
 import type { Candle, PairConfig, StrategyParams, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
-  /** Lookback window in calendar days. */
+  /** Lookback window in calendar days (0 = strategy default, ignored when from/to set). */
   days: number;
+  /** Inclusive range start (Unix seconds). Mutually exclusive with `--days`. */
+  fromTime?: number;
+  /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
+  toTime?: number;
   forceRefresh: boolean;
 }
 
@@ -52,6 +56,10 @@ export interface BacktestResult {
 export interface RunBacktestOptions {
   config: AppConfig;
   days?: number;
+  /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
+  fromTime?: number;
+  /** Exclusive range end (Unix seconds). Defaults to now. */
+  toTime?: number;
   forceRefresh?: boolean;
   /** Override cache directory (tests). */
   cacheDir?: string;
@@ -64,14 +72,7 @@ export interface RunBacktestOptions {
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
   const strategy = strategyParams(options.config.strategy);
-  const days =
-    options.days !== undefined && options.days > 0
-      ? options.days
-      : strategy.mode === "swing"
-        ? 90
-        : 30;
-  const toTime = Math.floor(Date.now() / 1000);
-  const fromTime = toTime - days * 24 * 60 * 60;
+  const { fromTime, toTime } = resolveBacktestWindow(options, strategy.mode);
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
@@ -88,7 +89,8 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
 
     if (candles.length === 0) {
       throw new Error(
-        `No candles for ${pair.symbol} (${strategy.timeframe}) in the last ${days} days`,
+        `No candles for ${pair.symbol} (${strategy.timeframe}) in ` +
+          `${new Date(fromTime * 1000).toISOString()} → ${new Date(toTime * 1000).toISOString()}`,
       );
     }
 
@@ -209,11 +211,125 @@ function accumulateCosts(
   totals.priorityFeeUsdc += breakdown.priorityFeeUsdc;
 }
 
+function resolveBacktestWindow(
+  options: Pick<RunBacktestOptions, "days" | "fromTime" | "toTime">,
+  strategyMode: StrategyParams["mode"],
+): { fromTime: number; toTime: number } {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (options.fromTime !== undefined) {
+    const fromTime = options.fromTime;
+    const toTime = options.toTime ?? now;
+    if (!(fromTime < toTime)) {
+      throw new Error(`Invalid backtest window: from (${fromTime}) must be before to (${toTime})`);
+    }
+    return { fromTime, toTime };
+  }
+
+  if (options.toTime !== undefined) {
+    throw new Error("--to requires --from (or use --days for a lookback from now)");
+  }
+
+  const days =
+    options.days !== undefined && options.days > 0
+      ? options.days
+      : strategyMode === "swing"
+        ? 90
+        : 30;
+  return { fromTime: now - days * 24 * 60 * 60, toTime: now };
+}
+
+/**
+ * Parse a calendar date or ISO datetime into Unix seconds.
+ * Date-only forms are UTC. Supported:
+ * - `YYYY-MM-DD` / `YYYY-MM-DDTHH:mm:ssZ`
+ * - `DD-MM-YYYY` (e.g. 01-01-2026)
+ */
+export function parseBacktestDate(raw: string, bound: "from" | "to"): number {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Empty --${bound} date`);
+  }
+
+  const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(trimmed);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    return calendarDayBoundUtc(year, month, day, bound);
+  }
+
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (ymd) {
+    const year = Number(ymd[1]);
+    const month = Number(ymd[2]);
+    const day = Number(ymd[3]);
+    return calendarDayBoundUtc(year, month, day, bound);
+  }
+
+  const ms = Date.parse(trimmed);
+  if (Number.isNaN(ms)) {
+    throw new Error(
+      `Invalid --${bound} date "${raw}". Use YYYY-MM-DD, DD-MM-YYYY, or an ISO datetime.`,
+    );
+  }
+  return Math.floor(ms / 1000);
+}
+
+function calendarDayBoundUtc(
+  year: number,
+  month: number,
+  day: number,
+  bound: "from" | "to",
+): number {
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error(`Invalid calendar date ${year}-${month}-${day}`);
+  }
+  // --from = start of that UTC day; --to = start of the next UTC day (exclusive end).
+  const startMs = Date.UTC(year, month - 1, day);
+  const check = new Date(startMs);
+  if (
+    check.getUTCFullYear() !== year ||
+    check.getUTCMonth() !== month - 1 ||
+    check.getUTCDate() !== day
+  ) {
+    throw new Error(
+      `Invalid calendar date ${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    );
+  }
+  if (bound === "from") {
+    return Math.floor(startMs / 1000);
+  }
+  return Math.floor(Date.UTC(year, month - 1, day + 1) / 1000);
+}
+
+function readFlagValue(
+  argv: string[],
+  index: number,
+  flag: string,
+): { value: string; nextIndex: number } {
+  const eq = argv[index];
+  if (eq?.startsWith(`${flag}=`)) {
+    const value = eq.slice(flag.length + 1);
+    if (!value) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return { value, nextIndex: index };
+  }
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return { value, nextIndex: index + 1 };
+}
+
 /** Parse CLI flags for `backtest`. */
 export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let days = 0;
   let forceRefresh = false;
   let daysExplicit = false;
+  let fromTime: number | undefined;
+  let toTime: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -224,28 +340,27 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
       forceRefresh = true;
       continue;
     }
-    if (arg === "--days") {
-      const raw = argv[i + 1];
-      if (raw === undefined || raw.startsWith("-")) {
-        throw new Error("--days requires a positive integer");
-      }
-      const n = Number(raw);
+    if (arg === "--days" || arg?.startsWith("--days=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--days");
+      const n = Number(value);
       if (!Number.isInteger(n) || n <= 0) {
-        throw new Error(`Invalid --days value: ${raw}`);
+        throw new Error(`Invalid --days value: ${value}`);
       }
       days = n;
       daysExplicit = true;
-      i++;
+      i = nextIndex;
       continue;
     }
-    if (arg?.startsWith("--days=")) {
-      const raw = arg.slice("--days=".length);
-      const n = Number(raw);
-      if (!Number.isInteger(n) || n <= 0) {
-        throw new Error(`Invalid --days value: ${raw}`);
-      }
-      days = n;
-      daysExplicit = true;
+    if (arg === "--from" || arg?.startsWith("--from=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--from");
+      fromTime = parseBacktestDate(value, "from");
+      i = nextIndex;
+      continue;
+    }
+    if (arg === "--to" || arg?.startsWith("--to=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--to");
+      toTime = parseBacktestDate(value, "to");
+      i = nextIndex;
       continue;
     }
     if (arg?.startsWith("-")) {
@@ -253,11 +368,27 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
   }
 
-  return {
-    // 0 means "use strategy default" — resolved in runBacktest / print.
+  if (fromTime !== undefined && daysExplicit) {
+    throw new Error("Use either --days or --from/--to, not both");
+  }
+  if (toTime !== undefined && fromTime === undefined) {
+    throw new Error("--to requires --from");
+  }
+  if (fromTime !== undefined && toTime !== undefined && !(fromTime < toTime)) {
+    throw new Error("--from must be before --to");
+  }
+
+  const result: BacktestCliOptions = {
     days: daysExplicit ? days : 0,
     forceRefresh,
   };
+  if (fromTime !== undefined) {
+    result.fromTime = fromTime;
+  }
+  if (toTime !== undefined) {
+    result.toTime = toTime;
+  }
+  return result;
 }
 
 export function printBacktestReport(result: BacktestResult): void {

@@ -3,12 +3,14 @@ import type { Candle, StrategyParams } from "../types.js";
 const GECKO_BASE = "https://api.geckoterminal.com/api/v2";
 /** Gecko often stalls on very large `limit` values; page in smaller chunks. */
 const PAGE_LIMIT = 100;
-const FETCH_RETRIES = 5;
-const RETRY_BASE_MS = 4_000;
-const FETCH_TIMEOUT_MS = 12_000;
-const PAGE_GAP_MS = 2_500;
+const PAGE_GAP_MS = 3_000;
 
-interface GeckoOhlcvResponse {
+const INITIAL_TIMEOUT_MS = 12_000;
+const MAX_TIMEOUT_MS = 120_000;
+const INITIAL_RETRY_DELAY_MS = 3_000;
+const MAX_RETRY_DELAY_MS = 60_000;
+
+interface GeckoOhlcvJson {
   data?: {
     attributes?: {
       ohlcv_list?: [number, number, number, number, number, number][];
@@ -42,6 +44,8 @@ export interface FetchCandlesOptions {
   limit?: number;
   /** Return candles with open time strictly before this Unix timestamp (seconds). */
   beforeTimestamp?: number;
+  /** Per-request abort timeout in ms (default {@link INITIAL_TIMEOUT_MS}). */
+  timeoutMs?: number;
 }
 
 /**
@@ -49,7 +53,7 @@ export interface FetchCandlesOptions {
  * Candles are returned oldest → newest.
  */
 export async function fetchCandles(options: FetchCandlesOptions): Promise<Candle[]> {
-  const { poolAddress, timeframe, limit = 200, beforeTimestamp } = options;
+  const { poolAddress, timeframe, limit = 200, beforeTimestamp, timeoutMs } = options;
   const { path, aggregate } = geckoTimeframe(timeframe);
   const cappedLimit = Math.min(Math.max(1, limit), PAGE_LIMIT);
 
@@ -61,7 +65,7 @@ export async function fetchCandles(options: FetchCandlesOptions): Promise<Candle
     url.searchParams.set("before_timestamp", String(beforeTimestamp));
   }
 
-  const json = await fetchOhlcvJson(url);
+  const json = await fetchOhlcvJson(url, timeoutMs ?? INITIAL_TIMEOUT_MS);
   const rows = json.data?.attributes?.ohlcv_list ?? [];
 
   // API returns newest first; normalize to chronological order.
@@ -99,6 +103,7 @@ export interface FetchCandlesRangeOptions {
 
 /**
  * Page backward with `before_timestamp` until `fromTime` is covered or pages run out.
+ * Each page is retried forever on transient failures with an increasing request timeout.
  * Candles are returned oldest → newest, deduped by `time`.
  */
 export async function fetchCandlesRange(options: FetchCandlesRangeOptions): Promise<Candle[]> {
@@ -107,67 +112,75 @@ export async function fetchCandlesRange(options: FetchCandlesRangeOptions): Prom
 
   const byTime = new Map<number, Candle>();
   let before = toTime;
+  let timeoutMs = INITIAL_TIMEOUT_MS;
+  let failStreak = 0;
 
-  try {
-    for (let page = 0; page < maxPages; page++) {
-      const batch = await fetchCandles({
-        poolAddress,
-        timeframe,
-        limit: PAGE_LIMIT,
-        beforeTimestamp: before,
-      });
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await fetchCandlesPageForever({
+      poolAddress,
+      timeframe,
+      limit: PAGE_LIMIT,
+      beforeTimestamp: before,
+      getTimeoutMs: () => timeoutMs,
+      onTransientFailure: async (err) => {
+        failStreak += 1;
+        timeoutMs = nextTimeoutMs(timeoutMs);
+        const delay = nextRetryDelayMs(failStreak);
+        console.warn(
+          `GeckoTerminal page failed (${err instanceof Error ? err.message : String(err)}); ` +
+            `retry in ${delay}ms (timeout=${timeoutMs}ms)`,
+        );
+        await sleep(delay);
+      },
+      onSuccess: () => {
+        failStreak = 0;
+        timeoutMs = INITIAL_TIMEOUT_MS;
+      },
+    });
 
-      if (batch.length === 0) {
-        break;
-      }
-
-      const sizeBefore = byTime.size;
-      for (const c of batch) {
-        byTime.set(c.time, c);
-      }
-
-      const oldest = batch[0];
-      const newest = batch[batch.length - 1];
-      if (oldest === undefined || newest === undefined) {
-        break;
-      }
-
-      console.log(
-        `  OHLCV page ${page + 1}: ${batch.length} bars ` +
-          `(${new Date(oldest.time * 1000).toISOString()} → ${new Date(newest.time * 1000).toISOString()}) ` +
-          `total=${byTime.size}`,
-      );
-
-      const soFar = [...byTime.values()].sort((a, b) => a.time - b.time);
-      if (onPage) {
-        await onPage(soFar);
-      }
-
-      // No new bars (API returned an overlapping/identical page) — stop to avoid a loop.
-      if (byTime.size === sizeBefore || oldest.time >= before) {
-        break;
-      }
-
-      if (fromTime !== undefined && oldest.time <= fromTime) {
-        break;
-      }
-
-      // `before_timestamp` includes the cursor candle; reuse oldest as next cursor.
-      before = oldest.time;
-
-      if (batch.length < PAGE_LIMIT) {
-        break;
-      }
-
-      await sleep(PAGE_GAP_MS);
+    if (batch.length === 0) {
+      break;
     }
-  } catch (err) {
-    // Persist whatever we collected so the next run can resume from cache.
-    if (byTime.size > 0 && onPage) {
-      const soFar = [...byTime.values()].sort((a, b) => a.time - b.time);
+
+    const sizeBefore = byTime.size;
+    for (const c of batch) {
+      byTime.set(c.time, c);
+    }
+
+    const oldest = batch[0];
+    const newest = batch[batch.length - 1];
+    if (oldest === undefined || newest === undefined) {
+      break;
+    }
+
+    console.log(
+      `  OHLCV page ${page + 1}: ${batch.length} bars ` +
+        `(${new Date(oldest.time * 1000).toISOString()} → ${new Date(newest.time * 1000).toISOString()}) ` +
+        `total=${byTime.size}`,
+    );
+
+    const soFar = [...byTime.values()].sort((a, b) => a.time - b.time);
+    if (onPage) {
       await onPage(soFar);
     }
-    throw err;
+
+    // No new bars (API returned an overlapping/identical page) — stop to avoid a loop.
+    if (byTime.size === sizeBefore || oldest.time >= before) {
+      break;
+    }
+
+    if (fromTime !== undefined && oldest.time <= fromTime) {
+      break;
+    }
+
+    // `before_timestamp` includes the cursor candle; reuse oldest as next cursor.
+    before = oldest.time;
+
+    if (batch.length < PAGE_LIMIT) {
+      break;
+    }
+
+    await sleep(PAGE_GAP_MS);
   }
 
   let candles = [...byTime.values()].sort((a, b) => a.time - b.time);
@@ -192,50 +205,82 @@ export function mergeCandles(...series: Candle[][]): Candle[] {
   return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
-async function fetchOhlcvJson(url: URL): Promise<GeckoOhlcvResponse> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= FETCH_RETRIES; attempt++) {
-    let response: Response;
+async function fetchCandlesPageForever(args: {
+  poolAddress: string;
+  timeframe: StrategyParams["timeframe"];
+  limit: number;
+  beforeTimestamp: number;
+  getTimeoutMs: () => number;
+  onTransientFailure: (err: unknown) => Promise<void>;
+  onSuccess: () => void;
+}): Promise<Candle[]> {
+  for (;;) {
     try {
-      response = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      const batch = await fetchCandles({
+        poolAddress: args.poolAddress,
+        timeframe: args.timeframe,
+        limit: args.limit,
+        beforeTimestamp: args.beforeTimestamp,
+        timeoutMs: args.getTimeoutMs(),
       });
+      args.onSuccess();
+      return batch;
     } catch (err) {
-      lastError = err;
-      if (attempt === FETCH_RETRIES) {
-        break;
+      if (!isRetryableFetchError(err)) {
+        throw err;
       }
-      const delay = RETRY_BASE_MS * 2 ** attempt;
-      console.warn(
-        `GeckoTerminal request failed (${err instanceof Error ? err.message : String(err)}); retry in ${delay}ms`,
-      );
-      await sleep(delay);
-      continue;
+      await args.onTransientFailure(err);
     }
+  }
+}
 
-    if (response.status === 429) {
-      lastError = new Error("GeckoTerminal rate limit (429)");
-      if (attempt === FETCH_RETRIES) {
-        break;
-      }
-      const delay = RETRY_BASE_MS * 2 ** attempt;
-      console.warn(`GeckoTerminal rate limit (429); retry in ${delay}ms`);
-      await sleep(delay);
-      continue;
-    }
+function isRetryableFetchError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return true;
+  }
+  const message = err.message;
+  // Permanent client errors from Gecko (except rate limit).
+  const clientErr = /GeckoTerminal OHLCV failed \((4\d\d)\)/.exec(message);
+  if (clientErr) {
+    const code = Number(clientErr[1]);
+    return code === 429;
+  }
+  return true;
+}
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`GeckoTerminal OHLCV failed (${response.status}): ${body.slice(0, 200)}`);
-    }
+function nextTimeoutMs(current: number): number {
+  return Math.min(Math.round(current * 1.5), MAX_TIMEOUT_MS);
+}
 
-    return (await response.json()) as GeckoOhlcvResponse;
+function nextRetryDelayMs(failStreak: number): number {
+  const exp = Math.min(Math.max(failStreak - 1, 0), 6);
+  return Math.min(INITIAL_RETRY_DELAY_MS * 2 ** exp, MAX_RETRY_DELAY_MS);
+}
+
+async function fetchOhlcvJson(url: URL, timeoutMs: number): Promise<GeckoOhlcvJson> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    throw new Error(
+      `GeckoTerminal OHLCV request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
 
-  throw new Error(
-    `GeckoTerminal OHLCV failed after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-  );
+  if (response.status === 429) {
+    throw new Error("GeckoTerminal rate limit (429)");
+  }
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GeckoTerminal OHLCV failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  return (await response.json()) as GeckoOhlcvJson;
 }
 
 function sleep(ms: number): Promise<void> {

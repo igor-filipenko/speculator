@@ -97,13 +97,18 @@ Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill c
 ```bash
 pnpm backtest
 pnpm backtest -- --days 14
-pnpm backtest -- --days 90 --force-refresh
+pnpm backtest -- --from 01-01-2026 --to 01-08-2026
+pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 ```
 
-| Flag              | Meaning                                                         |
-| ----------------- | --------------------------------------------------------------- |
-| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing) |
-| `--force-refresh` | Ignore `data/ohlcv/` cache and refetch from GeckoTerminal       |
+| Flag              | Meaning                                                                |
+| ----------------- | ---------------------------------------------------------------------- |
+| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing)        |
+| `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
+| `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
+| `--force-refresh` | Ignore `data/ohlcv/` cache and refetch from GeckoTerminal              |
+
+Use either `--days` or `--from`/`--to`, not both.
 
 Candles are stored under `data/ohlcv/{pool}-{timeframe}.json` and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
 

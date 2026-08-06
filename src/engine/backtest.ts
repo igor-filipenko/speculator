@@ -61,8 +61,8 @@ export interface RunBacktestOptions {
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
   forceRefresh?: boolean;
-  /** Override cache directory (tests). */
-  cacheDir?: string;
+  /** Override data directory (tests). */
+  dataDir?: string;
   /** Inject candles (skips network/cache; tests). */
   candles?: Candle[];
 }
@@ -84,7 +84,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
         fromTime,
         toTime,
         forceRefresh: options.forceRefresh ?? false,
-        ...(options.cacheDir !== undefined ? { cacheDir: options.cacheDir } : {}),
+        ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
       }));
 
     if (candles.length === 0) {

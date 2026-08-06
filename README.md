@@ -106,11 +106,11 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 | `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing)        |
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
-| `--force-refresh` | Ignore `data/ohlcv/` cache and refetch from GeckoTerminal              |
+| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
 
 Use either `--days` or `--from`/`--to`, not both.
 
-Candles are stored under `data/ohlcv/{pool}-{timeframe}.json` and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` table) and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |

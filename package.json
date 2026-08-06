@@ -23,10 +23,12 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "@duckdb/node-api",
       "esbuild"
     ]
   },
   "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.1",
     "@resvg/resvg-js": "2.6.2",
     "dotenv": "^16.6.1",
     "grammy": "^1.45.1",

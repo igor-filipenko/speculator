@@ -12,6 +12,7 @@ dist-test/
 signals.jsonl
 paper-state.json
 data/ohlcv/
+data/speculator.duckdb
 
 # OS / editor
 .DS_Store

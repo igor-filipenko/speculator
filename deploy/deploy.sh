@@ -9,7 +9,7 @@
 #   path  Remote app directory (optional, default: /opt/speculator)
 #
 # Copies dist/, package.json, pnpm-lock.yaml, .env.example.
-# Does not overwrite remote .env, signals.jsonl, or paper-state.json.
+# Does not overwrite remote .env or data/speculator.duckdb.
 # Runs `pnpm install --prod` on the host after upload, then restarts the service.
 set -euo pipefail
 

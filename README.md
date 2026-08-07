@@ -28,21 +28,20 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable             | Meaning                                                                  |
-| -------------------- | ------------------------------------------------------------------------ |
-| `MODE`               | `signal` (default via `pnpm watch`) or `paper`                           |
-| `STRATEGY`           | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26)                      |
-| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended               |
-| `WATCHLIST`          | `SOL/USDC` (only pair in v1)                                             |
-| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                          |
-| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when `paper-state.json` is absent) |
-| `GECKO_POOL_ADDRESS` | Optional Solana pool override for OHLCV                                  |
-| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)             |
-| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                 |
+| Variable             | Meaning                                                              |
+| -------------------- | -------------------------------------------------------------------- |
+| `MODE`               | `signal` (default via `pnpm watch`) or `paper`                       |
+| `STRATEGY`           | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26)                  |
+| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended           |
+| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`) |
+| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                      |
+| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)  |
+| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)         |
+| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                             |
 
 ### Telegram (optional)
 
-Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/JSONL only), plus inbound commands from the configured chat:
+Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
 
 | Command      | Reply                                     |
 | ------------ | ----------------------------------------- |
@@ -117,7 +116,7 @@ OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` tabl
 | Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
 | Meme (future pairs) | 2.0%     | 0.30%    | same                        |
 
-The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes `paper-state.json`.
+The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
 
 Single iteration (smoke test):
 
@@ -126,11 +125,11 @@ pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
 ```
 
-Signals are printed to the console and appended to `signals.jsonl` in the project root. Paper mode also persists cash, position, P&L, and trades to `paper-state.json` (restored on restart; delete the file to reset to `PAPER_CASH_USDC`). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
 
 ## Deploy (Ubuntu VPS + systemd)
 
-Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history is written to `signals.jsonl` and paper portfolio state to `paper-state.json` in the app directory.
+Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history and paper portfolio state live in `data/speculator.duckdb` under the app directory.
 
 ### 1. Install runtime on the VPS
 
@@ -191,7 +190,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env` / `signals.jsonl` / `paper-state.json`.
+Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env` and `data/speculator.duckdb`.
 
 #### A. From the VPS (git clone + `install-runtime`)
 
@@ -230,8 +229,8 @@ Runtime layout:
   package.json
   pnpm-lock.yaml
   .env
-  signals.jsonl
-  paper-state.json
+  data/
+    speculator.duckdb
 ```
 
 ### 4. Monitor logs
@@ -243,11 +242,16 @@ journalctl -u speculator -f
 # Recent history
 journalctl -u speculator --since "1 hour ago"
 
-# JSONL signal history (WorkingDirectory)
-tail -f /opt/speculator/signals.jsonl
+# DuckDB state (WorkingDirectory)
+ls -la /opt/speculator/data/speculator.duckdb
 
-# Paper portfolio snapshot
-cat /opt/speculator/paper-state.json
+# Inspect paper / tokens / signals (example)
+duckdb /opt/speculator/data/speculator.duckdb \
+  "SELECT pair, cash_usdc, position_side FROM paper.portfolios;"
+duckdb /opt/speculator/data/speculator.duckdb \
+  "SELECT symbol, mint, decimals, pool_address FROM solana.tokens;"
+duckdb /opt/speculator/data/speculator.duckdb \
+  "SELECT \"at\", pair, side, price FROM signals ORDER BY \"at\" DESC LIMIT 20;"
 ```
 
 ### 5. Redeploy
@@ -294,6 +298,7 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
+  db/                      # DuckDB: candles, paper, signals
   market/gecko-terminal.ts
   jupiter/client.ts
   strategy/indicators.ts   # hand-rolled EMA/RSI
@@ -301,7 +306,7 @@ src/
   chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
-  paper/store.ts
+  paper/store.ts           # paper load/save (DuckDB)
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
   engine/watch.ts

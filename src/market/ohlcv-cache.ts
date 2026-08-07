@@ -6,11 +6,14 @@ import {
   upsertCandles,
   type CandleRangeBounds,
 } from "../db/candles.js";
-import { defaultDataDir } from "../db/speculator-db.js";
+import { defaultDataDir } from "../db/db.js";
 import type { Candle, StrategyParams } from "../types.js";
 import { candleIntervalSeconds, fetchCandlesRange } from "./gecko-terminal.js";
 
 export interface LoadCachedCandlesOptions {
+  /** Pair symbol used as the DuckDB cache key (e.g. SOL/USDC). */
+  symbol: string;
+  /** GeckoTerminal pool address used for live OHLCV fetches. */
   poolAddress: string;
   timeframe: StrategyParams["timeframe"];
   /** Inclusive lower bound (Unix seconds) for the series returned to the caller. */
@@ -32,17 +35,17 @@ export interface LoadCachedCandlesOptions {
 export async function loadCachedCandles(options: LoadCachedCandlesOptions): Promise<Candle[]> {
   const dataDir = resolveDataDir(options);
   const toTime = options.toTime ?? Math.floor(Date.now() / 1000);
-  const { poolAddress, timeframe } = options;
+  const { symbol, poolAddress, timeframe } = options;
 
   if (options.forceRefresh) {
-    await deleteCandles(poolAddress, timeframe, dataDir);
+    await deleteCandles(symbol, timeframe, dataDir);
   }
 
   const interval = candleIntervalSeconds(timeframe);
 
   // Recompute gaps after each full pass. Stop when covered, or when Gecko has no more history.
   for (;;) {
-    const bounds = await readRangeBounds(poolAddress, timeframe, options.fromTime, toTime, dataDir);
+    const bounds = await readRangeBounds(symbol, timeframe, options.fromTime, toTime, dataDir);
     const fetchWindows = missingWindows(bounds, options.fromTime, toTime, interval);
     if (fetchWindows.length === 0) {
       break;
@@ -53,7 +56,7 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
 
     for (const window of fetchWindows) {
       console.log(
-        `Fetching OHLCV ${timeframe} ${poolAddress.slice(0, 8)}… ` +
+        `Fetching OHLCV ${timeframe} ${symbol} ` +
           `[${new Date(window.from * 1000).toISOString()} → ${new Date(window.to * 1000).toISOString()}]`,
       );
 
@@ -63,18 +66,12 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
         fromTime: window.from,
         toTime: window.to,
         onPage: async (pageCandles) => {
-          await upsertCandles(poolAddress, timeframe, pageCandles, dataDir);
+          await upsertCandles(symbol, timeframe, pageCandles, dataDir);
         },
       });
     }
 
-    const nextBounds = await readRangeBounds(
-      poolAddress,
-      timeframe,
-      options.fromTime,
-      toTime,
-      dataDir,
-    );
+    const nextBounds = await readRangeBounds(symbol, timeframe, options.fromTime, toTime, dataDir);
     const nextWindows = missingWindows(nextBounds, options.fromTime, toTime, interval);
     if (nextWindows.length === 0) {
       break;
@@ -94,10 +91,10 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
     }
   }
 
-  const result = await readCandles(poolAddress, timeframe, options.fromTime, toTime, dataDir);
+  const result = await readCandles(symbol, timeframe, options.fromTime, toTime, dataDir);
   if (result.length === 0) {
     throw new Error(
-      `No OHLCV candles available for ${poolAddress} (${timeframe}) in the requested window`,
+      `No OHLCV candles available for ${symbol} (${timeframe}) in the requested window`,
     );
   }
   return result;

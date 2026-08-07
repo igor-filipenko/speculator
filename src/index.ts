@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   }
 
   const mode: RunMode = command === "paper" ? "paper" : "signal";
-  const config = loadConfig({ mode });
+  const config = await loadConfig({ mode });
 
   const portfolios: Map<string, Portfolio> =
     mode === "paper"
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
-  const config = loadConfig({ mode: "signal" });
+  const config = await loadConfig({ mode: "signal" });
   const results = await runBacktest({
     config,
     forceRefresh: flags.forceRefresh,

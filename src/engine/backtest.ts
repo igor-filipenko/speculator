@@ -79,6 +79,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     const candles =
       options.candles ??
       (await loadCachedCandles({
+        symbol: pair.symbol,
         poolAddress: pair.geckoPoolAddress,
         timeframe: strategy.timeframe,
         fromTime,

@@ -46,16 +46,16 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 
   await connection.run(`
     CREATE TABLE IF NOT EXISTS candles (
-      pool_address VARCHAR NOT NULL,
-      timeframe    VARCHAR NOT NULL,
-      time         BIGINT  NOT NULL,
-      open         DOUBLE  NOT NULL,
-      high         DOUBLE  NOT NULL,
-      low          DOUBLE  NOT NULL,
-      close        DOUBLE  NOT NULL,
-      volume       DOUBLE  NOT NULL,
-      fetched_at   TIMESTAMP NOT NULL DEFAULT now(),
-      PRIMARY KEY (pool_address, timeframe, time)
+      symbol     VARCHAR NOT NULL,
+      timeframe  VARCHAR NOT NULL,
+      time       BIGINT  NOT NULL,
+      open       DOUBLE  NOT NULL,
+      high       DOUBLE  NOT NULL,
+      low        DOUBLE  NOT NULL,
+      close      DOUBLE  NOT NULL,
+      volume     DOUBLE  NOT NULL,
+      fetched_at TIMESTAMP NOT NULL DEFAULT now(),
+      PRIMARY KEY (symbol, timeframe, time)
     )
   `);
 
@@ -112,18 +112,19 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 
   await connection.run(`
     CREATE TABLE IF NOT EXISTS solana.tokens (
-      symbol VARCHAR NOT NULL PRIMARY KEY,
-      mint   VARCHAR NOT NULL,
-      pool   VARCHAR
+      symbol       VARCHAR NOT NULL PRIMARY KEY,
+      mint         VARCHAR NOT NULL,
+      decimals     INTEGER NOT NULL,
+      pool_address VARCHAR
     )
   `);
 
   // Seed known Solana tokens when missing (idempotent).
   await connection.run(`
-    INSERT INTO solana.tokens (symbol, mint, pool)
+    INSERT INTO solana.tokens (symbol, mint, decimals, pool_address)
     VALUES
-      ('SOL', 'So11111111111111111111111111111111111111112', '8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj'),
-      ('USDC', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', NULL)
+      ('SOL', 'So11111111111111111111111111111111111111112', 9, '8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj'),
+      ('USDC', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 6, NULL)
     ON CONFLICT (symbol) DO NOTHING
   `);
 }

@@ -25,7 +25,7 @@ describe("ohlcv cache (DuckDB)", () => {
   });
 
   it("returns cached candles without network when the window is covered", async () => {
-    const pool = "TestPool1111111111111111111111111111111";
+    const symbol = "SOL/USDC";
     const timeframe = "15m" as const;
     const interval = 15 * 60;
     const fromTime = 1_700_000_000;
@@ -35,10 +35,11 @@ describe("ohlcv cache (DuckDB)", () => {
     );
     const toTime = fromTime + count * interval;
 
-    await upsertCandles(pool, timeframe, candles, dataDir);
+    await upsertCandles(symbol, timeframe, candles, dataDir);
 
     const loaded = await loadCachedCandles({
-      poolAddress: pool,
+      symbol,
+      poolAddress: "unused-when-cache-covers",
       timeframe,
       fromTime,
       toTime,
@@ -48,21 +49,21 @@ describe("ohlcv cache (DuckDB)", () => {
     assert.equal(loaded.length, count);
     assert.equal(loaded[0]?.time, fromTime);
     assert.equal(loaded[count - 1]?.close, 100 + count - 1);
-    assert.equal(await candleCount(pool, timeframe, dataDir), count);
+    assert.equal(await candleCount(symbol, timeframe, dataDir), count);
   });
 
   it("upserts idempotently on the same primary key", async () => {
-    const pool = "TestPool2222222222222222222222222222222";
+    const symbol = "BONK/USDC";
     const timeframe = "15m" as const;
     const t = 1_700_100_000;
     const first = candle(t, 50);
     const updated = { ...first, close: 55, high: 56 };
 
-    await upsertCandles(pool, timeframe, [first], dataDir);
-    await upsertCandles(pool, timeframe, [updated], dataDir);
+    await upsertCandles(symbol, timeframe, [first], dataDir);
+    await upsertCandles(symbol, timeframe, [updated], dataDir);
 
-    assert.equal(await candleCount(pool, timeframe, dataDir), 1);
-    const rows = await readCandles(pool, timeframe, t, t + 1, dataDir);
+    assert.equal(await candleCount(symbol, timeframe, dataDir), 1);
+    const rows = await readCandles(symbol, timeframe, t, t + 1, dataDir);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.close, 55);
   });

@@ -4,8 +4,9 @@ import { getSpeculatorDb } from "./speculator-db.js";
 export interface SolanaToken {
   symbol: string;
   mint: string;
+  decimals: number;
   /** GeckoTerminal pool address (set on base tokens used for OHLCV). */
-  pool?: string;
+  poolAddress?: string;
 }
 
 function asString(value: unknown, field: string): string {
@@ -22,9 +23,10 @@ function rowToToken(row: Record<string, unknown>): SolanaToken {
   const token: SolanaToken = {
     symbol: asString(row["symbol"], "symbol"),
     mint: asString(row["mint"], "mint"),
+    decimals: Number(row["decimals"]),
   };
-  if (row["pool"] != null && row["pool"] !== "") {
-    token.pool = asString(row["pool"], "pool");
+  if (row["pool_address"] != null && row["pool_address"] !== "") {
+    token.poolAddress = asString(row["pool_address"], "pool_address");
   }
   return token;
 }
@@ -34,7 +36,7 @@ export async function getToken(symbol: string, dataDir?: string): Promise<Solana
   const conn = await getSpeculatorDb(dataDir);
   const reader = await conn.runAndReadAll(
     `
-    SELECT symbol, mint, pool
+    SELECT symbol, mint, decimals, pool_address
     FROM solana.tokens
     WHERE symbol = $symbol
     `,
@@ -49,7 +51,7 @@ export async function getToken(symbol: string, dataDir?: string): Promise<Solana
 export async function listTokens(dataDir?: string): Promise<SolanaToken[]> {
   const conn = await getSpeculatorDb(dataDir);
   const reader = await conn.runAndReadAll(`
-    SELECT symbol, mint, pool
+    SELECT symbol, mint, decimals, pool_address
     FROM solana.tokens
     ORDER BY symbol
   `);

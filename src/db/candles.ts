@@ -9,9 +9,9 @@ export interface CandleRangeBounds {
 }
 
 const UPSERT_SQL = `
-  INSERT INTO candles (pool_address, timeframe, time, open, high, low, close, volume)
-  VALUES ($pool, $timeframe, $time, $open, $high, $low, $close, $volume)
-  ON CONFLICT (pool_address, timeframe, time) DO UPDATE SET
+  INSERT INTO candles (symbol, timeframe, time, open, high, low, close, volume)
+  VALUES ($symbol, $timeframe, $time, $open, $high, $low, $close, $volume)
+  ON CONFLICT (symbol, timeframe, time) DO UPDATE SET
     open = excluded.open,
     high = excluded.high,
     low = excluded.low,
@@ -21,7 +21,7 @@ const UPSERT_SQL = `
 `;
 
 export async function readCandles(
-  poolAddress: string,
+  symbol: string,
   timeframe: StrategyParams["timeframe"],
   fromTime: number,
   toTime: number,
@@ -32,14 +32,14 @@ export async function readCandles(
     `
     SELECT time, open, high, low, close, volume
     FROM candles
-    WHERE pool_address = $pool
+    WHERE symbol = $symbol
       AND timeframe = $timeframe
       AND time >= $fromTime
       AND time < $toTime
     ORDER BY time
     `,
     {
-      pool: poolAddress,
+      symbol,
       timeframe,
       fromTime,
       toTime,
@@ -58,7 +58,7 @@ export async function readCandles(
 }
 
 export async function readRangeBounds(
-  poolAddress: string,
+  symbol: string,
   timeframe: StrategyParams["timeframe"],
   fromTime: number,
   toTime: number,
@@ -72,13 +72,13 @@ export async function readRangeBounds(
       max(time) AS max_time,
       count(*)::BIGINT AS cnt
     FROM candles
-    WHERE pool_address = $pool
+    WHERE symbol = $symbol
       AND timeframe = $timeframe
       AND time >= $fromTime
       AND time < $toTime
     `,
     {
-      pool: poolAddress,
+      symbol,
       timeframe,
       fromTime,
       toTime,
@@ -101,7 +101,7 @@ export async function readRangeBounds(
 }
 
 export async function upsertCandles(
-  poolAddress: string,
+  symbol: string,
   timeframe: StrategyParams["timeframe"],
   candles: Candle[],
   dataDir?: string,
@@ -115,7 +115,7 @@ export async function upsertCandles(
   try {
     for (const c of candles) {
       await conn.run(UPSERT_SQL, {
-        pool: poolAddress,
+        symbol,
         timeframe,
         time: c.time,
         open: c.open,
@@ -133,19 +133,19 @@ export async function upsertCandles(
 }
 
 export async function deleteCandles(
-  poolAddress: string,
+  symbol: string,
   timeframe: StrategyParams["timeframe"],
   dataDir?: string,
 ): Promise<void> {
   const conn = await getSpeculatorDb(dataDir);
-  await conn.run(`DELETE FROM candles WHERE pool_address = $pool AND timeframe = $timeframe`, {
-    pool: poolAddress,
+  await conn.run(`DELETE FROM candles WHERE symbol = $symbol AND timeframe = $timeframe`, {
+    symbol,
     timeframe,
   });
 }
 
 export async function candleCount(
-  poolAddress: string,
+  symbol: string,
   timeframe: StrategyParams["timeframe"],
   dataDir?: string,
 ): Promise<number> {
@@ -154,9 +154,9 @@ export async function candleCount(
     `
     SELECT count(*)::BIGINT AS cnt
     FROM candles
-    WHERE pool_address = $pool AND timeframe = $timeframe
+    WHERE symbol = $symbol AND timeframe = $timeframe
     `,
-    { pool: poolAddress, timeframe },
+    { symbol, timeframe },
   );
   await reader.readAll();
   const row = reader.getRowObjectsJS()[0];

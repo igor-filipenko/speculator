@@ -31,7 +31,7 @@ src/
     candles.ts          # OHLCV table queries
     paper.ts            # paper.portfolios / paper.trades
     signals.ts          # signals history
-    tokens.ts           # solana.tokens (symbol, mint, pool)
+    tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
   jupiter/client.ts     # quote only (live paper/watch)

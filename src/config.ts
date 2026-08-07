@@ -5,12 +5,6 @@ import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.
 
 loadDotenv();
 
-/** Token decimals not stored in solana.tokens (mint/pool only). */
-const TOKEN_DECIMALS: Record<string, number> = {
-  SOL: 9,
-  USDC: 6,
-};
-
 const envSchema = z.object({
   MODE: z.enum(["signal", "paper"]).default("signal"),
   STRATEGY: z.enum(["intraday", "swing"]).default("intraday"),
@@ -18,7 +12,6 @@ const envSchema = z.object({
   WATCHLIST: z.string().default("SOL/USDC"),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
-  GECKO_POOL_ADDRESS: z.string().optional().default(""),
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   TELEGRAM_CHAT_ID: z.string().optional().default(""),
 });
@@ -40,21 +33,7 @@ export interface AppConfig {
   telegram?: TelegramConfig;
 }
 
-function decimalsFor(symbol: string): number {
-  const decimals = TOKEN_DECIMALS[symbol];
-  if (decimals === undefined) {
-    throw new Error(
-      `Unknown decimals for token "${symbol}". Add it to TOKEN_DECIMALS in config.ts.`,
-    );
-  }
-  return decimals;
-}
-
-async function resolvePair(
-  symbol: string,
-  geckoPoolOverride: string,
-  dataDir?: string,
-): Promise<PairConfig> {
+async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig> {
   const normalized = symbol.trim().toUpperCase();
   const parts = normalized.split("/");
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -71,10 +50,9 @@ async function resolvePair(
     throw new Error(`Unknown quote token "${quoteSymbol}" (not in solana.tokens).`);
   }
 
-  const geckoPoolAddress = geckoPoolOverride.trim() || base.pool;
-  if (!geckoPoolAddress) {
+  if (!base.poolAddress) {
     throw new Error(
-      `No GeckoTerminal pool for ${normalized}: set pool on solana.tokens.${baseSymbol} or GECKO_POOL_ADDRESS.`,
+      `No GeckoTerminal pool for ${normalized}: set pool_address on solana.tokens.${baseSymbol}.`,
     );
   }
 
@@ -82,9 +60,9 @@ async function resolvePair(
     symbol: normalized,
     baseMint: base.mint,
     quoteMint: quote.mint,
-    baseDecimals: decimalsFor(baseSymbol),
-    quoteDecimals: decimalsFor(quoteSymbol),
-    geckoPoolAddress,
+    baseDecimals: base.decimals,
+    quoteDecimals: quote.decimals,
+    geckoPoolAddress: base.poolAddress,
   };
 }
 
@@ -108,7 +86,7 @@ export async function loadConfig(overrides?: {
   }
 
   const pairs = await Promise.all(
-    watchlist.map((symbol) => resolvePair(symbol, env.GECKO_POOL_ADDRESS, overrides?.dataDir)),
+    watchlist.map((symbol) => resolvePair(symbol, overrides?.dataDir)),
   );
 
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();

@@ -26,12 +26,14 @@ describe("solana.tokens", () => {
     const sol = bySymbol.get("SOL");
     assert.ok(sol);
     assert.equal(sol.mint, "So11111111111111111111111111111111111111112");
-    assert.equal(sol.pool, "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj");
+    assert.equal(sol.decimals, 9);
+    assert.equal(sol.poolAddress, "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj");
 
     const usdc = bySymbol.get("USDC");
     assert.ok(usdc);
     assert.equal(usdc.mint, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-    assert.equal(usdc.pool, undefined);
+    assert.equal(usdc.decimals, 6);
+    assert.equal(usdc.poolAddress, undefined);
   });
 
   it("resolves WATCHLIST pairs from solana.tokens", async () => {
@@ -42,6 +44,8 @@ describe("solana.tokens", () => {
     assert.equal(pair.symbol, "SOL/USDC");
     assert.equal(pair.baseMint, "So11111111111111111111111111111111111111112");
     assert.equal(pair.quoteMint, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    assert.equal(pair.baseDecimals, 9);
+    assert.equal(pair.quoteDecimals, 6);
     assert.equal(pair.geckoPoolAddress, "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj");
   });
 

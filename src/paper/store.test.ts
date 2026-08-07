@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { resetSpeculatorDbCache } from "../db/speculator-db.js";
+import { resetSpeculatorDbCache } from "../db/db.js";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
 

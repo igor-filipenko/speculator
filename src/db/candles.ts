@@ -1,6 +1,6 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type { Candle, StrategyParams } from "../types.js";
-import { getSpeculatorDb } from "./speculator-db.js";
+import { getSpeculatorDb } from "./db.js";
 
 export interface CandleRangeBounds {
   minTime?: number;

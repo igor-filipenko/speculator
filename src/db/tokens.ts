@@ -1,4 +1,4 @@
-import { getSpeculatorDb } from "./speculator-db.js";
+import { getSpeculatorDb } from "./db.js";
 
 /** One row from `solana.tokens`. */
 export interface SolanaToken {

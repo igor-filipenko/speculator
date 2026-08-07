@@ -188,7 +188,7 @@ function formatReportMessage(lastSignals: Map<string, Signal>): string {
   }
 
   const blocks = [...lastSignals.values()].map(formatSignalMessage);
-  return ["📊 *Report*", "", ...blocks].join("\n\n");
+  return ["📊 *Report*", ...blocks].join("\n\n");
 }
 
 function formatPortfolioMessage(

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { getSpeculatorDb, resetSpeculatorDbCache } from "./speculator-db.js";
+import { getSpeculatorDb, resetSpeculatorDbCache } from "./db.js";
 import { insertSignal } from "./signals.js";
 
 describe("signals (DuckDB)", () => {

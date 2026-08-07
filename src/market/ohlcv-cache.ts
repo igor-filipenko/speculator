@@ -6,7 +6,7 @@ import {
   upsertCandles,
   type CandleRangeBounds,
 } from "../db/candles.js";
-import { defaultDataDir } from "../db/speculator-db.js";
+import { defaultDataDir } from "../db/db.js";
 import type { Candle, StrategyParams } from "../types.js";
 import { candleIntervalSeconds, fetchCandlesRange } from "./gecko-terminal.js";
 

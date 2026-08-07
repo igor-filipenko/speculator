@@ -1,5 +1,5 @@
 import type { PersistedPortfolio, PersistedPosition, PersistedTrade } from "../paper/store.js";
-import { getSpeculatorDb } from "./speculator-db.js";
+import { getSpeculatorDb } from "./db.js";
 
 const UPSERT_PORTFOLIO_SQL = `
   INSERT INTO paper.portfolios (

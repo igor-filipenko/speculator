@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { loadConfig } from "../config.js";
-import { resetSpeculatorDbCache } from "./speculator-db.js";
+import { resetSpeculatorDbCache } from "./db.js";
 import { getToken, listTokens } from "./tokens.js";
 
 describe("solana.tokens", () => {

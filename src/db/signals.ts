@@ -1,5 +1,5 @@
 import type { Signal } from "../types.js";
-import { getSpeculatorDb } from "./speculator-db.js";
+import { getSpeculatorDb } from "./db.js";
 
 const INSERT_SIGNAL_SQL = `
   INSERT INTO signals ("at", pair, side, price, reason, ema_fast, ema_slow, rsi)

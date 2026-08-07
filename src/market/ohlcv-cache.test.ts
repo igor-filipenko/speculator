@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { candleCount, readCandles, upsertCandles } from "../db/candles.js";
-import { resetSpeculatorDbCache, speculatorDbPath } from "../db/speculator-db.js";
+import { resetSpeculatorDbCache, speculatorDbPath } from "../db/db.js";
 import type { Candle } from "../types.js";
 import { loadCachedCandles } from "./ohlcv-cache.js";
 

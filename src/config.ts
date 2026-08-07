@@ -1,14 +1,15 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
+import { getToken } from "./db/tokens.js";
 import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.js";
 
 loadDotenv();
 
-/** Well-known SOL/USDC Raydium pool on GeckoTerminal (Solana). */
-export const DEFAULT_SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
-
-export const SOL_MINT = "So11111111111111111111111111111111111111112";
-export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+/** Token decimals not stored in solana.tokens (mint/pool only). */
+const TOKEN_DECIMALS: Record<string, number> = {
+  SOL: 9,
+  USDC: 6,
+};
 
 const envSchema = z.object({
   MODE: z.enum(["signal", "paper"]).default("signal"),
@@ -39,23 +40,58 @@ export interface AppConfig {
   telegram?: TelegramConfig;
 }
 
-function resolvePair(symbol: string, geckoPoolOverride: string): PairConfig {
+function decimalsFor(symbol: string): number {
+  const decimals = TOKEN_DECIMALS[symbol];
+  if (decimals === undefined) {
+    throw new Error(
+      `Unknown decimals for token "${symbol}". Add it to TOKEN_DECIMALS in config.ts.`,
+    );
+  }
+  return decimals;
+}
+
+async function resolvePair(
+  symbol: string,
+  geckoPoolOverride: string,
+  dataDir?: string,
+): Promise<PairConfig> {
   const normalized = symbol.trim().toUpperCase();
-  if (normalized !== "SOL/USDC") {
-    throw new Error(`Unsupported pair "${symbol}". v1 only supports SOL/USDC.`);
+  const parts = normalized.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`Invalid pair "${symbol}". Expected BASE/QUOTE (e.g. SOL/USDC).`);
+  }
+  const [baseSymbol, quoteSymbol] = parts;
+
+  const base = await getToken(baseSymbol, dataDir);
+  if (!base) {
+    throw new Error(`Unknown base token "${baseSymbol}" (not in solana.tokens).`);
+  }
+  const quote = await getToken(quoteSymbol, dataDir);
+  if (!quote) {
+    throw new Error(`Unknown quote token "${quoteSymbol}" (not in solana.tokens).`);
+  }
+
+  const geckoPoolAddress = geckoPoolOverride.trim() || base.pool;
+  if (!geckoPoolAddress) {
+    throw new Error(
+      `No GeckoTerminal pool for ${normalized}: set pool on solana.tokens.${baseSymbol} or GECKO_POOL_ADDRESS.`,
+    );
   }
 
   return {
-    symbol: "SOL/USDC",
-    baseMint: SOL_MINT,
-    quoteMint: USDC_MINT,
-    baseDecimals: 9,
-    quoteDecimals: 6,
-    geckoPoolAddress: geckoPoolOverride || DEFAULT_SOL_USDC_POOL,
+    symbol: normalized,
+    baseMint: base.mint,
+    quoteMint: quote.mint,
+    baseDecimals: decimalsFor(baseSymbol),
+    quoteDecimals: decimalsFor(quoteSymbol),
+    geckoPoolAddress,
   };
 }
 
-export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
+export async function loadConfig(overrides?: {
+  mode?: RunMode;
+  dataDir?: string;
+}): Promise<AppConfig> {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -71,7 +107,9 @@ export function loadConfig(overrides?: { mode?: RunMode }): AppConfig {
     throw new Error("WATCHLIST must contain at least one pair");
   }
 
-  const pairs = watchlist.map((symbol) => resolvePair(symbol, env.GECKO_POOL_ADDRESS));
+  const pairs = await Promise.all(
+    watchlist.map((symbol) => resolvePair(symbol, env.GECKO_POOL_ADDRESS, overrides?.dataDir)),
+  );
 
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();
   const chatId = env.TELEGRAM_CHAT_ID.trim();

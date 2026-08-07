@@ -2,7 +2,7 @@ import type { PersistedPortfolio, PersistedPosition, PersistedTrade } from "../p
 import { getSpeculatorDb } from "./speculator-db.js";
 
 const UPSERT_PORTFOLIO_SQL = `
-  INSERT INTO paper_portfolios (
+  INSERT INTO paper.portfolios (
     pair, cash_usdc, realized_pnl,
     position_side, position_size, entry_price, opened_at, updated_at
   )
@@ -21,7 +21,7 @@ const UPSERT_PORTFOLIO_SQL = `
 `;
 
 const INSERT_TRADE_SQL = `
-  INSERT INTO paper_trades (pair, side, price, size, realized_pnl, "at", simulated)
+  INSERT INTO paper.trades (pair, side, price, size, realized_pnl, "at", simulated)
   VALUES ($pair, $side, $price, $size, $realizedPnl, $at::TIMESTAMP, true)
 `;
 
@@ -59,7 +59,7 @@ function timestampToIso(value: unknown): string | undefined {
 function rowToTrade(row: Record<string, unknown>): PersistedTrade {
   const at = timestampToIso(row["at"]);
   if (at === undefined) {
-    throw new Error("paper_trades row missing at");
+    throw new Error("paper.trades row missing at");
   }
   const trade: PersistedTrade = {
     pair: asString(row["pair"], "pair"),
@@ -89,10 +89,10 @@ function rowToPosition(row: Record<string, unknown>): PersistedPosition {
   return position;
 }
 
-/** Count paper portfolio rows (for empty-check / import). */
+/** Count paper portfolio rows (for empty-check). */
 export async function paperPortfolioCount(dataDir?: string): Promise<number> {
   const conn = await getSpeculatorDb(dataDir);
-  const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS cnt FROM paper_portfolios`);
+  const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS cnt FROM paper.portfolios`);
   await reader.readAll();
   const row = reader.getRowObjectsJS()[0];
   return row ? Number(row["cnt"]) : 0;
@@ -108,7 +108,7 @@ export async function loadAllPaperPortfolios(
     SELECT
       pair, cash_usdc, realized_pnl,
       position_side, position_size, entry_price, opened_at, updated_at
-    FROM paper_portfolios
+    FROM paper.portfolios
     ORDER BY pair
   `);
   await portfolioReader.readAll();
@@ -120,7 +120,7 @@ export async function loadAllPaperPortfolios(
 
   const tradeReader = await conn.runAndReadAll(`
     SELECT pair, side, price, size, realized_pnl, "at", simulated
-    FROM paper_trades
+    FROM paper.trades
     ORDER BY "at", id
   `);
   await tradeReader.readAll();
@@ -179,7 +179,7 @@ export async function insertPaperTrade(trade: PersistedTrade, dataDir?: string):
 
 /**
  * Upsert portfolio and replace its trade history (delete + insert).
- * Used for full snapshot saves and JSON import.
+ * Used for full snapshot saves.
  */
 export async function syncPaperPortfolio(
   portfolio: PersistedPortfolio,
@@ -200,7 +200,7 @@ export async function syncPaperPortfolio(
       openedAt: portfolio.position.openedAt ?? null,
     });
 
-    await conn.run(`DELETE FROM paper_trades WHERE pair = $pair`, { pair });
+    await conn.run(`DELETE FROM paper.trades WHERE pair = $pair`, { pair });
 
     for (const trade of portfolio.trades) {
       await conn.run(INSERT_TRADE_SQL, {

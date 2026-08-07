@@ -39,8 +39,11 @@ async function openConnection(path: string): Promise<DuckDBConnection> {
   return connection;
 }
 
-/** Create tables if missing. Add future persistence tables here. */
+/** Create schemas/tables if missing. Add future persistence tables here. */
 export async function initSchema(connection: DuckDBConnection): Promise<void> {
+  await connection.run(`CREATE SCHEMA IF NOT EXISTS paper`);
+  await connection.run(`CREATE SCHEMA IF NOT EXISTS solana`);
+
   await connection.run(`
     CREATE TABLE IF NOT EXISTS candles (
       pool_address VARCHAR NOT NULL,
@@ -56,11 +59,11 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
     )
   `);
 
-  await connection.run(`CREATE SEQUENCE IF NOT EXISTS paper_trades_id_seq`);
+  await connection.run(`CREATE SEQUENCE IF NOT EXISTS paper.trades_id_seq`);
   await connection.run(`CREATE SEQUENCE IF NOT EXISTS signals_id_seq`);
 
   await connection.run(`
-    CREATE TABLE IF NOT EXISTS paper_portfolios (
+    CREATE TABLE IF NOT EXISTS paper.portfolios (
       pair           VARCHAR NOT NULL PRIMARY KEY,
       cash_usdc      DOUBLE  NOT NULL,
       realized_pnl   DOUBLE  NOT NULL,
@@ -73,8 +76,8 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
   `);
 
   await connection.run(`
-    CREATE TABLE IF NOT EXISTS paper_trades (
-      id           BIGINT PRIMARY KEY DEFAULT nextval('paper_trades_id_seq'),
+    CREATE TABLE IF NOT EXISTS paper.trades (
+      id           BIGINT PRIMARY KEY DEFAULT nextval('paper.trades_id_seq'),
       pair         VARCHAR NOT NULL,
       side         VARCHAR NOT NULL,
       price        DOUBLE  NOT NULL,
@@ -86,7 +89,7 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
   `);
 
   await connection.run(`
-    CREATE INDEX IF NOT EXISTS paper_trades_pair_idx ON paper_trades (pair)
+    CREATE INDEX IF NOT EXISTS paper_trades_pair_idx ON paper.trades (pair)
   `);
 
   await connection.run(`
@@ -105,6 +108,23 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 
   await connection.run(`
     CREATE INDEX IF NOT EXISTS signals_at_idx ON signals ("at")
+  `);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS solana.tokens (
+      symbol VARCHAR NOT NULL PRIMARY KEY,
+      mint   VARCHAR NOT NULL,
+      pool   VARCHAR
+    )
+  `);
+
+  // Seed known Solana tokens when missing (idempotent).
+  await connection.run(`
+    INSERT INTO solana.tokens (symbol, mint, pool)
+    VALUES
+      ('SOL', 'So11111111111111111111111111111111111111112', '8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj'),
+      ('USDC', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', NULL)
+    ON CONFLICT (symbol) DO NOTHING
   `);
 }
 

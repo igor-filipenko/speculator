@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
-import { DEFAULT_SOL_USDC_POOL, strategyParams } from "../config.js";
+import { strategyParams } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../jupiter/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import type { Candle } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
+
+const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
@@ -22,7 +24,7 @@ function makeConfig(cash = 1000): AppConfig {
         quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         baseDecimals: 9,
         quoteDecimals: 6,
-        geckoPoolAddress: DEFAULT_SOL_USDC_POOL,
+        geckoPoolAddress: SOL_USDC_POOL,
       },
     ],
   };

@@ -29,8 +29,9 @@ src/
   db/
     speculator-db.ts    # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
-    paper.ts            # paper_portfolios / paper_trades
+    paper.ts            # paper.portfolios / paper.trades
     signals.ts          # signals history
+    tokens.ts           # solana.tokens (symbol, mint, pool)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
   jupiter/client.ts     # quote only (live paper/watch)
@@ -40,7 +41,7 @@ src/
   chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /chart
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts
-  paper/store.ts        # paper load/save + legacy JSON import
+  paper/store.ts        # paper load/save (DuckDB)
   notify/console.ts
   notify/telegram.ts    # optional alerts + inbound commands (grammY polling)
   engine/watch.ts

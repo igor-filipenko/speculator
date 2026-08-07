@@ -9,6 +9,7 @@ dist-test/
 
 # Logs / local state
 *.log
+# Leftover legacy JSON state (now stored in data/speculator.duckdb)
 signals.jsonl
 paper-state.json
 data/ohlcv/

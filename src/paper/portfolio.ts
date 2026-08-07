@@ -1,8 +1,8 @@
 import { match } from "ts-pattern";
+import { insertPaperTrade, upsertPaperPortfolio } from "../db/paper.js";
 import type { PairConfig, Portfolio, Position, Signal, Snapshot, Trade } from "../types.js";
 import {
   loadPaperState,
-  savePaperState,
   type PersistedPortfolio,
   type PersistedPosition,
   type PersistedTrade,
@@ -173,7 +173,14 @@ export class PaperPortfolio {
   async applySignal(signal: Signal, options: FillOptions = {}): Promise<PaperTrade | null> {
     const nextTrade = this.applySignalSync(signal, options);
 
-    if (nextTrade != null) await savePaperState(new Map([[signal.pair, this]]));
+    if (nextTrade != null) {
+      const persisted = this.toPersisted();
+      await upsertPaperPortfolio(persisted);
+      const last = persisted.trades.at(-1);
+      if (last != null) {
+        await insertPaperTrade(last);
+      }
+    }
 
     return nextTrade;
   }

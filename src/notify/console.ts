@@ -1,7 +1,5 @@
-import { appendFile } from "node:fs/promises";
+import { insertSignal } from "../db/signals.js";
 import type { Signal, Snapshot, Trade } from "../types.js";
-
-const JSONL_PATH = "signals.jsonl";
 
 export function logSignal(signal: Signal): void {
   const ts = signal.at.toISOString();
@@ -30,17 +28,9 @@ export function logSnapshot(snapshot: Snapshot): void {
   );
 }
 
-/** Append one JSON line for later analysis. */
-export async function appendSignalJsonl(signal: Signal): Promise<void> {
-  const line = JSON.stringify({
-    at: signal.at.toISOString(),
-    pair: signal.pair,
-    side: signal.side,
-    price: signal.price,
-    reason: signal.reason,
-    meta: signal.meta,
-  });
-  await appendFile(JSONL_PATH, `${line}\n`, "utf8");
+/** Persist one signal to DuckDB for later analysis. */
+export async function persistSignal(signal: Signal): Promise<void> {
+  await insertSignal(signal);
 }
 
 function fmt(n: number | undefined): string {

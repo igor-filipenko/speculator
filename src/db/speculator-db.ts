@@ -55,6 +55,57 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
       PRIMARY KEY (pool_address, timeframe, time)
     )
   `);
+
+  await connection.run(`CREATE SEQUENCE IF NOT EXISTS paper_trades_id_seq`);
+  await connection.run(`CREATE SEQUENCE IF NOT EXISTS signals_id_seq`);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS paper_portfolios (
+      pair           VARCHAR NOT NULL PRIMARY KEY,
+      cash_usdc      DOUBLE  NOT NULL,
+      realized_pnl   DOUBLE  NOT NULL,
+      position_side  VARCHAR NOT NULL,
+      position_size  DOUBLE  NOT NULL,
+      entry_price    DOUBLE  NOT NULL,
+      opened_at      TIMESTAMP,
+      updated_at     TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS paper_trades (
+      id           BIGINT PRIMARY KEY DEFAULT nextval('paper_trades_id_seq'),
+      pair         VARCHAR NOT NULL,
+      side         VARCHAR NOT NULL,
+      price        DOUBLE  NOT NULL,
+      size         DOUBLE  NOT NULL,
+      realized_pnl DOUBLE,
+      "at"         TIMESTAMP NOT NULL,
+      simulated    BOOLEAN NOT NULL DEFAULT true
+    )
+  `);
+
+  await connection.run(`
+    CREATE INDEX IF NOT EXISTS paper_trades_pair_idx ON paper_trades (pair)
+  `);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS signals (
+      id       BIGINT PRIMARY KEY DEFAULT nextval('signals_id_seq'),
+      "at"     TIMESTAMP NOT NULL,
+      pair     VARCHAR NOT NULL,
+      side     VARCHAR NOT NULL,
+      price    DOUBLE  NOT NULL,
+      reason   VARCHAR NOT NULL,
+      ema_fast DOUBLE,
+      ema_slow DOUBLE,
+      rsi      DOUBLE
+    )
+  `);
+
+  await connection.run(`
+    CREATE INDEX IF NOT EXISTS signals_at_idx ON signals ("at")
+  `);
 }
 
 /** Close cached connection for tests (optional cleanup). */

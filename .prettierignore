@@ -2,7 +2,5 @@ dist
 dist-test
 node_modules
 pnpm-lock.yaml
-signals.jsonl
-paper-state.json
 .env
 .env.local

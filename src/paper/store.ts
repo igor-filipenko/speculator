@@ -1,5 +1,6 @@
-import { rename, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
+import { loadAllPaperPortfolios, paperPortfolioCount, syncPaperPortfolio } from "../db/paper.js";
 
 /** Serializable position (dates as ISO strings). */
 export interface PersistedPosition {
@@ -29,19 +30,20 @@ export interface PersistedPortfolio {
   trades: PersistedTrade[];
 }
 
-/** On-disk paper state file shape (`paper-state.json`). */
+/** Paper state envelope (versioned for loaders / import). */
 export interface PersistedPaperState {
   version: 1;
   updatedAt: string;
   portfolios: Record<string, PersistedPortfolio>;
 }
 
-/** Anything that can be written into `paper-state.json`. */
+/** Anything that can be written into paper persistence. */
 export interface PersistablePortfolio {
   toPersisted(): PersistedPortfolio;
 }
 
-export const PAPER_STATE_PATH = "paper-state.json";
+/** Legacy JSON path used for one-time import into DuckDB. */
+export const LEGACY_PAPER_STATE_PATH = "paper-state.json";
 
 const persistedPositionSchema = z.object({
   pair: z.string().min(1),
@@ -108,20 +110,19 @@ function normalizePortfolio(raw: z.infer<typeof persistedPortfolioSchema>): Pers
   };
 }
 
-/**
- * Load paper state from disk.
- * Missing file → null. Corrupt/invalid → warn and return null.
- */
-export async function loadPaperState(path = PAPER_STATE_PATH): Promise<PersistedPaperState | null> {
+async function tryImportLegacyPaperState(
+  dataDir?: string,
+  legacyPath = LEGACY_PAPER_STATE_PATH,
+): Promise<PersistedPaperState | null> {
   let raw: string;
   try {
-    raw = await readFile(path, "utf8");
+    raw = await readFile(legacyPath, "utf8");
   } catch (err) {
     if (err !== null && typeof err === "object" && "code" in err && err.code === "ENOENT") {
       return null;
     }
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Warning: could not read ${path}: ${message}`);
+    console.warn(`Warning: could not read legacy ${legacyPath}: ${message}`);
     return null;
   }
 
@@ -130,21 +131,27 @@ export async function loadPaperState(path = PAPER_STATE_PATH): Promise<Persisted
     json = JSON.parse(raw);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Warning: invalid JSON in ${path}: ${message}`);
+    console.warn(`Warning: invalid JSON in legacy ${legacyPath}: ${message}`);
     return null;
   }
 
   const parsed = persistedPaperStateSchema.safeParse(json);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-    console.warn(`Warning: invalid ${path}: ${details}`);
+    console.warn(`Warning: invalid legacy ${legacyPath}: ${details}`);
     return null;
   }
 
   const portfolios: Record<string, PersistedPortfolio> = {};
   for (const [pair, portfolio] of Object.entries(parsed.data.portfolios)) {
-    portfolios[pair] = normalizePortfolio(portfolio);
+    const normalized = normalizePortfolio(portfolio);
+    portfolios[pair] = normalized;
+    await syncPaperPortfolio(normalized, dataDir);
   }
+
+  console.log(
+    `Imported ${Object.keys(portfolios).length} paper portfolio(s) from ${legacyPath} into DuckDB`,
+  );
 
   return {
     version: 1,
@@ -154,24 +161,40 @@ export async function loadPaperState(path = PAPER_STATE_PATH): Promise<Persisted
 }
 
 /**
- * Atomically persist all paper portfolios (temp file + rename).
+ * Load paper state from DuckDB.
+ * Empty tables → null (optionally after one-time import from legacy paper-state.json).
+ */
+export async function loadPaperState(dataDir?: string): Promise<PersistedPaperState | null> {
+  const count = await paperPortfolioCount(dataDir);
+  if (count === 0) {
+    const imported = await tryImportLegacyPaperState(dataDir);
+    if (imported != null) {
+      return imported;
+    }
+    return null;
+  }
+
+  const portfolios = await loadAllPaperPortfolios(dataDir);
+  if (Object.keys(portfolios).length === 0) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    portfolios,
+  };
+}
+
+/**
+ * Persist paper portfolios into DuckDB (per-pair upsert + trade sync).
+ * Only pairs present in the map are written; other pairs are left untouched.
  */
 export async function savePaperState(
   portfolios: Map<string, PersistablePortfolio>,
-  path = PAPER_STATE_PATH,
+  dataDir?: string,
 ): Promise<void> {
-  const state: PersistedPaperState = {
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    portfolios: {},
-  };
-
-  for (const [pair, portfolio] of portfolios) {
-    state.portfolios[pair] = portfolio.toPersisted();
+  for (const portfolio of portfolios.values()) {
+    await syncPaperPortfolio(portfolio.toPersisted(), dataDir);
   }
-
-  const tmpPath = `${path}.${process.pid}.tmp`;
-  const body = `${JSON.stringify(state, null, 2)}\n`;
-  await writeFile(tmpPath, body, "utf8");
-  await rename(tmpPath, path);
 }

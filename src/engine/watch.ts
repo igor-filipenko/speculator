@@ -2,7 +2,7 @@ import type { AppConfig } from "../config.js";
 import { strategyParams } from "../config.js";
 import { JupiterClient } from "../jupiter/client.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import { appendSignalJsonl, logSignal, logSnapshot, logTrade } from "../notify/console.js";
+import { logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
 import type {
@@ -122,7 +122,7 @@ async function processPair(args: {
   lastCandles.set(pair.symbol, candles);
   lastSignals.set(pair.symbol, signal);
   logSignal(signal);
-  await appendSignalJsonl(signal);
+  await persistSignal(signal);
   await telegram.notify({ type: "signal", signal });
 
   if (config.mode !== "paper") {

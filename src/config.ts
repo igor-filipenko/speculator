@@ -1,12 +1,11 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { getToken } from "./db/tokens.js";
-import type { PairConfig, RunMode, StrategyMode } from "./types.js";
+import type { PairConfig, StrategyMode } from "./types.js";
 
 loadDotenv();
 
 const envSchema = z.object({
-  MODE: z.enum(["signal", "paper"]).default("signal"),
   STRATEGY: z.enum(["intraday", "swing"]).default("intraday"),
   JUPITER_API_KEY: z.string().optional().default(""),
   WATCHLIST: z.string().default("SOL/USDC"),
@@ -22,7 +21,6 @@ export interface TelegramConfig {
 }
 
 export interface AppConfig {
-  mode: RunMode;
   strategy: StrategyMode;
   jupiterApiKey: string;
   watchlist: string[];
@@ -66,10 +64,7 @@ async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig
   };
 }
 
-export async function loadConfig(overrides?: {
-  mode?: RunMode;
-  dataDir?: string;
-}): Promise<AppConfig> {
+export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppConfig> {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -93,7 +88,6 @@ export async function loadConfig(overrides?: {
   const chatId = env.TELEGRAM_CHAT_ID.trim();
 
   const config: AppConfig = {
-    mode: overrides?.mode ?? env.MODE,
     strategy: env.STRATEGY,
     jupiterApiKey: env.JUPITER_API_KEY,
     watchlist,

@@ -2,7 +2,7 @@ import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderOhlcvPng } from "../chart/render-png.js";
-import type { Portfolio, ProgramState, RunMode, Signal, Trade } from "../types.js";
+import type { Portfolio, ProgramState, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
@@ -192,13 +192,9 @@ function formatReportMessage(lastSignals: Map<string, Signal>): string {
 }
 
 function formatPortfolioMessage(
-  mode: RunMode,
   portfolios: Map<string, Portfolio>,
   lastSignals: Map<string, Signal>,
 ): string {
-  if (mode !== "paper") {
-    return ["💼 *Portfolio*", "", `_Available only in paper mode \\(pnpm paper\\)\\._`].join("\n");
-  }
   if (portfolios.size === 0) {
     return ["💼 *Portfolio*", "", `_No paper portfolio loaded\\._`].join("\n");
   }
@@ -303,7 +299,7 @@ function startTelegramCommands(
 
   instance.command("portfolio", async (ctx) => {
     try {
-      await replyMd(ctx, formatPortfolioMessage(state.mode, state.portfolios, state.lastSignals));
+      await replyMd(ctx, formatPortfolioMessage(state.portfolios, state.lastSignals));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Telegram /portfolio failed: ${message}`);

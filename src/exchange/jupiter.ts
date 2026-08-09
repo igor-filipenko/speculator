@@ -26,6 +26,10 @@ export class JupiterExchange implements Exchange {
   constructor(options: JupiterExchangeOptions = {}) {
     this.apiKey = options.apiKey ?? "";
     this.baseUrl = options.baseUrl ?? "https://api.jup.ag";
+
+    if (!options.apiKey) {
+      console.warn("Warning: JUPITER_API_KEY is empty; quotes may fail or be rate-limited.");
+    }
   }
 
   async spotPrice(pair: PairConfig): Promise<number> {

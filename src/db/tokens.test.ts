@@ -37,7 +37,7 @@ describe("solana.tokens", () => {
   });
 
   it("resolves WATCHLIST pairs from solana.tokens", async () => {
-    const config = await loadConfig({ mode: "signal", dataDir });
+    const config = await loadConfig({ dataDir });
     assert.equal(config.pairs.length, 1);
     const pair = config.pairs[0];
     assert.ok(pair);

@@ -1,15 +1,16 @@
 import { loadConfig } from "./config.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
+import { runPaper } from "./engine/paper.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
 import { loadStrategy } from "./strategy/strategy.js";
-import type { Candle, Portfolio, ProgramState, RunMode, ShutdownCb, Signal } from "./types.js";
+import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal } from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
-  pnpm watch     # MODE=signal (or override via CLI)
-  pnpm paper     # MODE=paper
+  pnpm watch     # signal recommendations only
+  pnpm paper     # recommendations + virtual portfolio
   pnpm backtest  # Replay OHLCV with emulated Jupiter fills
 
   tsx src/index.ts watch|paper [--once]
@@ -29,28 +30,52 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
 
-  if (command === "backtest") {
-    await runBacktestCommand(argv.slice(1));
-    return;
+  switch (command) {
+    case "backtest":
+      await runBacktestCommand(argv.slice(1));
+      return;
+    case "watch":
+      await runWatchCommand(argv.slice(1));
+      return;
+    case "paper":
+      await runPaperCommand(argv.slice(1));
+      return;
+    default:
+      usage();
   }
+}
 
+async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
-
-  if (command !== "watch" && command !== "paper") {
-    usage();
-  }
-
-  const mode: RunMode = command === "paper" ? "paper" : "signal";
-  const config = await loadConfig({ mode });
+  const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
+  const programState: ProgramState = {
+    strategy,
+    lastSignals: new Map<string, Signal>(),
+    lastCandles: new Map<string, Candle[]>(),
+    portfolios: new Map<string, Portfolio>(),
+  };
 
-  const portfolios: Map<string, Portfolio> =
-    mode === "paper"
-      ? await PaperPortfolio.load(config.pairs, config.paperCashUsdc)
-      : new Map<string, Portfolio>();
+  const telegram = Telegram.start(once ? undefined : config.telegram, programState);
+  const shutdownCb: ShutdownCb = once
+    ? async (_reason, _exitCode) => {
+        /* --once: main returns after the single tick; no process.exit */
+      }
+    : installLifecycleNotifiers(telegram);
+
+  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
+}
+
+async function runPaperCommand(argv: string[]): Promise<void> {
+  const once = argv.includes("--once");
+  const config = await loadConfig();
+  const strategy = loadStrategy(config.strategy);
+  const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
+    config.pairs,
+    config.paperCashUsdc,
+  );
 
   const programState: ProgramState = {
-    mode: config.mode,
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
@@ -64,12 +89,12 @@ async function main(): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
+  await runPaper({ config, strategy, state: programState, telegram, once, shutdownCb });
 }
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
-  const config = await loadConfig({ mode: "signal" });
+  const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
   const results = await runBacktest({
     config,

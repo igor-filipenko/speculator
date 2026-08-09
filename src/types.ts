@@ -8,8 +8,6 @@ export type StrategyMode = "intraday" | "swing";
 
 export type Timeframe = "15m" | "4h";
 
-export type RunMode = "signal" | "paper";
-
 export interface Candle {
   /** Unix timestamp in seconds (candle open time). */
   time: number;
@@ -140,11 +138,10 @@ export interface RiskManager {
 /** Quote + simulated fill venue (live Jupiter or emulated backtest). */
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
-  execute(command: Command, pair: PairConfig): Promise<Order>;
+  execute(command: Command, pair: PairConfig): Promise<Order | null>;
 }
 
 export interface ProgramState {
-  readonly mode: RunMode;
   readonly strategy: Strategy;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;

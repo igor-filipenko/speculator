@@ -30,7 +30,6 @@ Edit `.env`:
 
 | Variable             | Meaning                                                              |
 | -------------------- | -------------------------------------------------------------------- |
-| `MODE`               | `signal` (default via `pnpm watch`) or `paper`                       |
 | `STRATEGY`           | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26)                  |
 | `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended           |
 | `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`) |
@@ -38,6 +37,8 @@ Edit `.env`:
 | `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)  |
 | `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)         |
 | `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                             |
+
+Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
 
 ### Telegram (optional)
 

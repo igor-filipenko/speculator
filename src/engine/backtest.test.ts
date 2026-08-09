@@ -11,7 +11,6 @@ const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
-    mode: "signal",
     strategy: "intraday",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],

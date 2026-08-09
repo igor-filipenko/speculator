@@ -134,7 +134,7 @@ export interface Strategy {
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
-  toCommand(signal: Signal, snapshot: Snapshot): Command | null;
+  check(signal: Signal, snapshot: Snapshot): Command | null;
 }
 
 /** Quote + simulated fill venue (live Jupiter or emulated backtest). */

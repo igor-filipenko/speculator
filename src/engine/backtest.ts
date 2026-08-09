@@ -2,7 +2,7 @@ import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { SimpleRiskManager } from "../risk/simple-risk-manager.js";
+import { SimpleRiskManager } from "../risk/risk-manager.js";
 import type { Candle, Order, PairConfig, Strategy, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
@@ -142,7 +142,7 @@ async function replayPair(args: {
       new Date(candle.time * 1000),
     );
 
-    const command = risk.toCommand(signal, portfolio.getSnapshot(close));
+    const command = risk.check(signal, portfolio.getSnapshot(close));
     if (command) {
       const order = await exchange.execute(command, pair);
       const trade = portfolio.applyOrderSync(order);

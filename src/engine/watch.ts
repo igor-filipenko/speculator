@@ -3,7 +3,7 @@ import { JupiterExchange } from "../exchange/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
 import { logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
-import { SimpleRiskManager } from "../risk/simple-risk-manager.js";
+import { SimpleRiskManager } from "../risk/risk-manager.js";
 import type {
   Candle,
   Exchange,
@@ -136,7 +136,7 @@ async function processPair(args: {
     return;
   }
 
-  const command = risk.toCommand(signal, portfolio.getSnapshot(price));
+  const command = risk.check(signal, portfolio.getSnapshot(price));
   if (!command) {
     logSnapshot(portfolio.getSnapshot(price));
     return;

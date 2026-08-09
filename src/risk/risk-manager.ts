@@ -5,7 +5,7 @@ import type { Command, RiskManager, Signal, Snapshot } from "../types.js";
  * Ignores BUY when already long; ignores SELL when flat; ignores HOLD.
  */
 export class SimpleRiskManager implements RiskManager {
-  toCommand(signal: Signal, snapshot: Snapshot): Command | null {
+  check(signal: Signal, snapshot: Snapshot): Command | null {
     if (signal.side === "HOLD") {
       return null;
     }

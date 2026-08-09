@@ -300,9 +300,12 @@ src/
   types.ts
   db/                      # DuckDB: candles, paper, signals
   market/gecko-terminal.ts
-  jupiter/client.ts
+  exchange/jupiter.ts      # live Exchange (Jupiter quote only)
+  exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   strategy/indicators.ts   # hand-rolled EMA/RSI
   strategy/ema-rsi.ts
+  strategy/strategy.ts     # SwingStrategy / IntradayStrategy
+  risk/simple-risk-manager.ts
   chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
@@ -310,4 +313,5 @@ src/
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
   engine/watch.ts
+  engine/backtest.ts
 ```

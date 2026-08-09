@@ -6,6 +6,8 @@ export type PositionSide = "flat" | "long";
 
 export type StrategyMode = "intraday" | "swing";
 
+export type Timeframe = "15m" | "4h";
+
 export type RunMode = "signal" | "paper";
 
 export interface Candle {
@@ -53,7 +55,7 @@ export interface PairConfig {
 
 export interface StrategyParams {
   mode: StrategyMode;
-  timeframe: "15m" | "4h";
+  timeframe: Timeframe;
   emaFast: number;
   emaSlow: number;
   rsiPeriod: number;
@@ -81,18 +83,72 @@ export interface Snapshot {
   trades: Trade[];
 }
 
+/** Intent to trade after risk checks (not yet filled). */
+export interface Command {
+  pair: string;
+  side: "BUY" | "SELL";
+  reason: string;
+  at: Date;
+  /** Mid/spot hint from the signal before exchange costs. */
+  priceHint: number;
+  /** Quote (USDC) budget to spend on BUY. */
+  quoteBudgetUsdc?: number;
+  /** Base size to sell on SELL. */
+  baseSize?: number;
+}
+
+/** Simulated fill returned by an exchange. */
+export interface Order {
+  pair: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  at: Date;
+  simulated: true;
+  reason: string;
+  /** Network priority fee in USDC (0 for live paper quotes). */
+  priorityFeeUsdc: number;
+  /** Present for emulated (backtest) fills. */
+  fillCosts?: {
+    mid: number;
+    slippageUsdcPerBase: number;
+    poolFeeUsdcPerBase: number;
+  };
+}
+
 export interface Portfolio {
   getSnapshot(markPrice: number): Snapshot;
+  applyOrder(order: Order): Promise<Trade | null>;
+}
 
-  applySignal(signal: Signal): Promise<Trade | null>;
+export interface RequiredCandles {
+  timeframe: Timeframe;
+  count: number;
+}
+
+export interface Strategy {
+  getParams(): StrategyParams;
+  getRequiredCandles(): RequiredCandles;
+  evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal;
+}
+
+/** Turns a strategy signal into a trade command using portfolio state. */
+export interface RiskManager {
+  toCommand(signal: Signal, snapshot: Snapshot): Command | null;
+}
+
+/** Quote + simulated fill venue (live Jupiter or emulated backtest). */
+export interface Exchange {
+  spotPrice(pair: PairConfig): Promise<number>;
+  execute(command: Command, pair: PairConfig): Promise<Order>;
 }
 
 export interface ProgramState {
-  mode: RunMode;
-  strategy: StrategyParams;
-  lastSignals: Map<string, Signal>;
-  lastCandles: Map<string, Candle[]>;
-  portfolios: Map<string, Portfolio>;
+  readonly mode: RunMode;
+  readonly strategy: Strategy;
+  readonly lastSignals: Map<string, Signal>;
+  readonly lastCandles: Map<string, Candle[]>;
+  readonly portfolios: Map<string, Portfolio>;
 }
 
 export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

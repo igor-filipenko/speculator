@@ -1,8 +1,9 @@
-import { loadConfig, strategyParams } from "./config.js";
+import { loadConfig } from "./config.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
+import { loadStrategy } from "./strategy/strategy.js";
 import type { Candle, Portfolio, ProgramState, RunMode, ShutdownCb, Signal } from "./types.js";
 
 function usage(): never {
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
 
   const mode: RunMode = command === "paper" ? "paper" : "signal";
   const config = await loadConfig({ mode });
+  const strategy = loadStrategy(config.strategy);
 
   const portfolios: Map<string, Portfolio> =
     mode === "paper"
@@ -49,7 +51,7 @@ async function main(): Promise<void> {
 
   const programState: ProgramState = {
     mode: config.mode,
-    strategy: strategyParams(config.strategy),
+    strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
     portfolios,
@@ -62,14 +64,16 @@ async function main(): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runWatch({ config, state: programState, telegram, once, shutdownCb });
+  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
 }
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
   const config = await loadConfig({ mode: "signal" });
+  const strategy = loadStrategy(config.strategy);
   const results = await runBacktest({
     config,
+    strategy,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),

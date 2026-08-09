@@ -5,7 +5,7 @@ export interface EmaRsiInput {
   pair: string;
   candles: Candle[];
   strategy: StrategyParams;
-  /** Spot price used in the signal (usually Jupiter quote). */
+  /** Spot price used in the signal (usually exchange quote). */
   price: number;
   at?: Date;
 }

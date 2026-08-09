@@ -1,6 +1,6 @@
 /**
- * Simulated Jupiter-like fill pricing from GeckoTerminal candle close.
- * This is not a real Jupiter quote — used only for offline backtests.
+ * Simulated exchange fill pricing from GeckoTerminal candle close.
+ * Jupiter-like fee/slippage model — used only for offline backtests.
  */
 
 export type LiquidityTier = "liquid" | "meme";

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
-import { strategyParams } from "../config.js";
-import { TIER_COSTS, emulateFillPrice } from "../jupiter/emulated-quote.js";
+import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import type { Candle } from "../types.js";
+import { loadStrategy } from "../strategy/strategy.js";
+import type { Candle, Order } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
@@ -121,6 +121,7 @@ describe("runBacktest", () => {
     const startingCash = 1000;
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
+      strategy: loadStrategy("intraday"),
       candles,
       days: 30,
     });
@@ -128,7 +129,7 @@ describe("runBacktest", () => {
     assert.ok(result);
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
-    assert.equal(result.metrics.strategy.mode, "intraday");
+    assert.equal(result.metrics.strategy.getParams().mode, "intraday");
     assert.ok(result.equityCurve.length === candles.length);
 
     // With a forced bullish cross we expect at least one simulated BUY.
@@ -156,10 +157,11 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = strategyParams("intraday");
+    const strategy = loadStrategy("intraday");
+    const params = strategy.getParams();
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const n = strategy.emaSlow + strategy.rsiPeriod + 10;
+    const n = params.emaSlow + params.rsiPeriod + 10;
     const candles: Candle[] = Array.from({ length: n }, (_, i) => ({
       time: start + i * interval,
       open: 100,
@@ -171,6 +173,7 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
+      strategy,
       candles,
     });
 
@@ -181,32 +184,34 @@ describe("runBacktest", () => {
   });
 });
 
-describe("PaperPortfolio priority fee", () => {
-  it("deducts priority fee on BUY and SELL without persisting", () => {
+describe("PaperPortfolio applyOrder", () => {
+  it("applies BUY/SELL orders with priority fee already sized by exchange", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
-    const buy = portfolio.applySignalSync(
-      {
-        pair: "SOL/USDC",
-        side: "BUY",
-        reason: "test",
-        price: 100,
-        at: new Date("2026-01-01T00:00:00.000Z"),
-      },
-      { priorityFeeUsdc: 10 },
-    );
+    const buyOrder: Order = {
+      pair: "SOL/USDC",
+      side: "BUY",
+      reason: "test",
+      price: 100,
+      size: 9.9,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 10,
+    };
+    const buy = portfolio.applyOrderSync(buyOrder);
     assert.ok(buy);
     assert.equal(buy.size, 9.9);
 
-    const sell = portfolio.applySignalSync(
-      {
-        pair: "SOL/USDC",
-        side: "SELL",
-        reason: "test",
-        price: 110,
-        at: new Date("2026-01-01T01:00:00.000Z"),
-      },
-      { priorityFeeUsdc: 5 },
-    );
+    const sellOrder: Order = {
+      pair: "SOL/USDC",
+      side: "SELL",
+      reason: "test",
+      price: 110,
+      size: 9.9,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 5,
+    };
+    const sell = portfolio.applyOrderSync(sellOrder);
     assert.ok(sell);
     assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100);
   });

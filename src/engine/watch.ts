@@ -1,22 +1,24 @@
 import type { AppConfig } from "../config.js";
-import { strategyParams } from "../config.js";
-import { JupiterClient } from "../jupiter/client.js";
+import { JupiterExchange } from "../exchange/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
 import { logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
-import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
+import { SimpleRiskManager } from "../risk/simple-risk-manager.js";
 import type {
   Candle,
+  Exchange,
   PairConfig,
   Portfolio,
   ProgramState,
+  RiskManager,
   ShutdownCb,
   Signal,
-  StrategyParams,
+  Strategy,
 } from "../types.js";
 
 export interface WatchOptions {
   config: AppConfig;
+  strategy: Strategy;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */
@@ -25,12 +27,13 @@ export interface WatchOptions {
 }
 
 /**
- * Main poll loop: candles → indicators → signal → optional paper fill.
+ * Main poll loop: candles → signal → risk command → exchange order → optional paper fill.
  */
 export async function runWatch(options: WatchOptions): Promise<void> {
-  const { config, once = false } = options;
-  const strategy = strategyParams(config.strategy);
-  const jupiter = new JupiterClient({ apiKey: config.jupiterApiKey });
+  const { config, strategy, once = false } = options;
+  const exchange = new JupiterExchange({ apiKey: config.jupiterApiKey });
+  const risk = new SimpleRiskManager();
+  const params = strategy.getParams();
 
   if (!config.jupiterApiKey) {
     console.warn("Warning: JUPITER_API_KEY is empty; quotes may fail or be rate-limited.");
@@ -41,7 +44,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
   const lastCandles = options.state.lastCandles;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting ${config.mode} mode | strategy=${strategy.mode} (${strategy.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting ${config.mode} mode | strategy=${params.mode} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });
@@ -57,7 +60,8 @@ export async function runWatch(options: WatchOptions): Promise<void> {
           config,
           pair,
           strategy,
-          jupiter,
+          exchange,
+          risk,
           portfolios,
           lastSignals,
           lastCandles,
@@ -90,34 +94,32 @@ export async function runWatch(options: WatchOptions): Promise<void> {
 async function processPair(args: {
   config: AppConfig;
   pair: PairConfig;
-  strategy: StrategyParams;
-  jupiter: JupiterClient;
+  strategy: Strategy;
+  exchange: Exchange;
+  risk: RiskManager;
   portfolios: Map<string, Portfolio>;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
   telegram: Telegram;
 }): Promise<void> {
-  const { config, pair, strategy, jupiter, portfolios, lastSignals, lastCandles, telegram } = args;
+  const { config, pair, strategy, exchange, risk, portfolios, lastSignals, lastCandles, telegram } =
+    args;
 
+  const required = strategy.getRequiredCandles();
   const candles = await fetchCandles({
     poolAddress: pair.geckoPoolAddress,
-    timeframe: strategy.timeframe,
-    limit: Math.max(strategy.emaSlow + strategy.rsiPeriod + 5, 120),
+    timeframe: required.timeframe,
+    limit: required.count,
   });
 
-  const price = await jupiter.spotPrice({
-    baseMint: pair.baseMint,
-    quoteMint: pair.quoteMint,
-    baseDecimals: pair.baseDecimals,
-    quoteDecimals: pair.quoteDecimals,
-  });
+  const price = await exchange.spotPrice(pair);
 
-  const signal = evaluateEmaRsi({
-    pair: pair.symbol,
+  const signal = strategy.evaluateSignal(
+    pair.symbol,
     candles,
-    strategy,
     price,
-  });
+    new Date(candles[candles.length - 1]!.time * 1000),
+  );
 
   lastCandles.set(pair.symbol, candles);
   lastSignals.set(pair.symbol, signal);
@@ -134,7 +136,14 @@ async function processPair(args: {
     return;
   }
 
-  const trade = await portfolio.applySignal(signal);
+  const command = risk.toCommand(signal, portfolio.getSnapshot(price));
+  if (!command) {
+    logSnapshot(portfolio.getSnapshot(price));
+    return;
+  }
+
+  const order = await exchange.execute(command, pair);
+  const trade = await portfolio.applyOrder(order);
   if (trade) {
     logTrade(trade);
     await telegram.notify({ type: "trade", trade });

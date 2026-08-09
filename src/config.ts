@@ -1,7 +1,7 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { getToken } from "./db/tokens.js";
-import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.js";
+import type { PairConfig, RunMode, StrategyMode } from "./types.js";
 
 loadDotenv();
 
@@ -107,28 +107,4 @@ export async function loadConfig(overrides?: {
   }
 
   return config;
-}
-
-export function strategyParams(mode: StrategyMode): StrategyParams {
-  if (mode === "swing") {
-    return {
-      mode: "swing",
-      timeframe: "4h",
-      emaFast: 12,
-      emaSlow: 26,
-      rsiPeriod: 14,
-      rsiBuyMax: 70,
-      rsiSellMin: 30,
-    };
-  }
-
-  return {
-    mode: "intraday",
-    timeframe: "15m",
-    emaFast: 9,
-    emaSlow: 21,
-    rsiPeriod: 14,
-    rsiBuyMax: 70,
-    rsiSellMin: 30,
-  };
 }

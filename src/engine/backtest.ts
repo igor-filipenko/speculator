@@ -1,14 +1,9 @@
 import type { AppConfig } from "../config.js";
-import { strategyParams } from "../config.js";
-import {
-  emulateFillPrice,
-  liquidityTierForPair,
-  type EmulatedFillBreakdown,
-} from "../jupiter/emulated-quote.js";
+import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import type { Candle, PairConfig, StrategyParams, Trade } from "../types.js";
+import { SimpleRiskManager } from "../risk/simple-risk-manager.js";
+import type { Candle, Order, PairConfig, Strategy, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
   /** Lookback window in calendar days (0 = strategy default, ignored when from/to set). */
@@ -31,7 +26,7 @@ export interface BacktestCostTotals {
 
 export interface BacktestMetrics {
   pair: string;
-  strategy: StrategyParams;
+  strategy: Strategy;
   startingCashUsdc: number;
   endingEquity: number;
   totalReturnPct: number;
@@ -55,6 +50,7 @@ export interface BacktestResult {
 
 export interface RunBacktestOptions {
   config: AppConfig;
+  strategy: Strategy;
   days?: number;
   /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
   fromTime?: number;
@@ -68,11 +64,12 @@ export interface RunBacktestOptions {
 }
 
 /**
- * Replay OHLCV through EMA/RSI with Jupiter-like simulated fills.
+ * Replay OHLCV through EMA/RSI with emulated exchange fills.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
-  const strategy = strategyParams(options.config.strategy);
-  const { fromTime, toTime } = resolveBacktestWindow(options, strategy.mode);
+  const strategy = options.strategy;
+  const { fromTime, toTime } = resolveBacktestWindow(options, strategy);
+  const timeframe = strategy.getRequiredCandles().timeframe;
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
@@ -81,7 +78,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       (await loadCachedCandles({
         symbol: pair.symbol,
         poolAddress: pair.geckoPoolAddress,
-        timeframe: strategy.timeframe,
+        timeframe,
         fromTime,
         toTime,
         forceRefresh: options.forceRefresh ?? false,
@@ -90,13 +87,13 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
 
     if (candles.length === 0) {
       throw new Error(
-        `No candles for ${pair.symbol} (${strategy.timeframe}) in ` +
+        `No candles for ${pair.symbol} (${timeframe}) in ` +
           `${new Date(fromTime * 1000).toISOString()} → ${new Date(toTime * 1000).toISOString()}`,
       );
     }
 
     results.push(
-      replayPair({
+      await replayPair({
         pair,
         strategy,
         candles,
@@ -110,17 +107,18 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   return results;
 }
 
-function replayPair(args: {
+async function replayPair(args: {
   pair: PairConfig;
-  strategy: StrategyParams;
+  strategy: Strategy;
   candles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
-}): BacktestResult {
+}): Promise<BacktestResult> {
   const { pair, strategy, candles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
-  const tier = liquidityTierForPair(pair.symbol);
+  const exchange = new EmulatedExchange();
+  const risk = new SimpleRiskManager();
   const costs: BacktestCostTotals = {
     slippageUsdc: 0,
     poolFeeUsdc: 0,
@@ -131,30 +129,25 @@ function replayPair(args: {
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
 
-  const warmBars = strategy.emaSlow + strategy.rsiPeriod + 2;
-
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
     const window = candles.slice(0, i + 1);
     const close = candle.close;
+    exchange.setMidPrice(close);
 
-    const signal = evaluateEmaRsi({
-      pair: pair.symbol,
-      candles: window,
-      strategy,
-      price: close,
-      at: new Date(candle.time * 1000),
-    });
+    const signal = strategy.evaluateSignal(
+      pair.symbol,
+      window,
+      close,
+      new Date(candle.time * 1000),
+    );
 
-    if (i >= warmBars && (signal.side === "BUY" || signal.side === "SELL")) {
-      const emulated = emulateFillPrice({ side: signal.side, close, tier });
-      const fillSignal = { ...signal, price: emulated.fillPrice };
-      const trade = portfolio.applySignalSync(fillSignal, {
-        priorityFeeUsdc: emulated.priorityFeeUsdc,
-      });
-
+    const command = risk.toCommand(signal, portfolio.getSnapshot(close));
+    if (command) {
+      const order = await exchange.execute(command, pair);
+      const trade = portfolio.applyOrderSync(order);
       if (trade) {
-        accumulateCosts(costs, trade, emulated.breakdown);
+        accumulateCosts(costs, trade, order);
       }
     }
 
@@ -202,19 +195,19 @@ function replayPair(args: {
   };
 }
 
-function accumulateCosts(
-  totals: BacktestCostTotals,
-  trade: Trade,
-  breakdown: EmulatedFillBreakdown,
-): void {
-  totals.slippageUsdc += trade.size * breakdown.slippageUsdcPerBase;
-  totals.poolFeeUsdc += trade.size * breakdown.poolFeeUsdcPerBase;
-  totals.priorityFeeUsdc += breakdown.priorityFeeUsdc;
+function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order): void {
+  const fillCosts = order.fillCosts;
+  if (!fillCosts) {
+    totals.priorityFeeUsdc += order.priorityFeeUsdc;
+    return;
+  }
+  totals.slippageUsdc += trade.size * fillCosts.slippageUsdcPerBase;
+  totals.poolFeeUsdc += trade.size * fillCosts.poolFeeUsdcPerBase;
+  totals.priorityFeeUsdc += order.priorityFeeUsdc;
 }
-
 function resolveBacktestWindow(
   options: Pick<RunBacktestOptions, "days" | "fromTime" | "toTime">,
-  strategyMode: StrategyParams["mode"],
+  strategy: Strategy,
 ): { fromTime: number; toTime: number } {
   const now = Math.floor(Date.now() / 1000);
 
@@ -234,7 +227,7 @@ function resolveBacktestWindow(
   const days =
     options.days !== undefined && options.days > 0
       ? options.days
-      : strategyMode === "swing"
+      : strategy.getParams().mode === "swing"
         ? 90
         : 30;
   return { fromTime: now - days * 24 * 60 * 60, toTime: now };
@@ -395,9 +388,10 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
 export function printBacktestReport(result: BacktestResult): void {
   const { metrics, trades } = result;
   const { strategy, costs } = metrics;
+  const params = strategy.getParams();
 
   console.log("");
-  console.log(`=== Backtest ${metrics.pair} | ${strategy.mode} (${strategy.timeframe}) ===`);
+  console.log(`=== Backtest ${metrics.pair} | ${params.mode} (${params.timeframe}) ===`);
   console.log(
     `Candles: ${metrics.candleCount} | ` +
       `${new Date(metrics.fromTime * 1000).toISOString()} → ${new Date(metrics.toTime * 1000).toISOString()}`,
@@ -415,7 +409,7 @@ export function printBacktestReport(result: BacktestResult): void {
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
       `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} USDC`,
   );
-  console.log("(Fills use emulated Jupiter costs on candle close; not live quotes.)");
+  console.log("(Fills use emulated exchange costs on candle close; not live quotes.)");
 
   if (trades.length === 0) {
     console.log("No simulated fills.");

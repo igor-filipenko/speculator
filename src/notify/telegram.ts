@@ -347,7 +347,7 @@ async function sendCharts(ctx: Context, state: ProgramState): Promise<void> {
       const png = renderOhlcvPng({
         pair,
         candles,
-        strategy: state.strategy,
+        strategy: state.strategy.getParams(),
       });
       const caption = formatChartCaption(pair, state.lastSignals.get(pair));
       await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-chart.png`), {

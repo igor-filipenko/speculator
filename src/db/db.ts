@@ -124,7 +124,9 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
     INSERT INTO solana.tokens (symbol, mint, decimals, pool_address)
     VALUES
       ('SOL', 'So11111111111111111111111111111111111111112', 9, '8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj'),
-      ('USDC', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 6, NULL)
+      ('USDC', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 6, NULL),
+      ('JUP', 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', 6, 'HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL'),
+      ('JTO', 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL', 9, '93MjUKNKxazKmgS3GBX2Gj2BttEjJUyi7NYeyDHdHSc2')
     ON CONFLICT (symbol) DO NOTHING
   `);
 }

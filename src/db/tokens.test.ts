@@ -19,7 +19,7 @@ describe("solana.tokens", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it("seeds SOL and USDC on schema init", async () => {
+  it("seeds SOL, USDC, JUP, and JTO on schema init", async () => {
     const tokens = await listTokens(dataDir);
     const bySymbol = new Map(tokens.map((t) => [t.symbol, t]));
 
@@ -34,6 +34,18 @@ describe("solana.tokens", () => {
     assert.equal(usdc.mint, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
     assert.equal(usdc.decimals, 6);
     assert.equal(usdc.poolAddress, undefined);
+
+    const jup = bySymbol.get("JUP");
+    assert.ok(jup);
+    assert.equal(jup.mint, "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN");
+    assert.equal(jup.decimals, 6);
+    assert.equal(jup.poolAddress, "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL");
+
+    const jto = bySymbol.get("JTO");
+    assert.ok(jto);
+    assert.equal(jto.mint, "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL");
+    assert.equal(jto.decimals, 9);
+    assert.equal(jto.poolAddress, "93MjUKNKxazKmgS3GBX2Gj2BttEjJUyi7NYeyDHdHSc2");
   });
 
   it("resolves WATCHLIST pairs from solana.tokens", async () => {

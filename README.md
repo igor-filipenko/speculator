@@ -309,7 +309,7 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX
   strategy/ema-rsi.ts
   strategy/strategy.ts     # SwingStrategy / IntradayStrategy (+ getRiskParams)
-  chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /chart
+  strategy/ohlcv-svg.ts    # candle + EMA/RSI SVG for /chart (strategy-owned)
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)

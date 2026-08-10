@@ -231,7 +231,7 @@ function resolveBacktestWindow(
   const days =
     options.days !== undefined && options.days > 0
       ? options.days
-      : strategy.getParams().mode === "swing"
+      : strategy.getMode() === "swing"
         ? 90
         : 30;
   return { fromTime: now - days * 24 * 60 * 60, toTime: now };
@@ -392,10 +392,9 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
 export function printBacktestReport(result: BacktestResult): void {
   const { metrics, trades } = result;
   const { strategy, costs } = metrics;
-  const params = strategy.getParams();
 
   console.log("");
-  console.log(`=== Backtest ${metrics.pair} | ${params.mode} (${params.timeframe}) ===`);
+  console.log(`=== Backtest ${metrics.pair} | ${strategy.getDisplayName()} ===`);
   console.log(
     `Candles: ${metrics.candleCount} | ` +
       `${new Date(metrics.fromTime * 1000).toISOString()} → ${new Date(metrics.toTime * 1000).toISOString()}`,

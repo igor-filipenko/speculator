@@ -41,7 +41,7 @@ src/
   strategy/ema-rsi.ts
   strategy/strategy.ts         # SwingStrategy / IntradayStrategy
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command
-  chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /chart
+  strategy/ohlcv-svg.ts    # candle + EMA/RSI SVG (strategy params)
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (DuckDB)

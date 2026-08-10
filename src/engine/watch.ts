@@ -29,13 +29,12 @@ export interface WatchOptions {
 export async function runWatch(options: WatchOptions): Promise<void> {
   const { config, strategy, once = false } = options;
   const exchange = new JupiterExchange({ apiKey: config.jupiterApiKey });
-  const params = strategy.getParams();
 
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting watch mode | strategy=${params.mode} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting watch mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });

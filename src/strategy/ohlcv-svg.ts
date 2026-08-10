@@ -1,5 +1,5 @@
-import { ema, rsi } from "../strategy/indicators.js";
 import type { Candle, StrategyParams } from "../types.js";
+import { ema, rsi } from "./indicators.js";
 
 export interface OhlcvChartInput {
   pair: string;
@@ -15,6 +15,7 @@ const PRICE_RATIO = 0.68;
 
 /**
  * Build an SVG string: price candles + EMA overlays, RSI subplot below.
+ * Indicator periods come from {@link StrategyParams} (strategy-owned chart).
  */
 export function buildOhlcvSvg(input: OhlcvChartInput): string {
   const width = input.width ?? 900;

@@ -5,7 +5,8 @@ import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { SimpleRiskManager } from "../risk/risk-manager.js";
 import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import { loadStrategy } from "../strategy/strategy.js";
+import { buildOhlcvSvg } from "../strategy/ohlcv-svg.js";
+import { loadStrategy, strategyParamsFor } from "../strategy/strategy.js";
 import type { Candle, Order, RiskParams, Strategy, StrategyParams } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
@@ -39,11 +40,11 @@ function makeStrategy(
   signalOverrides: Partial<StrategyParams> = {},
   riskOverrides: Partial<RiskParams> = {},
 ): Strategy {
-  const base = loadStrategy("intraday");
-  const params: StrategyParams = { ...base.getParams(), ...signalOverrides };
-  const risk: RiskParams = { ...base.getRiskParams(), ...riskOverrides };
+  const params: StrategyParams = { ...strategyParamsFor("intraday"), ...signalOverrides };
+  const risk: RiskParams = { ...loadStrategy("intraday").getRiskParams(), ...riskOverrides };
   return {
-    getParams: () => params,
+    getDisplayName: () => `${params.mode} (${params.timeframe})`,
+    getMode: () => params.mode,
     getRiskParams: () => risk,
     getRequiredCandles: () => ({
       timeframe: params.timeframe,
@@ -54,6 +55,7 @@ function makeStrategy(
     }),
     evaluateSignal: (pair, candles, price, at) =>
       evaluateEmaRsi({ pair, candles, strategy: params, price, at }),
+    buildChartSvg: (pair, candles) => buildOhlcvSvg({ pair, candles, strategy: params }),
   };
 }
 
@@ -172,7 +174,7 @@ describe("runBacktest", () => {
     assert.ok(result);
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
-    assert.equal(result.metrics.strategy.getParams().mode, "intraday");
+    assert.equal(result.metrics.strategy.getMode(), "intraday");
     assert.ok(result.equityCurve.length === candles.length);
 
     // With a forced bullish cross we expect at least one simulated BUY.
@@ -280,14 +282,10 @@ describe("runBacktest", () => {
 
   it("keeps flat equity when indicators never fire", async () => {
     const strategy = loadStrategy("intraday");
-    const params = strategy.getParams();
+    const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const n =
-      Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
-      params.rsiPeriod +
-      10;
-    const candles: Candle[] = Array.from({ length: n }, (_, i) => ({
+    const candles: Candle[] = Array.from({ length: needed }, (_, i) => ({
       time: start + i * interval,
       open: 100,
       high: 100,

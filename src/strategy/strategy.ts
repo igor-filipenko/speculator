@@ -8,6 +8,7 @@ import type {
   StrategyParams,
 } from "../types.js";
 import { evaluateEmaRsi } from "./ema-rsi.js";
+import { buildOhlcvSvg } from "./ohlcv-svg.js";
 
 const INTRADAY_SIGNAL_DEFAULTS = {
   rsiBuyMin: 40,
@@ -44,14 +45,47 @@ const SWING_RISK_DEFAULTS: Omit<RiskParams, "timeframe"> = {
   minHoldBars: 1,
 };
 
+/** Signal-side defaults (for tests / chart helpers). Not part of the Strategy public API. */
+export function strategyParamsFor(mode: StrategyMode): StrategyParams {
+  if (mode === "swing") {
+    return {
+      mode: "swing",
+      timeframe: "4h",
+      emaFast: 12,
+      emaSlow: 26,
+      rsiPeriod: 14,
+      ...SWING_SIGNAL_DEFAULTS,
+    };
+  }
+  return {
+    mode: "intraday",
+    timeframe: "15m",
+    emaFast: 9,
+    emaSlow: 21,
+    rsiPeriod: 14,
+    ...INTRADAY_SIGNAL_DEFAULTS,
+  };
+}
+
+function riskParamsFor(mode: StrategyMode): RiskParams {
+  if (mode === "swing") {
+    return { timeframe: "4h", ...SWING_RISK_DEFAULTS };
+  }
+  return { timeframe: "15m", ...INTRADAY_RISK_DEFAULTS };
+}
+
 abstract class EmaRsiStrategy implements Strategy {
   protected constructor(
     private readonly params: StrategyParams,
     private readonly risk: RiskParams,
   ) {}
 
-  getParams(): StrategyParams {
-    return this.params;
+  getDisplayName(): string {
+    return `${this.params.mode} (${this.params.timeframe})`;
+  }
+
+  getMode(): StrategyMode {
+    return this.params.mode;
   }
 
   getRiskParams(): RiskParams {
@@ -76,39 +110,23 @@ abstract class EmaRsiStrategy implements Strategy {
       at,
     });
   }
+
+  buildChartSvg(pair: string, candles: Candle[]): string {
+    return buildOhlcvSvg({ pair, candles, strategy: this.params });
+  }
 }
 
 /** 4h swing: EMA 12/26 + RSI 14 + trend/ADX filters. */
 export class SwingStrategy extends EmaRsiStrategy {
   constructor() {
-    super(
-      {
-        mode: "swing",
-        timeframe: "4h",
-        emaFast: 12,
-        emaSlow: 26,
-        rsiPeriod: 14,
-        ...SWING_SIGNAL_DEFAULTS,
-      },
-      { timeframe: "4h", ...SWING_RISK_DEFAULTS },
-    );
+    super(strategyParamsFor("swing"), riskParamsFor("swing"));
   }
 }
 
 /** 15m intraday: EMA 9/21 + RSI 14 + wider ATR / longer cooldown. */
 export class IntradayStrategy extends EmaRsiStrategy {
   constructor() {
-    super(
-      {
-        mode: "intraday",
-        timeframe: "15m",
-        emaFast: 9,
-        emaSlow: 21,
-        rsiPeriod: 14,
-        ...INTRADAY_SIGNAL_DEFAULTS,
-      },
-      { timeframe: "15m", ...INTRADAY_RISK_DEFAULTS },
-    );
+    super(strategyParamsFor("intraday"), riskParamsFor("intraday"));
   }
 }
 

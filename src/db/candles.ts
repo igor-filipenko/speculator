@@ -1,5 +1,5 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
-import type { Candle, StrategyParams } from "../types.js";
+import type { Candle, Timeframe } from "../types.js";
 import { getSpeculatorDb } from "./db.js";
 
 export interface CandleRangeBounds {
@@ -22,7 +22,7 @@ const UPSERT_SQL = `
 
 export async function readCandles(
   symbol: string,
-  timeframe: StrategyParams["timeframe"],
+  timeframe: Timeframe,
   fromTime: number,
   toTime: number,
   dataDir?: string,
@@ -59,7 +59,7 @@ export async function readCandles(
 
 export async function readRangeBounds(
   symbol: string,
-  timeframe: StrategyParams["timeframe"],
+  timeframe: Timeframe,
   fromTime: number,
   toTime: number,
   dataDir?: string,
@@ -102,7 +102,7 @@ export async function readRangeBounds(
 
 export async function upsertCandles(
   symbol: string,
-  timeframe: StrategyParams["timeframe"],
+  timeframe: Timeframe,
   candles: Candle[],
   dataDir?: string,
 ): Promise<void> {
@@ -134,7 +134,7 @@ export async function upsertCandles(
 
 export async function deleteCandles(
   symbol: string,
-  timeframe: StrategyParams["timeframe"],
+  timeframe: Timeframe,
   dataDir?: string,
 ): Promise<void> {
   const conn = await getSpeculatorDb(dataDir);
@@ -146,7 +146,7 @@ export async function deleteCandles(
 
 export async function candleCount(
   symbol: string,
-  timeframe: StrategyParams["timeframe"],
+  timeframe: Timeframe,
   dataDir?: string,
 ): Promise<number> {
   const conn = await getSpeculatorDb(dataDir);

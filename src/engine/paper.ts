@@ -32,14 +32,13 @@ export interface PaperOptions {
 export async function runPaper(options: PaperOptions): Promise<void> {
   const { config, strategy, risk, once = false } = options;
   const exchange = new JupiterExchange({ apiKey: config.jupiterApiKey });
-  const params = strategy.getParams();
 
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting paper mode | strategy=${params.mode} (${params.timeframe}) | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting paper mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });

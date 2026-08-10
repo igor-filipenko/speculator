@@ -158,10 +158,13 @@ export interface RequiredCandles {
 }
 
 export interface Strategy {
-  getParams(): StrategyParams;
+  getDisplayName(): string;
+  getMode(): StrategyMode;
   getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal;
+  /** Strategy-owned OHLCV chart (which EMAs/RSI to overlay). */
+  buildChartSvg(pair: string, candles: Candle[]): string;
 }
 
 /** Turns a strategy signal into a trade command using portfolio state. */

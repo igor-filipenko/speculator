@@ -7,7 +7,7 @@ import {
   type CandleRangeBounds,
 } from "../db/candles.js";
 import { defaultDataDir } from "../db/db.js";
-import type { Candle, StrategyParams } from "../types.js";
+import type { Candle, Timeframe } from "../types.js";
 import { candleIntervalSeconds, fetchCandlesRange } from "./gecko-terminal.js";
 
 export interface LoadCachedCandlesOptions {
@@ -15,7 +15,7 @@ export interface LoadCachedCandlesOptions {
   symbol: string;
   /** GeckoTerminal pool address used for live OHLCV fetches. */
   poolAddress: string;
-  timeframe: StrategyParams["timeframe"];
+  timeframe: Timeframe;
   /** Inclusive lower bound (Unix seconds) for the series returned to the caller. */
   fromTime: number;
   /** Exclusive upper bound (Unix seconds). Defaults to now. */

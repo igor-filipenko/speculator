@@ -4,6 +4,7 @@ import { runPaper } from "./engine/paper.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
+import { SimpleRiskManager } from "./risk/risk-manager.js";
 import { loadStrategy } from "./strategy/strategy.js";
 import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal } from "./types.js";
 
@@ -70,6 +71,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
+  const risk = new SimpleRiskManager(strategy.getRiskParams());
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
     config.pairs,
     config.paperCashUsdc,
@@ -89,16 +91,26 @@ async function runPaperCommand(argv: string[]): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runPaper({ config, strategy, state: programState, telegram, once, shutdownCb });
+  await runPaper({
+    config,
+    strategy,
+    risk,
+    state: programState,
+    telegram,
+    once,
+    shutdownCb,
+  });
 }
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
   const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
+  const risk = new SimpleRiskManager(strategy.getRiskParams());
   const results = await runBacktest({
     config,
     strategy,
+    risk,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),

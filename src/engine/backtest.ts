@@ -2,8 +2,7 @@ import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { SimpleRiskManager } from "../risk/risk-manager.js";
-import type { Candle, Order, PairConfig, Strategy, Trade } from "../types.js";
+import type { Candle, Order, PairConfig, RiskManager, Strategy, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
   /** Lookback window in calendar days (0 = strategy default, ignored when from/to set). */
@@ -51,6 +50,7 @@ export interface BacktestResult {
 export interface RunBacktestOptions {
   config: AppConfig;
   strategy: Strategy;
+  risk: RiskManager;
   days?: number;
   /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
   fromTime?: number;
@@ -96,6 +96,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       await replayPair({
         pair,
         strategy,
+        risk: options.risk,
         candles,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
@@ -110,15 +111,15 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
 async function replayPair(args: {
   pair: PairConfig;
   strategy: Strategy;
+  risk: RiskManager;
   candles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const { pair, strategy, candles, startingCashUsdc } = args;
+  const { pair, strategy, risk, candles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
-  const risk = new SimpleRiskManager();
   const costs: BacktestCostTotals = {
     slippageUsdc: 0,
     poolFeeUsdc: 0,
@@ -144,11 +145,14 @@ async function replayPair(args: {
 
     const command = risk.check(signal, portfolio.getSnapshot(close));
     if (command) {
+      // Protective exits fill at the stop/trail level; cross signals use candle close.
+      exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : close);
       const order = await exchange.execute(command, pair);
       const trade = portfolio.applyOrderSync(order);
       if (trade) {
         accumulateCosts(costs, trade, order);
       }
+      exchange.setMidPrice(close);
     }
 
     const equity = portfolio.getSnapshot(close).equity;
@@ -419,8 +423,9 @@ export function printBacktestReport(result: BacktestResult): void {
   console.log("Trades (simulated):");
   for (const t of trades) {
     const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
+    const reason = t.reason ? ` — ${t.reason}` : "";
     console.log(
-      `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}`,
+      `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}`,
     );
   }
 }

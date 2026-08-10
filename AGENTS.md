@@ -40,7 +40,7 @@ src/
   strategy/indicators.ts
   strategy/ema-rsi.ts
   strategy/strategy.ts         # SwingStrategy / IntradayStrategy
-  risk/simple-risk-manager.ts  # Signal + Snapshot → Command
+  risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command
   chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /chart
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)

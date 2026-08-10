@@ -9,8 +9,13 @@ const strategy: StrategyParams = {
   emaFast: 9,
   emaSlow: 21,
   rsiPeriod: 14,
-  rsiBuyMax: 70,
-  rsiSellMin: 30,
+  rsiBuyMin: 40,
+  rsiBuyMax: 60,
+  rsiSellMin: 45,
+  trendEmaPeriod: 50,
+  atrPeriod: 14,
+  adxPeriod: 14,
+  adxMin: 25,
 };
 
 function makeCandles(n: number): Candle[] {

@@ -3,8 +3,10 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
+import { SimpleRiskManager } from "../risk/risk-manager.js";
+import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
 import { loadStrategy } from "../strategy/strategy.js";
-import type { Candle, Order } from "../types.js";
+import type { Candle, Order, RiskParams, Strategy, StrategyParams } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
@@ -26,6 +28,32 @@ function makeConfig(cash = 1000): AppConfig {
         geckoPoolAddress: SOL_USDC_POOL,
       },
     ],
+  };
+}
+
+function makeRisk(strategy: Strategy): SimpleRiskManager {
+  return new SimpleRiskManager(strategy.getRiskParams());
+}
+
+function makeStrategy(
+  signalOverrides: Partial<StrategyParams> = {},
+  riskOverrides: Partial<RiskParams> = {},
+): Strategy {
+  const base = loadStrategy("intraday");
+  const params: StrategyParams = { ...base.getParams(), ...signalOverrides };
+  const risk: RiskParams = { ...base.getRiskParams(), ...riskOverrides };
+  return {
+    getParams: () => params,
+    getRiskParams: () => risk,
+    getRequiredCandles: () => ({
+      timeframe: params.timeframe,
+      count:
+        Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
+        params.rsiPeriod +
+        5,
+    }),
+    evaluateSignal: (pair, candles, price, at) =>
+      evaluateEmaRsi({ pair, candles, strategy: params, price, at }),
   };
 }
 
@@ -118,9 +146,25 @@ describe("runBacktest", () => {
   it("replays fixture candles with emulated costs and no paper-state writes", async () => {
     const candles = crossoverCandles();
     const startingCash = 1000;
+    // Loose filters so the classic cross fixture still fires a BUY (cost-model smoke).
+    const strategy = makeStrategy(
+      {
+        rsiBuyMin: 0,
+        rsiBuyMax: 100,
+        trendEmaPeriod: 5,
+        adxMin: 0,
+      },
+      {
+        cooldownBars: 0,
+        minHoldBars: 0,
+        atrStopMult: 100,
+        atrTrailMult: 100,
+      },
+    );
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
-      strategy: loadStrategy("intraday"),
+      strategy,
+      risk: makeRisk(strategy),
       candles,
       days: 30,
     });
@@ -155,12 +199,94 @@ describe("runBacktest", () => {
     assert.ok(adverse > 0);
   });
 
+  it("exits via ATR stop after entry when price crashes", async () => {
+    const start = 1_700_000_000;
+    const interval = 15 * 60;
+    const candles: Candle[] = [];
+    let price = 100;
+    for (let i = 0; i < 40; i++) {
+      price += 0.2;
+      candles.push({
+        time: start + i * interval,
+        open: price - 0.1,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    for (let i = 0; i < 6; i++) {
+      price -= 0.4;
+      candles.push({
+        time: start + (40 + i) * interval,
+        open: price + 0.2,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    for (let i = 0; i < 8; i++) {
+      price += 0.5;
+      candles.push({
+        time: start + (46 + i) * interval,
+        open: price - 0.2,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    candles.push({
+      time: start + 54 * interval,
+      open: price,
+      high: price,
+      low: price - 20,
+      close: price - 15,
+      volume: 5,
+    });
+
+    const strategy = makeStrategy(
+      {
+        emaFast: 5,
+        emaSlow: 12,
+        trendEmaPeriod: 20,
+        rsiPeriod: 14,
+        rsiBuyMin: 20,
+        rsiBuyMax: 90,
+        atrPeriod: 5,
+        adxPeriod: 5,
+        adxMin: 0,
+      },
+      {
+        atrStopMult: 1.5,
+        atrTrailMult: 50,
+        cooldownBars: 0,
+        minHoldBars: 0,
+      },
+    );
+
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategy,
+      risk: makeRisk(strategy),
+      candles,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
+    const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
+    assert.ok(stopSell);
+  });
+
   it("keeps flat equity when indicators never fire", async () => {
     const strategy = loadStrategy("intraday");
     const params = strategy.getParams();
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const n = params.emaSlow + params.rsiPeriod + 10;
+    const n =
+      Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
+      params.rsiPeriod +
+      10;
     const candles: Candle[] = Array.from({ length: n }, (_, i) => ({
       time: start + i * interval,
       open: 100,
@@ -173,6 +299,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(500),
       strategy,
+      risk: makeRisk(strategy),
       candles,
     });
 

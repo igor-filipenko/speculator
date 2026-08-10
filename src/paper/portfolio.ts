@@ -191,6 +191,7 @@ export class PaperPortfolio implements Portfolio {
       size: order.size,
       at: order.at,
       simulated: true,
+      reason: order.reason,
     };
 
     this.position = {
@@ -225,6 +226,7 @@ export class PaperPortfolio implements Portfolio {
       realizedPnl: pnl,
       at: order.at,
       simulated: true,
+      reason: order.reason,
     };
 
     this.cashUsdc = Math.max(0, proceeds);

@@ -27,7 +27,14 @@ export interface Signal {
   meta?: {
     emaFast?: number;
     emaSlow?: number;
+    trendEma?: number;
     rsi?: number;
+    atr?: number;
+    adx?: number;
+    /** Last bar low (for ATR stop checks in risk). */
+    barLow?: number;
+    /** Last bar high (for trailing peak updates in risk). */
+    barHigh?: number;
   };
 }
 
@@ -57,8 +64,32 @@ export interface StrategyParams {
   emaFast: number;
   emaSlow: number;
   rsiPeriod: number;
+  /** BUY only when RSI >= this (with rsiBuyMax forms a band). */
+  rsiBuyMin: number;
   rsiBuyMax: number;
   rsiSellMin: number;
+  /** Slow trend EMA; BUY only when close is above it. */
+  trendEmaPeriod: number;
+  /** Wilder ATR period (strategy computes ATR into Signal.meta). */
+  atrPeriod: number;
+  /** Wilder ADX period (typically 14). */
+  adxPeriod: number;
+  /** BUY only when ADX >= this (regime / trend-strength gate). */
+  adxMin: number;
+}
+
+/** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */
+export interface RiskParams {
+  /** Bar size for cooldown / min-hold (usually matches strategy timeframe). */
+  timeframe: Timeframe;
+  /** Hard stop distance: entry − atrStopMult × ATR. */
+  atrStopMult: number;
+  /** Trailing stop from peak: peak − atrTrailMult × ATR. */
+  atrTrailMult: number;
+  /** Bars to wait after a SELL before allowing a new BUY. */
+  cooldownBars: number;
+  /** Bars to hold before allowing a discretionary (cross) SELL; stops still fire. */
+  minHoldBars: number;
 }
 
 export interface Trade {
@@ -70,6 +101,8 @@ export interface Trade {
   realizedPnl?: number;
   at: Date;
   simulated: true;
+  /** Strategy / risk reason (e.g. EMA cross or ATR stop). */
+  reason?: string;
 }
 
 export interface Snapshot {
@@ -126,6 +159,7 @@ export interface RequiredCandles {
 
 export interface Strategy {
   getParams(): StrategyParams;
+  getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal;
 }

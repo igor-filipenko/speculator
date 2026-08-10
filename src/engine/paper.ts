@@ -3,7 +3,6 @@ import { JupiterExchange } from "../exchange/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
 import { logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
-import { SimpleRiskManager } from "../risk/risk-manager.js";
 import type {
   Candle,
   Exchange,
@@ -19,6 +18,7 @@ import type {
 export interface PaperOptions {
   config: AppConfig;
   strategy: Strategy;
+  risk: RiskManager;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */
@@ -30,9 +30,8 @@ export interface PaperOptions {
  * Main poll loop: candles → signal → risk command → exchange order → optional paper fill.
  */
 export async function runPaper(options: PaperOptions): Promise<void> {
-  const { config, strategy, once = false } = options;
+  const { config, strategy, risk, once = false } = options;
   const exchange = new JupiterExchange({ apiKey: config.jupiterApiKey });
-  const risk = new SimpleRiskManager();
   const params = strategy.getParams();
 
   const portfolios = options.state.portfolios;
@@ -131,7 +130,6 @@ async function processPair(args: {
   const command = risk.check(signal, portfolio.getSnapshot(price));
   if (!command) {
     logSnapshot(portfolio.getSnapshot(price));
-    console.error(`[${pair.symbol}] no command, risk manager returned null`);
     return;
   }
 

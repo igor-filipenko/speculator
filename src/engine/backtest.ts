@@ -1,3 +1,4 @@
+import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
@@ -45,6 +46,8 @@ export interface BacktestResult {
   metrics: BacktestMetrics;
   trades: Trade[];
   equityCurve: number[];
+  /** OHLCV series used for the replay (for console chart). */
+  candles: Candle[];
 }
 
 export interface RunBacktestOptions {
@@ -196,6 +199,7 @@ async function replayPair(args: {
     },
     trades: snap.trades,
     equityCurve,
+    candles,
   };
 }
 
@@ -389,8 +393,8 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   return result;
 }
 
-export function printBacktestReport(result: BacktestResult): void {
-  const { metrics, trades } = result;
+export async function printBacktestReport(result: BacktestResult): Promise<void> {
+  const { metrics, trades, candles } = result;
   const { strategy, costs } = metrics;
 
   console.log("");
@@ -416,16 +420,20 @@ export function printBacktestReport(result: BacktestResult): void {
 
   if (trades.length === 0) {
     console.log("No simulated fills.");
-    return;
+  } else {
+    console.log("Trades (simulated):");
+    for (const t of trades) {
+      const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
+      const reason = t.reason ? ` — ${t.reason}` : "";
+      console.log(
+        `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}`,
+      );
+    }
   }
 
-  console.log("Trades (simulated):");
-  for (const t of trades) {
-    const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
-    const reason = t.reason ? ` — ${t.reason}` : "";
-    console.log(
-      `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}`,
-    );
+  if (candles.length > 0) {
+    console.log("");
+    console.log(await renderConsoleChart({ pair: metrics.pair, candles, trades }));
   }
 }
 

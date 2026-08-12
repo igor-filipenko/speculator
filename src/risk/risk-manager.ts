@@ -84,7 +84,7 @@ export class SimpleRiskManager implements RiskManager {
 }
 
 /** ATR hard stop / trailing exit using strategy-provided ATR and bar low. */
-function evaluateProtectiveExit(
+export function evaluateProtectiveExit(
   signal: Signal,
   snapshot: Snapshot,
   config: RiskParams,

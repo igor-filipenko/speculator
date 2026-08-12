@@ -118,7 +118,7 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
   });
 
   for (const result of results) {
-    printBacktestReport(result);
+    await printBacktestReport(result);
   }
 }
 

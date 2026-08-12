@@ -174,6 +174,7 @@ describe("runBacktest", () => {
     assert.ok(result);
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
+    assert.equal(result.candles.length, candles.length);
     assert.equal(result.metrics.strategy.getMode(), "intraday");
     assert.ok(result.equityCurve.length === candles.length);
 

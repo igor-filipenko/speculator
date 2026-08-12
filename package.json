@@ -24,11 +24,13 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "@duckdb/node-api",
+      "canvas",
       "esbuild"
     ]
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.1",
+    "@neabyte/candlestick-cli": "1.1.2",
     "@resvg/resvg-js": "2.6.2",
     "dotenv": "^16.6.1",
     "grammy": "^1.45.1",

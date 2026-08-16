@@ -32,23 +32,23 @@ export interface BollingerParams {
 }
 
 const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
-  atrStopMult: 2.5,
-  atrTrailMult: 3,
+  atrStopMult: 2,
+  atrTrailMult: 2.5,
   cooldownBars: 4,
-  minHoldBars: 1,
+  minHoldBars: 3,
 };
 
 /** Signal-side defaults (for tests). */
 export function bollingerParamsFor(): BollingerParams {
   return {
-    timeframe: "4h",
+    timeframe: "15m",
     period: 20,
     stdDev: 2,
-    trendEmaPeriod: 50,
+    trendEmaPeriod: 40,
     atrPeriod: 14,
     adxPeriod: 14,
-    adxMax: 20,
-    minBandToMidPct: 0.015,
+    adxMax: 24,
+    minBandToMidPct: 0.004,
   };
 }
 

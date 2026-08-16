@@ -107,11 +107,13 @@ async function processPair(args: {
 
   const price = await exchange.spotPrice(pair);
 
+  const portfolio = portfolios.get(pair.symbol);
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
     price,
     new Date(candles[candles.length - 1]!.time * 1000),
+    portfolio?.getSnapshot(price),
   );
 
   lastCandles.set(pair.symbol, candles);
@@ -120,7 +122,6 @@ async function processPair(args: {
   await persistSignal(signal);
   await telegram.notify({ type: "signal", signal });
 
-  const portfolio = portfolios.get(pair.symbol);
   if (!portfolio) {
     console.error(`[${pair.symbol}] portfolio not found`);
     return;

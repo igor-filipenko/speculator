@@ -4,7 +4,7 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "ema-rsi" | "bollinger";
+export type StrategyMode = "ema-rsi" | "bollinger" | "grid";
 
 export type Timeframe = "15m" | "4h";
 
@@ -145,7 +145,13 @@ export interface Strategy {
   getMode(): StrategyMode;
   getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
-  evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal;
+  evaluateSignal(
+    pair: string,
+    candles: Candle[],
+    price: number,
+    at: Date,
+    snapshot?: Snapshot,
+  ): Signal;
   /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
 }

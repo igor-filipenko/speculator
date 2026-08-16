@@ -12,10 +12,10 @@ export interface TierCostParams {
   poolFee: number;
 }
 
-/** Fixed mid-range defaults from the backtest cost model. */
+/** Realistic defaults for Jupiter swaps at small/medium sizes. */
 export const TIER_COSTS: Record<LiquidityTier, TierCostParams> = {
-  liquid: { slippage: 0.003, poolFee: 0.0025 },
-  meme: { slippage: 0.02, poolFee: 0.003 },
+  liquid: { slippage: 0.0005, poolFee: 0.0004 },
+  meme: { slippage: 0.008, poolFee: 0.0025 },
 };
 
 /** Priority fee paid per fill, in SOL (mid of ~0.000005–0.001). */

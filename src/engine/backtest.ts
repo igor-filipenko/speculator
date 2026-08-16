@@ -13,6 +13,8 @@ export interface BacktestCliOptions {
   /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
   toTime?: number;
   forceRefresh: boolean;
+  /** CLI override for strategy (takes precedence over env STRATEGY). */
+  strategy?: string;
 }
 
 export interface BacktestCostTotals {
@@ -144,6 +146,7 @@ async function replayPair(args: {
       window,
       close,
       new Date(candle.time * 1000),
+      portfolio.getSnapshot(close),
     );
 
     const command = risk.check(signal, portfolio.getSnapshot(close));
@@ -327,6 +330,7 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let daysExplicit = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
+  let strategy: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -335,6 +339,12 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
     if (arg === "--force-refresh") {
       forceRefresh = true;
+      continue;
+    }
+    if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--strategy");
+      strategy = value;
+      i = nextIndex;
       continue;
     }
     if (arg === "--days" || arg?.startsWith("--days=")) {
@@ -384,6 +394,9 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
   if (toTime !== undefined) {
     result.toTime = toTime;
+  }
+  if (strategy !== undefined) {
+    result.strategy = strategy;
   }
   return result;
 }

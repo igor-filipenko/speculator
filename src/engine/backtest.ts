@@ -6,7 +6,7 @@ import { PaperPortfolio } from "../paper/portfolio.js";
 import type { Candle, Order, PairConfig, RiskManager, Strategy, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
-  /** Lookback window in calendar days (0 = strategy default, ignored when from/to set). */
+  /** Lookback window in calendar days (0 = 90-day default, ignored when from/to set). */
   days: number;
   /** Inclusive range start (Unix seconds). Mutually exclusive with `--days`. */
   fromTime?: number;
@@ -71,7 +71,7 @@ export interface RunBacktestOptions {
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
   const strategy = options.strategy;
-  const { fromTime, toTime } = resolveBacktestWindow(options, strategy);
+  const { fromTime, toTime } = resolveBacktestWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
 
   const results: BacktestResult[] = [];
@@ -213,10 +213,10 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
   totals.poolFeeUsdc += trade.size * fillCosts.poolFeeUsdcPerBase;
   totals.priorityFeeUsdc += order.priorityFeeUsdc;
 }
-function resolveBacktestWindow(
-  options: Pick<RunBacktestOptions, "days" | "fromTime" | "toTime">,
-  strategy: Strategy,
-): { fromTime: number; toTime: number } {
+function resolveBacktestWindow(options: Pick<RunBacktestOptions, "days" | "fromTime" | "toTime">): {
+  fromTime: number;
+  toTime: number;
+} {
   const now = Math.floor(Date.now() / 1000);
 
   if (options.fromTime !== undefined) {
@@ -232,12 +232,7 @@ function resolveBacktestWindow(
     throw new Error("--to requires --from (or use --days for a lookback from now)");
   }
 
-  const days =
-    options.days !== undefined && options.days > 0
-      ? options.days
-      : strategy.getMode() === "swing" || strategy.getMode() === "bollinger"
-        ? 90
-        : 30;
+  const days = options.days !== undefined && options.days > 0 ? options.days : 90;
   return { fromTime: now - days * 24 * 60 * 60, toTime: now };
 }
 

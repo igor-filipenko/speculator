@@ -4,17 +4,17 @@ import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { SimpleRiskManager } from "../risk/risk-manager.js";
-import { evaluateEmaRsi } from "../strategy/ema-rsi.js";
-import { buildOhlcvSvg } from "../strategy/ohlcv-svg.js";
-import { loadStrategy, strategyParamsFor } from "../strategy/strategy.js";
-import type { Candle, Order, RiskParams, Strategy, StrategyParams } from "../types.js";
+import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
+import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
+import { loadStrategy } from "../strategy/strategy.js";
+import type { Candle, Order, RiskParams, Strategy } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
-    strategy: "intraday",
+    strategy: "ema-rsi",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
@@ -37,14 +37,14 @@ function makeRisk(strategy: Strategy): SimpleRiskManager {
 }
 
 function makeStrategy(
-  signalOverrides: Partial<StrategyParams> = {},
+  signalOverrides: Partial<EmaRsiParams> = {},
   riskOverrides: Partial<RiskParams> = {},
 ): Strategy {
-  const params: StrategyParams = { ...strategyParamsFor("intraday"), ...signalOverrides };
-  const risk: RiskParams = { ...loadStrategy("intraday").getRiskParams(), ...riskOverrides };
+  const params: EmaRsiParams = { ...emaRsiParamsFor(), ...signalOverrides };
+  const risk: RiskParams = { ...loadStrategy("ema-rsi").getRiskParams(), ...riskOverrides };
   return {
-    getDisplayName: () => `${params.mode} (${params.timeframe})`,
-    getMode: () => params.mode,
+    getDisplayName: () => `ema-rsi (${params.timeframe})`,
+    getMode: () => "ema-rsi",
     getRiskParams: () => risk,
     getRequiredCandles: () => ({
       timeframe: params.timeframe,
@@ -175,7 +175,7 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
-    assert.equal(result.metrics.strategy.getMode(), "intraday");
+    assert.equal(result.metrics.strategy.getMode(), "ema-rsi");
     assert.ok(result.equityCurve.length === candles.length);
 
     // With a forced bullish cross we expect at least one simulated BUY.
@@ -282,7 +282,7 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("intraday");
+    const strategy = loadStrategy("ema-rsi");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;

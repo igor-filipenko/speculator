@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { BollingerParams, Candle } from "../types.js";
-import { evaluateBollinger } from "./bollinger.js";
-import { bollingerParamsFor } from "./strategy.js";
+import type { Candle } from "../types.js";
+import { evaluateBollinger, bollingerParamsFor, type BollingerParams } from "./bollinger.js";
 
 function baseParams(overrides: Partial<BollingerParams> = {}): BollingerParams {
   return { ...bollingerParamsFor(), ...overrides };

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, StrategyParams } from "../types.js";
-import { evaluateEmaRsi } from "./ema-rsi.js";
-import { strategyParamsFor } from "./strategy.js";
+import type { Candle } from "../types.js";
+import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "./ema-rsi.js";
 
-function baseParams(overrides: Partial<StrategyParams> = {}): StrategyParams {
-  return { ...strategyParamsFor("intraday"), ...overrides };
+function baseParams(overrides: Partial<EmaRsiParams> = {}): EmaRsiParams {
+  return { ...emaRsiParamsFor(), ...overrides };
 }
 
 /** Flat series then a controlled bullish cross setup. */

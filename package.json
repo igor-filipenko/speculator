@@ -2,7 +2,7 @@
   "name": "speculator",
   "version": "0.1.0",
   "private": true,
-  "description": "Solana swing/intraday signal bot with Jupiter paper trading and offline backtest",
+  "description": "Solana trading bot",
   "type": "module",
   "engines": {
     "node": ">=24"

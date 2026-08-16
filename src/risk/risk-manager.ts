@@ -49,7 +49,7 @@ export class SimpleRiskManager implements RiskManager {
         quoteBudgetUsdc: snapshot.cashUsdc,
       };
     }
-    
+
     if (signal.side === "SELL") {
       if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
         return null;

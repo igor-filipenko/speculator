@@ -19,7 +19,7 @@ function usage(): never {
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper)
-  --days <n>        Backtest lookback in days (default: 30 intraday / 90 swing)
+  --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
   --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal

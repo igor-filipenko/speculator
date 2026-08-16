@@ -1,4 +1,5 @@
-import type { BollingerParams, Candle } from "../types.js";
+import type { Candle } from "../types.js";
+import type { BollingerParams } from "./bollinger.js";
 import { bollinger } from "./indicators.js";
 
 export interface BollingerChartInput {

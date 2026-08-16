@@ -1,5 +1,56 @@
-import type { BollingerParams, Candle, Signal, SignalSide } from "../types.js";
+import type {
+  Candle,
+  RequiredCandles,
+  RiskParams,
+  Signal,
+  SignalSide,
+  Strategy,
+  Timeframe,
+} from "../types.js";
+import { buildBollingerSvg } from "./bollinger-svg.js";
 import { adx, atr, bollinger, ema } from "./indicators.js";
+
+export interface BollingerParams {
+  timeframe: Timeframe;
+  /** SMA / band lookback (typically 20). */
+  period: number;
+  /** Band width in population standard deviations (typically 2). */
+  stdDev: number;
+  /** Slow trend EMA; BUY only when close is above it (avoid catching knives). */
+  trendEmaPeriod: number;
+  /** Wilder ATR period (into Signal.meta for risk stops). */
+  atrPeriod: number;
+  /** Wilder ADX period. */
+  adxPeriod: number;
+  /** BUY only when ADX <= this (flat regime gate). */
+  adxMax: number;
+  /**
+   * Minimum (mid − lower) / close for a BUY.
+   * Skips setups where mean-reversion distance cannot cover ~RT fees.
+   */
+  minBandToMidPct: number;
+}
+
+const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
+  atrStopMult: 2.5,
+  atrTrailMult: 3,
+  cooldownBars: 4,
+  minHoldBars: 1,
+};
+
+/** Signal-side defaults (for tests). */
+export function bollingerParamsFor(): BollingerParams {
+  return {
+    timeframe: "4h",
+    period: 20,
+    stdDev: 2,
+    trendEmaPeriod: 50,
+    atrPeriod: 14,
+    adxPeriod: 14,
+    adxMax: 20,
+    minBandToMidPct: 0.015,
+  };
+}
 
 export interface BollingerInput {
   pair: string;
@@ -98,9 +149,53 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     reason = `Close ${fmt(close)} >= BB mid ${fmt(bbMid)}`;
   }
 
-  if (side == "HOLD")
-    console.log(`HOLD: ${reason}`);
   return { ...base, side, reason };
+}
+
+/** 4h mean-reversion: BB reclaim + trend EMA + ADX flat gate; exit at mid. */
+export class BollingerStrategy implements Strategy {
+  private readonly params: BollingerParams;
+  private readonly risk: RiskParams;
+
+  constructor() {
+    this.params = bollingerParamsFor();
+    this.risk = { timeframe: this.params.timeframe, ...BOLLINGER_RISK };
+  }
+
+  getDisplayName(): string {
+    return `bollinger (${this.params.timeframe})`;
+  }
+
+  getMode(): "bollinger" {
+    return "bollinger";
+  }
+
+  getRiskParams(): RiskParams {
+    return this.risk;
+  }
+
+  getRequiredCandles(): RequiredCandles {
+    const { timeframe, period, trendEmaPeriod, atrPeriod, adxPeriod } = this.params;
+    const warm = Math.max(period, trendEmaPeriod, atrPeriod, adxPeriod * 2) + 5;
+    return {
+      timeframe,
+      count: Math.max(warm, 160),
+    };
+  }
+
+  evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal {
+    return evaluateBollinger({
+      pair,
+      candles,
+      strategy: this.params,
+      price,
+      at,
+    });
+  }
+
+  buildChartSvg(pair: string, candles: Candle[]): string {
+    return buildBollingerSvg({ pair, candles, strategy: this.params });
+  }
 }
 
 function fmt(n: number): string {

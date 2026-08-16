@@ -6,7 +6,7 @@ import type { Order, RiskParams, Signal } from "../types.js";
 import { evaluateProtectiveExit, SimpleRiskManager } from "./risk-manager.js";
 
 function riskParams(overrides: Partial<RiskParams> = {}): RiskParams {
-  return { ...loadStrategy("intraday").getRiskParams(), ...overrides };
+  return { ...loadStrategy("ema-rsi").getRiskParams(), ...overrides };
 }
 
 describe("SimpleRiskManager", () => {

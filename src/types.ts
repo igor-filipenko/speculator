@@ -4,10 +4,7 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "intraday" | "swing" | "bollinger";
-
-/** EMA/RSI trend modes (excludes flat mean-reversion). */
-export type EmaStrategyMode = "intraday" | "swing";
+export type StrategyMode = "ema-rsi" | "bollinger";
 
 export type Timeframe = "15m" | "4h";
 
@@ -62,49 +59,6 @@ export interface PairConfig {
   quoteDecimals: number;
   /** GeckoTerminal pool used for OHLCV. */
   geckoPoolAddress: string;
-}
-
-export interface StrategyParams {
-  mode: EmaStrategyMode;
-  timeframe: Timeframe;
-  emaFast: number;
-  emaSlow: number;
-  rsiPeriod: number;
-  /** BUY only when RSI >= this (with rsiBuyMax forms a band). */
-  rsiBuyMin: number;
-  rsiBuyMax: number;
-  rsiSellMin: number;
-  /** Slow trend EMA; BUY only when close is above it. */
-  trendEmaPeriod: number;
-  /** Wilder ATR period (strategy computes ATR into Signal.meta). */
-  atrPeriod: number;
-  /** Wilder ADX period (typically 14). */
-  adxPeriod: number;
-  /** BUY only when ADX >= this (regime / trend-strength gate). */
-  adxMin: number;
-}
-
-/** Mean-reversion Bollinger params (flat / range markets). */
-export interface BollingerParams {
-  mode: "bollinger";
-  timeframe: Timeframe;
-  /** SMA / band lookback (typically 20). */
-  period: number;
-  /** Band width in population standard deviations (typically 2). */
-  stdDev: number;
-  /** Slow trend EMA; BUY only when close is above it (avoid catching knives). */
-  trendEmaPeriod: number;
-  /** Wilder ATR period (into Signal.meta for risk stops). */
-  atrPeriod: number;
-  /** Wilder ADX period. */
-  adxPeriod: number;
-  /** BUY only when ADX <= this (flat regime gate). */
-  adxMax: number;
-  /**
-   * Minimum (mid − lower) / close for a BUY.
-   * Skips setups where mean-reversion distance cannot cover ~RT fees.
-   */
-  minBandToMidPct: number;
 }
 
 /** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */

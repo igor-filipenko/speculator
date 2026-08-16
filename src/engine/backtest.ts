@@ -235,7 +235,7 @@ function resolveBacktestWindow(
   const days =
     options.days !== undefined && options.days > 0
       ? options.days
-      : strategy.getMode() === "swing"
+      : strategy.getMode() === "swing" || strategy.getMode() === "bollinger"
         ? 90
         : 30;
   return { fromTime: now - days * 24 * 60 * 60, toTime: now };

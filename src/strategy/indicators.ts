@@ -213,3 +213,49 @@ function dxFromSmooth(smoothTr: number, smoothPlus: number, smoothMinus: number)
   }
   return (100 * Math.abs(plusDi - minusDi)) / sum;
 }
+
+export interface BollingerSeries {
+  mid: (number | null)[];
+  upper: (number | null)[];
+  lower: (number | null)[];
+}
+
+/**
+ * Bollinger Bands: SMA mid ± stdDev × population standard deviation of the
+ * last `period` closes. Returns nulls until warm (first value at index period-1).
+ */
+export function bollinger(values: number[], period: number, stdDev: number): BollingerSeries {
+  if (period < 1) {
+    throw new Error("Bollinger period must be >= 1");
+  }
+  if (!(stdDev > 0)) {
+    throw new Error("Bollinger stdDev must be > 0");
+  }
+
+  const mid: (number | null)[] = Array.from({ length: values.length }, () => null);
+  const upper: (number | null)[] = Array.from({ length: values.length }, () => null);
+  const lower: (number | null)[] = Array.from({ length: values.length }, () => null);
+
+  if (values.length < period) {
+    return { mid, upper, lower };
+  }
+
+  for (let i = period - 1; i < values.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      sum += values[j]!;
+    }
+    const mean = sum / period;
+    let sq = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const d = values[j]! - mean;
+      sq += d * d;
+    }
+    const sd = Math.sqrt(sq / period);
+    mid[i] = mean;
+    upper[i] = mean + stdDev * sd;
+    lower[i] = mean - stdDev * sd;
+  }
+
+  return { mid, upper, lower };
+}

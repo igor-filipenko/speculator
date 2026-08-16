@@ -4,7 +4,10 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "intraday" | "swing";
+export type StrategyMode = "intraday" | "swing" | "bollinger";
+
+/** EMA/RSI trend modes (excludes flat mean-reversion). */
+export type EmaStrategyMode = "intraday" | "swing";
 
 export type Timeframe = "15m" | "4h";
 
@@ -31,6 +34,9 @@ export interface Signal {
     rsi?: number;
     atr?: number;
     adx?: number;
+    bbMid?: number;
+    bbUpper?: number;
+    bbLower?: number;
     /** Last bar low (for ATR stop checks in risk). */
     barLow?: number;
     /** Last bar high (for trailing peak updates in risk). */
@@ -59,7 +65,7 @@ export interface PairConfig {
 }
 
 export interface StrategyParams {
-  mode: StrategyMode;
+  mode: EmaStrategyMode;
   timeframe: Timeframe;
   emaFast: number;
   emaSlow: number;
@@ -76,6 +82,29 @@ export interface StrategyParams {
   adxPeriod: number;
   /** BUY only when ADX >= this (regime / trend-strength gate). */
   adxMin: number;
+}
+
+/** Mean-reversion Bollinger params (flat / range markets). */
+export interface BollingerParams {
+  mode: "bollinger";
+  timeframe: Timeframe;
+  /** SMA / band lookback (typically 20). */
+  period: number;
+  /** Band width in population standard deviations (typically 2). */
+  stdDev: number;
+  /** Slow trend EMA; BUY only when close is above it (avoid catching knives). */
+  trendEmaPeriod: number;
+  /** Wilder ATR period (into Signal.meta for risk stops). */
+  atrPeriod: number;
+  /** Wilder ADX period. */
+  adxPeriod: number;
+  /** BUY only when ADX <= this (flat regime gate). */
+  adxMax: number;
+  /**
+   * Minimum (mid − lower) / close for a BUY.
+   * Skips setups where mean-reversion distance cannot cover ~RT fees.
+   */
+  minBandToMidPct: number;
 }
 
 /** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */
@@ -163,7 +192,7 @@ export interface Strategy {
   getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal;
-  /** Strategy-owned OHLCV chart (which EMAs/RSI to overlay). */
+  /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
 }
 

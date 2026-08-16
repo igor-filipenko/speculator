@@ -1,5 +1,7 @@
 import type {
+  BollingerParams,
   Candle,
+  EmaStrategyMode,
   RequiredCandles,
   RiskParams,
   Signal,
@@ -7,6 +9,8 @@ import type {
   StrategyMode,
   StrategyParams,
 } from "../types.js";
+import { evaluateBollinger } from "./bollinger.js";
+import { buildBollingerSvg } from "./bollinger-svg.js";
 import { evaluateEmaRsi } from "./ema-rsi.js";
 import { buildOhlcvSvg } from "./ohlcv-svg.js";
 
@@ -45,8 +49,16 @@ const SWING_RISK_DEFAULTS: Omit<RiskParams, "timeframe"> = {
   minHoldBars: 1,
 };
 
+/** Risk for mean-reversion range trades on 4h (longer cooldown after stops). */
+const BOLLINGER_RISK_DEFAULTS: Omit<RiskParams, "timeframe"> = {
+  atrStopMult: 2.5,
+  atrTrailMult: 3,
+  cooldownBars: 4,
+  minHoldBars: 1,
+};
+
 /** Signal-side defaults (for tests / chart helpers). Not part of the Strategy public API. */
-export function strategyParamsFor(mode: StrategyMode): StrategyParams {
+export function strategyParamsFor(mode: EmaStrategyMode): StrategyParams {
   if (mode === "swing") {
     return {
       mode: "swing",
@@ -67,7 +79,22 @@ export function strategyParamsFor(mode: StrategyMode): StrategyParams {
   };
 }
 
-function riskParamsFor(mode: StrategyMode): RiskParams {
+/** Bollinger flat defaults (for tests). Not part of the Strategy public API. */
+export function bollingerParamsFor(): BollingerParams {
+  return {
+    mode: "bollinger",
+    timeframe: "4h",
+    period: 20,
+    stdDev: 2,
+    trendEmaPeriod: 50,
+    atrPeriod: 14,
+    adxPeriod: 14,
+    adxMax: 20,
+    minBandToMidPct: 0.015,
+  };
+}
+
+function riskParamsFor(mode: EmaStrategyMode): RiskParams {
   if (mode === "swing") {
     return { timeframe: "4h", ...SWING_RISK_DEFAULTS };
   }
@@ -130,6 +157,58 @@ export class IntradayStrategy extends EmaRsiStrategy {
   }
 }
 
+/** 4h mean-reversion: BB reclaim + trend EMA + ADX flat gate; exit at mid. */
+export class BollingerStrategy implements Strategy {
+  private readonly params: BollingerParams;
+  private readonly risk: RiskParams;
+
+  constructor() {
+    this.params = bollingerParamsFor();
+    this.risk = { timeframe: "4h", ...BOLLINGER_RISK_DEFAULTS };
+  }
+
+  getDisplayName(): string {
+    return `bollinger (${this.params.timeframe})`;
+  }
+
+  getMode(): StrategyMode {
+    return "bollinger";
+  }
+
+  getRiskParams(): RiskParams {
+    return this.risk;
+  }
+
+  getRequiredCandles(): RequiredCandles {
+    const { timeframe, period, trendEmaPeriod, atrPeriod, adxPeriod } = this.params;
+    const warm = Math.max(period, trendEmaPeriod, atrPeriod, adxPeriod * 2) + 5;
+    return {
+      timeframe,
+      count: Math.max(warm, 160),
+    };
+  }
+
+  evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal {
+    return evaluateBollinger({
+      pair,
+      candles,
+      strategy: this.params,
+      price,
+      at,
+    });
+  }
+
+  buildChartSvg(pair: string, candles: Candle[]): string {
+    return buildBollingerSvg({ pair, candles, strategy: this.params });
+  }
+}
+
 export function loadStrategy(mode: StrategyMode): Strategy {
-  return mode === "swing" ? new SwingStrategy() : new IntradayStrategy();
+  if (mode === "swing") {
+    return new SwingStrategy();
+  }
+  if (mode === "bollinger") {
+    return new BollingerStrategy();
+  }
+  return new IntradayStrategy();
 }

@@ -28,15 +28,15 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable             | Meaning                                                                 |
-| -------------------- | ----------------------------------------------------------------------- |
-| `STRATEGY`           | `intraday` (15m EMA 9/21 + filters) or `swing` (4h EMA 12/26 + filters) |
-| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended              |
-| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)    |
-| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                         |
-| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)     |
-| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)            |
-| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                |
+| Variable             | Meaning                                                                     |
+| -------------------- | --------------------------------------------------------------------------- |
+| `STRATEGY`           | `intraday` / `swing` (EMA trend) or `bollinger` (4h BB flat mean-reversion) |
+| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended                  |
+| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)        |
+| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                             |
+| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)         |
+| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)                |
+| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                    |
 
 Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
 
@@ -101,12 +101,12 @@ pnpm backtest -- --from 01-01-2026 --to 01-08-2026
 pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 ```
 
-| Flag              | Meaning                                                                |
-| ----------------- | ---------------------------------------------------------------------- |
-| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing)        |
-| `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
-| `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
-| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
+| Flag              | Meaning                                                                   |
+| ----------------- | ------------------------------------------------------------------------- |
+| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing/bollinger) |
+| `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)                  |
+| `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`)    |
+| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal      |
 
 Use either `--days` or `--from`/`--to`, not both.
 
@@ -278,7 +278,11 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ## Strategy (v1)
 
-EMA crossover + RSI band + trend EMA + ADX regime filter, with ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`):
+ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
+
+### EMA trend (`intraday` / `swing`)
+
+EMA crossover + RSI band + trend EMA + ADX regime filter:
 
 | Mode       | Timeframe | EMA     | Entry filters                                | ATR stop/trail | Cooldown |
 | ---------- | --------- | ------- | -------------------------------------------- | -------------- | -------- |
@@ -286,6 +290,16 @@ EMA crossover + RSI band + trend EMA + ADX regime filter, with ATR stop/trail an
 | `swing`    | 4h        | 12 / 26 | RSI `[40, 60)`; close &gt; EMA 50; ADX ≥ 20  | 2× / 2.5×      | 2 bars   |
 
 Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from peak close. ADX does **not** block exits. Discretionary cross-SELL respects `minHoldBars` (4 intraday / 1 swing); protective stops still fire immediately.
+
+### Bollinger flat (`bollinger`)
+
+Mean-reversion for ranging markets (4h, BB period 20, stdDev 2). Buys only on **lower-band reclaim** with filters:
+
+| Mode        | Entry                                                                | Exit                         | ATR stop/trail | Cooldown | minHold |
+| ----------- | -------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
+| `bollinger` | reclaim lower; ADX ≤ 15; close &gt; EMA 50; (mid−lower)/close ≥ 1.5% | close ≥ BB mid (SMA), or ATR | 2.5× / 3×      | 4 bars   | 1 bar   |
+
+`/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
@@ -306,10 +320,12 @@ src/
   exchange/jupiter.ts      # live Exchange (Jupiter quote only)
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # SimpleRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
   strategy/ema-rsi.ts
-  strategy/strategy.ts     # SwingStrategy / IntradayStrategy (+ getRiskParams)
-  strategy/ohlcv-svg.ts    # candle + EMA/RSI SVG for /chart (strategy-owned)
+  strategy/bollinger.ts
+  strategy/strategy.ts     # Swing / Intraday / Bollinger (+ getRiskParams)
+  strategy/ohlcv-svg.ts    # EMA/RSI SVG for /chart
+  strategy/bollinger-svg.ts # BB SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)

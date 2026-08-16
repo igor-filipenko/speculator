@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { adx, atr, ema, rsi } from "./indicators.js";
+import { adx, atr, bollinger, ema, rsi } from "./indicators.js";
 
 describe("atr", () => {
   it("returns nulls until warm and matches Wilder smoothing", () => {
@@ -58,6 +58,29 @@ describe("adx", () => {
 
   it("rejects invalid period", () => {
     assert.throws(() => adx([], 0), /ADX period/);
+  });
+});
+
+describe("bollinger", () => {
+  it("returns nulls until warm and matches SMA ± population std", () => {
+    const values = [1, 2, 3, 4, 5];
+    const { mid, upper, lower } = bollinger(values, 3, 2);
+    assert.equal(mid[0], null);
+    assert.equal(mid[1], null);
+    // Window [1,2,3]: mean=2, pop-var=((1-2)^2+(2-2)^2+(3-2)^2)/3=2/3, sd=sqrt(2/3)
+    const mean = 2;
+    const sd = Math.sqrt(2 / 3);
+    assert.ok(mid[2] != null);
+    assert.ok(Math.abs(mid[2] - mean) < 1e-12);
+    assert.ok(upper[2] != null && lower[2] != null);
+    assert.ok(Math.abs(upper[2] - (mean + 2 * sd)) < 1e-12);
+    assert.ok(Math.abs(lower[2] - (mean - 2 * sd)) < 1e-12);
+    assert.ok(mid[4] != null);
+  });
+
+  it("rejects invalid period or stdDev", () => {
+    assert.throws(() => bollinger([], 0, 2), /Bollinger period/);
+    assert.throws(() => bollinger([1, 2, 3], 2, 0), /Bollinger stdDev/);
   });
 });
 

@@ -6,7 +6,7 @@ import type { PairConfig, StrategyMode } from "./types.js";
 loadDotenv();
 
 const envSchema = z.object({
-  STRATEGY: z.enum(["intraday", "swing"]).default("intraday"),
+  STRATEGY: z.enum(["intraday", "swing", "bollinger"]).default("intraday"),
   JUPITER_API_KEY: z.string().optional().default(""),
   WATCHLIST: z.string().default("SOL/USDC"),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),

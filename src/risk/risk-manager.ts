@@ -30,10 +30,6 @@ export class SimpleRiskManager implements RiskManager {
       return stopExit;
     }
 
-    if (signal.side === "HOLD") {
-      return null;
-    }
-
     if (signal.side === "BUY") {
       if (snapshot.position.side === "long") {
         return null;
@@ -53,22 +49,27 @@ export class SimpleRiskManager implements RiskManager {
         quoteBudgetUsdc: snapshot.cashUsdc,
       };
     }
+    
+    if (signal.side === "SELL") {
+      if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
+        return null;
+      }
+      if (belowMinHold(snapshot, signal.at, this.config)) {
+        return null;
+      }
+      this.peakByPair.delete(signal.pair);
+      return {
+        pair: signal.pair,
+        side: "SELL",
+        reason: signal.reason,
+        at: signal.at,
+        priceHint: signal.price,
+        baseSize: snapshot.position.size,
+      };
+    }
 
-    if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
-      return null;
-    }
-    if (belowMinHold(snapshot, signal.at, this.config)) {
-      return null;
-    }
-    this.peakByPair.delete(signal.pair);
-    return {
-      pair: signal.pair,
-      side: "SELL",
-      reason: signal.reason,
-      at: signal.at,
-      priceHint: signal.price,
-      baseSize: snapshot.position.size,
-    };
+    // still hold
+    return null;
   }
 
   private syncPeak(signal: Signal, snapshot: Snapshot): void {

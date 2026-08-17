@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
-import { strategyParams } from "../config.js";
-import { TIER_COSTS, emulateFillPrice } from "../jupiter/emulated-quote.js";
+import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import type { Candle } from "../types.js";
+import { SimpleRiskManager } from "../risk/risk-manager.js";
+import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
+import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
+import { loadStrategy } from "../strategy/strategy.js";
+import type { Candle, Order, RiskParams, Strategy } from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
-    mode: "signal",
-    strategy: "intraday",
+    strategy: "ema-rsi",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
@@ -27,6 +29,33 @@ function makeConfig(cash = 1000): AppConfig {
         geckoPoolAddress: SOL_USDC_POOL,
       },
     ],
+  };
+}
+
+function makeRisk(strategy: Strategy): SimpleRiskManager {
+  return new SimpleRiskManager(strategy.getRiskParams());
+}
+
+function makeStrategy(
+  signalOverrides: Partial<EmaRsiParams> = {},
+  riskOverrides: Partial<RiskParams> = {},
+): Strategy {
+  const params: EmaRsiParams = { ...emaRsiParamsFor(), ...signalOverrides };
+  const risk: RiskParams = { ...loadStrategy("ema-rsi").getRiskParams(), ...riskOverrides };
+  return {
+    getDisplayName: () => `ema-rsi (${params.timeframe})`,
+    getMode: () => "ema-rsi",
+    getRiskParams: () => risk,
+    getRequiredCandles: () => ({
+      timeframe: params.timeframe,
+      count:
+        Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
+        params.rsiPeriod +
+        5,
+    }),
+    evaluateSignal: (pair, candles, price, at) =>
+      evaluateEmaRsi({ pair, candles, strategy: params, price, at }),
+    buildChartSvg: (pair, candles) => buildOhlcvSvg({ pair, candles, strategy: params }),
   };
 }
 
@@ -119,8 +148,25 @@ describe("runBacktest", () => {
   it("replays fixture candles with emulated costs and no paper-state writes", async () => {
     const candles = crossoverCandles();
     const startingCash = 1000;
+    // Loose filters so the classic cross fixture still fires a BUY (cost-model smoke).
+    const strategy = makeStrategy(
+      {
+        rsiBuyMin: 0,
+        rsiBuyMax: 100,
+        trendEmaPeriod: 5,
+        adxMin: 0,
+      },
+      {
+        cooldownBars: 0,
+        minHoldBars: 0,
+        atrStopMult: 100,
+        atrTrailMult: 100,
+      },
+    );
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
+      strategy,
+      risk: makeRisk(strategy),
       candles,
       days: 30,
     });
@@ -128,7 +174,8 @@ describe("runBacktest", () => {
     assert.ok(result);
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
-    assert.equal(result.metrics.strategy.mode, "intraday");
+    assert.equal(result.candles.length, candles.length);
+    assert.equal(result.metrics.strategy.getMode(), "ema-rsi");
     assert.ok(result.equityCurve.length === candles.length);
 
     // With a forced bullish cross we expect at least one simulated BUY.
@@ -155,12 +202,91 @@ describe("runBacktest", () => {
     assert.ok(adverse > 0);
   });
 
-  it("keeps flat equity when indicators never fire", async () => {
-    const strategy = strategyParams("intraday");
+  it("exits via ATR stop after entry when price crashes", async () => {
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const n = strategy.emaSlow + strategy.rsiPeriod + 10;
-    const candles: Candle[] = Array.from({ length: n }, (_, i) => ({
+    const candles: Candle[] = [];
+    let price = 100;
+    for (let i = 0; i < 40; i++) {
+      price += 0.2;
+      candles.push({
+        time: start + i * interval,
+        open: price - 0.1,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    for (let i = 0; i < 6; i++) {
+      price -= 0.4;
+      candles.push({
+        time: start + (40 + i) * interval,
+        open: price + 0.2,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    for (let i = 0; i < 8; i++) {
+      price += 0.5;
+      candles.push({
+        time: start + (46 + i) * interval,
+        open: price - 0.2,
+        high: price + 0.3,
+        low: price - 0.3,
+        close: price,
+        volume: 5,
+      });
+    }
+    candles.push({
+      time: start + 54 * interval,
+      open: price,
+      high: price,
+      low: price - 20,
+      close: price - 15,
+      volume: 5,
+    });
+
+    const strategy = makeStrategy(
+      {
+        emaFast: 5,
+        emaSlow: 12,
+        trendEmaPeriod: 20,
+        rsiPeriod: 14,
+        rsiBuyMin: 20,
+        rsiBuyMax: 90,
+        atrPeriod: 5,
+        adxPeriod: 5,
+        adxMin: 0,
+      },
+      {
+        atrStopMult: 1.5,
+        atrTrailMult: 50,
+        cooldownBars: 0,
+        minHoldBars: 0,
+      },
+    );
+
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategy,
+      risk: makeRisk(strategy),
+      candles,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
+    const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
+    assert.ok(stopSell);
+  });
+
+  it("keeps flat equity when indicators never fire", async () => {
+    const strategy = loadStrategy("ema-rsi");
+    const needed = strategy.getRequiredCandles().count + 10;
+    const start = 1_700_000_000;
+    const interval = 15 * 60;
+    const candles: Candle[] = Array.from({ length: needed }, (_, i) => ({
       time: start + i * interval,
       open: 100,
       high: 100,
@@ -171,6 +297,8 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
+      strategy,
+      risk: makeRisk(strategy),
       candles,
     });
 
@@ -181,32 +309,34 @@ describe("runBacktest", () => {
   });
 });
 
-describe("PaperPortfolio priority fee", () => {
-  it("deducts priority fee on BUY and SELL without persisting", () => {
+describe("PaperPortfolio applyOrder", () => {
+  it("applies BUY/SELL orders with priority fee already sized by exchange", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
-    const buy = portfolio.applySignalSync(
-      {
-        pair: "SOL/USDC",
-        side: "BUY",
-        reason: "test",
-        price: 100,
-        at: new Date("2026-01-01T00:00:00.000Z"),
-      },
-      { priorityFeeUsdc: 10 },
-    );
+    const buyOrder: Order = {
+      pair: "SOL/USDC",
+      side: "BUY",
+      reason: "test",
+      price: 100,
+      size: 9.9,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 10,
+    };
+    const buy = portfolio.applyOrderSync(buyOrder);
     assert.ok(buy);
     assert.equal(buy.size, 9.9);
 
-    const sell = portfolio.applySignalSync(
-      {
-        pair: "SOL/USDC",
-        side: "SELL",
-        reason: "test",
-        price: 110,
-        at: new Date("2026-01-01T01:00:00.000Z"),
-      },
-      { priorityFeeUsdc: 5 },
-    );
+    const sellOrder: Order = {
+      pair: "SOL/USDC",
+      side: "SELL",
+      reason: "test",
+      price: 110,
+      size: 9.9,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 5,
+    };
+    const sell = portfolio.applyOrderSync(sellOrder);
     assert.ok(sell);
     assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100);
   });

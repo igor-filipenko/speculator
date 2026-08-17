@@ -1,5 +1,5 @@
 [Unit]
-Description=Speculator Solana paper/signal bot
+Description=Speculator Solana trading bot
 After=network-online.target
 Wants=network-online.target
 

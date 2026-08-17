@@ -30,8 +30,8 @@ describe("emulateFillPrice", () => {
     const buy = emulateFillPrice({ side: "BUY", close, tier: "meme" });
     const adverse = TIER_COSTS.meme.slippage + TIER_COSTS.meme.poolFee;
     assert.equal(buy.fillPrice, close * (1 + adverse));
-    assert.equal(buy.breakdown.slippage, 0.02);
-    assert.equal(buy.breakdown.poolFee, 0.003);
+    assert.equal(buy.breakdown.slippage, TIER_COSTS.meme.slippage);
+    assert.equal(buy.breakdown.poolFee, TIER_COSTS.meme.poolFee);
   });
 
   it("rejects non-positive close", () => {

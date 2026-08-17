@@ -1,6 +1,6 @@
 import { match } from "ts-pattern";
 import { insertPaperTrade, upsertPaperPortfolio } from "../db/paper.js";
-import type { PairConfig, Portfolio, Position, Signal, Snapshot, Trade } from "../types.js";
+import type { Order, PairConfig, Portfolio, Position, Snapshot, Trade } from "../types.js";
 import {
   loadPaperState,
   type PersistedPortfolio,
@@ -23,17 +23,11 @@ export interface PaperSnapshot extends Snapshot {
   simulated: true;
 }
 
-/** Optional costs applied on fill (e.g. Solana priority fee in backtests). */
-export interface FillOptions {
-  /** Deducted from cash before sizing (BUY) or from proceeds (SELL). */
-  priorityFeeUsdc?: number;
-}
-
 /**
  * Single-pair virtual long-only portfolio.
- * Fills are simulated at the provided price (typically a Jupiter quote).
+ * Applies simulated exchange orders (not raw strategy signals).
  */
-export class PaperPortfolio {
+export class PaperPortfolio implements Portfolio {
   private cashUsdc: number;
   private position: Position;
   private realizedPnl = 0;
@@ -155,23 +149,20 @@ export class PaperPortfolio {
   }
 
   /**
-   * Apply a signal without persisting (for backtests and unit tests).
-   * BUY opens a long with all cash; SELL closes to cash.
+   * Apply a filled order without persisting (for backtests and unit tests).
    */
-  applySignalSync(signal: Signal, options: FillOptions = {}): PaperTrade | null {
-    return match(signal.side)
-      .with("HOLD", () => null)
-      .with("BUY", () => this.openLong(signal, options))
-      .with("SELL", () => this.closeLong(signal, options))
+  applyOrderSync(order: Order): PaperTrade | null {
+    return match(order.side)
+      .with("BUY", () => this.openLong(order))
+      .with("SELL", () => this.closeLong(order))
       .exhaustive();
   }
 
   /**
-   * Apply a signal and persist paper state when a fill happens.
-   * Returns a trade if a fill happened, otherwise null.
+   * Apply a filled order and persist paper state when a fill happens.
    */
-  async applySignal(signal: Signal, options: FillOptions = {}): Promise<PaperTrade | null> {
-    const nextTrade = this.applySignalSync(signal, options);
+  async applyOrder(order: Order): Promise<PaperTrade | null> {
+    const nextTrade = this.applyOrderSync(order);
 
     if (nextTrade != null) {
       const persisted = this.toPersisted();
@@ -185,66 +176,63 @@ export class PaperPortfolio {
     return nextTrade;
   }
 
-  private openLong(signal: Signal, options: FillOptions): PaperTrade | null {
+  private openLong(order: Order): PaperTrade | null {
     if (this.position.side === "long") {
       return null;
     }
-    if (this.cashUsdc <= 0 || signal.price <= 0) {
+    if (order.size <= 0 || order.price <= 0) {
       return null;
     }
 
-    const priorityFeeUsdc = options.priorityFeeUsdc ?? 0;
-    const spendable = this.cashUsdc - priorityFeeUsdc;
-    if (spendable <= 0) {
-      return null;
-    }
-
-    const size = spendable / signal.price;
     const trade: PaperTrade = {
-      pair: signal.pair,
+      pair: order.pair,
       side: "BUY",
-      price: signal.price,
-      size,
-      at: signal.at,
+      price: order.price,
+      size: order.size,
+      at: order.at,
       simulated: true,
+      reason: order.reason,
     };
 
     this.position = {
-      pair: signal.pair,
+      pair: order.pair,
       side: "long",
-      size,
-      entryPrice: signal.price,
-      openedAt: signal.at,
+      size: order.size,
+      entryPrice: order.price,
+      openedAt: order.at,
     };
+    // All-in: exchange already sized from cash − priority fee.
     this.cashUsdc = 0;
     this.trades.push(trade);
     return trade;
   }
 
-  private closeLong(signal: Signal, options: FillOptions): PaperTrade | null {
+  private closeLong(order: Order): PaperTrade | null {
     if (this.position.side !== "long" || this.position.size <= 0) {
       return null;
     }
 
-    const priorityFeeUsdc = options.priorityFeeUsdc ?? 0;
-    const proceeds = this.position.size * signal.price - priorityFeeUsdc;
-    const cost = this.position.size * this.position.entryPrice;
+    const size = order.size;
+    const priorityFeeUsdc = order.priorityFeeUsdc;
+    const proceeds = size * order.price - priorityFeeUsdc;
+    const cost = size * this.position.entryPrice;
     const pnl = proceeds - cost;
 
     const trade: PaperTrade = {
-      pair: signal.pair,
+      pair: order.pair,
       side: "SELL",
-      price: signal.price,
-      size: this.position.size,
+      price: order.price,
+      size,
       realizedPnl: pnl,
-      at: signal.at,
+      at: order.at,
       simulated: true,
+      reason: order.reason,
     };
 
     this.cashUsdc = Math.max(0, proceeds);
     this.realizedPnl += pnl;
     this.position = {
-      pair: signal.pair,
+      pair: order.pair,
       side: "flat",
       size: 0,
       entryPrice: 0,

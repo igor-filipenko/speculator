@@ -1,6 +1,6 @@
 # Speculator
 
-TypeScript CLI bot for Solana swing / intraday **trade recommendations** (`BUY` / `SELL` / `HOLD`).
+TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
 - **OHLCV:** GeckoTerminal (candles for EMA/RSI)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
@@ -30,14 +30,15 @@ Edit `.env`:
 
 | Variable             | Meaning                                                              |
 | -------------------- | -------------------------------------------------------------------- |
-| `MODE`               | `signal` (default via `pnpm watch`) or `paper`                       |
-| `STRATEGY`           | `intraday` (15m EMA 9/21) or `swing` (4h EMA 12/26)                  |
+| `STRATEGY`           | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)  |
 | `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended           |
 | `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`) |
 | `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                      |
 | `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)  |
 | `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)         |
 | `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                             |
+
+Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
 
 ### Telegram (optional)
 
@@ -102,7 +103,7 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 
 | Flag              | Meaning                                                                |
 | ----------------- | ---------------------------------------------------------------------- |
-| `--days <n>`      | Lookback window (default **30** for intraday, **90** for swing)        |
+| `--days <n>`      | Lookback window (default **90** days)                                  |
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
 | `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
@@ -190,7 +191,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env` and `data/speculator.duckdb`.
+Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. `install-runtime` also preserves `data/speculator.duckdb`. `./deploy/deploy.sh` **stops** the service, then overwrites remote `data/speculator.duckdb` with the local file (and `.wal` if present).
 
 #### A. From the VPS (git clone + `install-runtime`)
 
@@ -268,8 +269,9 @@ git pull && pnpm install && pnpm build && \
 
 ```bash
 ./deploy/deploy.sh user@vps.example.com /opt/speculator
-ssh user@vps.example.com 'sudo systemctl restart speculator'
 ```
+
+The script stops `speculator`, copies runtime files and local `data/speculator.duckdb`, then starts the service again.
 
 Change `/opt/speculator` if you use another runtime path.
 
@@ -277,14 +279,29 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ## Strategy (v1)
 
-EMA crossover + RSI filter, one virtual long per pair (`flat → long → flat`):
+ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-| Mode       | Timeframe | EMA     | RSI filter                              |
-| ---------- | --------- | ------- | --------------------------------------- |
-| `intraday` | 15m       | 9 / 21  | BUY if RSI &lt; 70; SELL if RSI &gt; 30 |
-| `swing`    | 4h        | 12 / 26 | same                                    |
+### EMA trend (`ema-rsi`)
 
-Paper fills are **simulated** (no on-chain fees, slippage, or MEV).
+EMA crossover + RSI band + trend EMA + ADX regime filter:
+
+| Mode      | Timeframe | EMA     | Entry filters                               | ATR stop/trail | Cooldown |
+| --------- | --------- | ------- | ------------------------------------------- | -------------- | -------- |
+| `ema-rsi` | 4h        | 12 / 26 | RSI `[40, 60)`; close &gt; EMA 50; ADX ≥ 20 | 2× / 2.5×      | 2 bars   |
+
+Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from peak close. ADX does **not** block exits. Discretionary cross-SELL respects `minHoldBars` (1); protective stops still fire immediately.
+
+### Bollinger flat (`bollinger`)
+
+Mean-reversion for ranging markets (4h, BB period 20, stdDev 2). Buys only on **lower-band reclaim** with filters:
+
+| Mode        | Entry                                                                | Exit                         | ATR stop/trail | Cooldown | minHold |
+| ----------- | -------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
+| `bollinger` | reclaim lower; ADX ≤ 15; close &gt; EMA 50; (mid−lower)/close ≥ 1.5% | close ≥ BB mid (SMA), or ATR | 2.5× / 3×      | 4 bars   | 1 bar   |
+
+`/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
+
+Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
 ## Project layout
 
@@ -300,14 +317,20 @@ src/
   types.ts
   db/                      # DuckDB: candles, paper, signals
   market/gecko-terminal.ts
-  jupiter/client.ts
-  strategy/indicators.ts   # hand-rolled EMA/RSI
+  exchange/jupiter.ts      # live Exchange (Jupiter quote only)
+  exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
+  risk/risk-manager.ts     # SimpleRiskManager + RiskParams (ATR/cooldown)
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
   strategy/ema-rsi.ts
-  chart/ohlcv-svg.ts       # candle + EMA/RSI SVG for /chart
+  strategy/bollinger.ts
+  strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger)
+  strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
+  strategy/bollinger-svg.ts # BB SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
   engine/watch.ts
+  engine/backtest.ts
 ```

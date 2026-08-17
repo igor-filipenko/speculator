@@ -1,4 +1,4 @@
-import type { Candle, StrategyParams } from "../types.js";
+import type { Candle, Timeframe } from "../types.js";
 
 const GECKO_BASE = "https://api.geckoterminal.com/api/v2";
 /** Gecko often stalls on very large `limit` values; page in smaller chunks. */
@@ -19,7 +19,7 @@ interface GeckoOhlcvJson {
 }
 
 /** Map strategy timeframe to GeckoTerminal path + aggregate. */
-function geckoTimeframe(timeframe: StrategyParams["timeframe"]): {
+function geckoTimeframe(timeframe: Timeframe): {
   path: "minute" | "hour";
   aggregate: number;
 } {
@@ -30,7 +30,7 @@ function geckoTimeframe(timeframe: StrategyParams["timeframe"]): {
 }
 
 /** Seconds per candle for the strategy timeframe. */
-export function candleIntervalSeconds(timeframe: StrategyParams["timeframe"]): number {
+export function candleIntervalSeconds(timeframe: Timeframe): number {
   if (timeframe === "4h") {
     return 4 * 60 * 60;
   }
@@ -39,7 +39,7 @@ export function candleIntervalSeconds(timeframe: StrategyParams["timeframe"]): n
 
 export interface FetchCandlesOptions {
   poolAddress: string;
-  timeframe: StrategyParams["timeframe"];
+  timeframe: Timeframe;
   /** Number of candles to request (capped; Gecko stalls on large pages). */
   limit?: number;
   /** Return candles with open time strictly before this Unix timestamp (seconds). */
@@ -90,7 +90,7 @@ export async function fetchCandles(options: FetchCandlesOptions): Promise<Candle
 
 export interface FetchCandlesRangeOptions {
   poolAddress: string;
-  timeframe: StrategyParams["timeframe"];
+  timeframe: Timeframe;
   /** Inclusive lower bound (Unix seconds). Defaults to unbounded past. */
   fromTime?: number;
   /** Exclusive upper bound for paging cursor (Unix seconds). Defaults to now. */
@@ -207,7 +207,7 @@ export function mergeCandles(...series: Candle[][]): Candle[] {
 
 async function fetchCandlesPageForever(args: {
   poolAddress: string;
-  timeframe: StrategyParams["timeframe"];
+  timeframe: Timeframe;
   limit: number;
   beforeTimestamp: number;
   getTimeoutMs: () => number;

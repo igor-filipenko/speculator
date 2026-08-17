@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana swing/intraday trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, plus offline **backtest** replay with emulated fill costs.
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI or Bollinger on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, plus offline **backtest** replay with emulated fill costs.
 
 Build/run: [README.md](./README.md).
 
@@ -34,13 +34,18 @@ src/
     tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
-  jupiter/client.ts     # quote only (live paper/watch)
-  jupiter/emulated-quote.ts  # backtest fill cost model
+  exchange/jupiter.ts          # live Exchange (Jupiter quote only)
+  exchange/emulated-quote.ts   # backtest fill cost model
+  exchange/emulated-exchange.ts
   strategy/indicators.ts
   strategy/ema-rsi.ts
-  chart/ohlcv-svg.ts    # candle + EMA/RSI SVG for Telegram /chart
+  strategy/bollinger.ts
+  strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger)
+  risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command
+  strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
+  strategy/bollinger-svg.ts # Bollinger band SVG
   chart/render-png.ts   # SVG → PNG
-  paper/portfolio.ts
+  paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (DuckDB)
   notify/console.ts
   notify/telegram.ts    # optional alerts + inbound commands (grammY polling)
@@ -50,7 +55,8 @@ src/
 
 ## Conventions
 
-- Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, jupiter, engine).
+- Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
+- Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
 - Paper and backtest fills must be labeled **simulated** in logs; they are not real on-chain prices after fees/slippage.
 - One long position per pair: ignore BUY when already long; ignore SELL when flat.
 - When changing strategy defaults, update `.env.example` (and README) together.

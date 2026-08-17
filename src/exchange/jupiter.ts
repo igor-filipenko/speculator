@@ -1,3 +1,5 @@
+import type { Command, Exchange, Order, PairConfig } from "../types.js";
+
 export interface JupiterQuote {
   inputMint: string;
   outputMint: string;
@@ -8,22 +10,81 @@ export interface JupiterQuote {
   raw: unknown;
 }
 
-export interface JupiterClientOptions {
+export interface JupiterExchangeOptions {
   apiKey?: string;
   baseUrl?: string;
 }
 
 /**
- * Minimal Jupiter Swap API client (quote only).
+ * Live Jupiter Swap API exchange (quote only — no on-chain swaps).
  * Docs: https://developers.jup.ag/docs/swap/get-quote
  */
-export class JupiterClient {
+export class JupiterExchange implements Exchange {
   private readonly apiKey: string;
   private readonly baseUrl: string;
 
-  constructor(options: JupiterClientOptions = {}) {
+  constructor(options: JupiterExchangeOptions = {}) {
     this.apiKey = options.apiKey ?? "";
     this.baseUrl = options.baseUrl ?? "https://api.jup.ag";
+
+    if (!options.apiKey) {
+      console.warn("Warning: JUPITER_API_KEY is empty; quotes may fail or be rate-limited.");
+    }
+  }
+
+  async spotPrice(pair: PairConfig): Promise<number> {
+    const amount = 10n ** BigInt(pair.baseDecimals);
+    const q = await this.quote({
+      inputMint: pair.baseMint,
+      outputMint: pair.quoteMint,
+      amount,
+      inputDecimals: pair.baseDecimals,
+      outputDecimals: pair.quoteDecimals,
+    });
+    return q.price;
+  }
+
+  /**
+   * Simulate a fill at the current Jupiter spot (paper trading).
+   * Does not submit an on-chain swap.
+   */
+  async execute(command: Command, pair: PairConfig): Promise<Order> {
+    const price = await this.spotPrice(pair);
+    if (!(price > 0)) {
+      throw new Error(`JupiterExchange: invalid spot price ${price} for ${pair.symbol}`);
+    }
+
+    if (command.side === "BUY") {
+      const budget = command.quoteBudgetUsdc ?? 0;
+      if (budget <= 0) {
+        throw new Error(`JupiterExchange: BUY requires quoteBudgetUsdc > 0`);
+      }
+      return {
+        pair: command.pair,
+        side: "BUY",
+        price,
+        size: budget / price,
+        at: command.at,
+        simulated: true,
+        reason: command.reason,
+        priorityFeeUsdc: 0,
+      };
+    }
+
+    const size = command.baseSize ?? 0;
+    if (size <= 0) {
+      throw new Error(`JupiterExchange: SELL requires baseSize > 0`);
+    }
+    return {
+      pair: command.pair,
+      side: "SELL",
+      price,
+      size,
+      at: command.at,
+      simulated: true,
+      reason: command.reason,
+      priorityFeeUsdc: 0,
+    };
   }
 
   /**
@@ -85,25 +146,5 @@ export class JupiterClient {
       price: outUi / inUi,
       raw,
     };
-  }
-
-  /** Convenience: price of base mint in quote mint units. */
-  async spotPrice(params: {
-    baseMint: string;
-    quoteMint: string;
-    baseDecimals: number;
-    quoteDecimals: number;
-    /** Native base units to quote (default: 1 whole base token). */
-    amountNative?: bigint;
-  }): Promise<number> {
-    const amount = params.amountNative ?? 10n ** BigInt(params.baseDecimals);
-    const q = await this.quote({
-      inputMint: params.baseMint,
-      outputMint: params.quoteMint,
-      amount,
-      inputDecimals: params.baseDecimals,
-      outputDecimals: params.quoteDecimals,
-    });
-    return q.price;
   }
 }

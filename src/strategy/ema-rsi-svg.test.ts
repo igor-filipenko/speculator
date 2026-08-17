@@ -1,17 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, StrategyParams } from "../types.js";
-import { buildOhlcvSvg } from "./ohlcv-svg.js";
+import type { Candle } from "../types.js";
+import { emaRsiParamsFor } from "./ema-rsi.js";
+import { buildOhlcvSvg } from "./ema-rsi-svg.js";
 
-const strategy: StrategyParams = {
-  mode: "intraday",
-  timeframe: "15m",
-  emaFast: 9,
-  emaSlow: 21,
-  rsiPeriod: 14,
-  rsiBuyMax: 70,
-  rsiSellMin: 30,
-};
+const strategy = emaRsiParamsFor();
 
 function makeCandles(n: number): Candle[] {
   const out: Candle[] = [];
@@ -43,8 +36,8 @@ describe("buildOhlcvSvg", () => {
     });
     assert.ok(svg.includes("<svg"));
     assert.ok(svg.includes("SOL/USDC"));
-    assert.ok(svg.includes("EMA9"));
-    assert.ok(svg.includes("EMA21"));
+    assert.ok(svg.includes("EMA12"));
+    assert.ok(svg.includes("EMA26"));
     assert.ok(svg.includes("RSI14"));
     assert.ok(svg.length > 500);
   });

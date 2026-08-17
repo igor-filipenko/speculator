@@ -4,9 +4,9 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "intraday" | "swing";
+export type StrategyMode = "ema-rsi" | "bollinger" | "grid";
 
-export type RunMode = "signal" | "paper";
+export type Timeframe = "15m" | "4h";
 
 export interface Candle {
   /** Unix timestamp in seconds (candle open time). */
@@ -27,7 +27,17 @@ export interface Signal {
   meta?: {
     emaFast?: number;
     emaSlow?: number;
+    trendEma?: number;
     rsi?: number;
+    atr?: number;
+    adx?: number;
+    bbMid?: number;
+    bbUpper?: number;
+    bbLower?: number;
+    /** Last bar low (for ATR stop checks in risk). */
+    barLow?: number;
+    /** Last bar high (for trailing peak updates in risk). */
+    barHigh?: number;
   };
 }
 
@@ -51,14 +61,18 @@ export interface PairConfig {
   geckoPoolAddress: string;
 }
 
-export interface StrategyParams {
-  mode: StrategyMode;
-  timeframe: "15m" | "4h";
-  emaFast: number;
-  emaSlow: number;
-  rsiPeriod: number;
-  rsiBuyMax: number;
-  rsiSellMin: number;
+/** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */
+export interface RiskParams {
+  /** Bar size for cooldown / min-hold (usually matches strategy timeframe). */
+  timeframe: Timeframe;
+  /** Hard stop distance: entry − atrStopMult × ATR. */
+  atrStopMult: number;
+  /** Trailing stop from peak: peak − atrTrailMult × ATR. */
+  atrTrailMult: number;
+  /** Bars to wait after a SELL before allowing a new BUY. */
+  cooldownBars: number;
+  /** Bars to hold before allowing a discretionary (cross) SELL; stops still fire. */
+  minHoldBars: number;
 }
 
 export interface Trade {
@@ -70,6 +84,8 @@ export interface Trade {
   realizedPnl?: number;
   at: Date;
   simulated: true;
+  /** Strategy / risk reason (e.g. EMA cross or ATR stop). */
+  reason?: string;
 }
 
 export interface Snapshot {
@@ -81,18 +97,81 @@ export interface Snapshot {
   trades: Trade[];
 }
 
+/** Intent to trade after risk checks (not yet filled). */
+export interface Command {
+  pair: string;
+  side: "BUY" | "SELL";
+  reason: string;
+  at: Date;
+  /** Mid/spot hint from the signal before exchange costs. */
+  priceHint: number;
+  /** Quote (USDC) budget to spend on BUY. */
+  quoteBudgetUsdc?: number;
+  /** Base size to sell on SELL. */
+  baseSize?: number;
+}
+
+/** Simulated fill returned by an exchange. */
+export interface Order {
+  pair: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  at: Date;
+  simulated: true;
+  reason: string;
+  /** Network priority fee in USDC (0 for live paper quotes). */
+  priorityFeeUsdc: number;
+  /** Present for emulated (backtest) fills. */
+  fillCosts?: {
+    mid: number;
+    slippageUsdcPerBase: number;
+    poolFeeUsdcPerBase: number;
+  };
+}
+
 export interface Portfolio {
   getSnapshot(markPrice: number): Snapshot;
+  applyOrder(order: Order): Promise<Trade | null>;
+}
 
-  applySignal(signal: Signal): Promise<Trade | null>;
+export interface RequiredCandles {
+  timeframe: Timeframe;
+  count: number;
+}
+
+export interface Strategy {
+  getDisplayName(): string;
+  getMode(): StrategyMode;
+  getRiskParams(): RiskParams;
+  getRequiredCandles(): RequiredCandles;
+  evaluateSignal(
+    pair: string,
+    candles: Candle[],
+    price: number,
+    at: Date,
+    snapshot?: Snapshot,
+  ): Signal;
+  /** Strategy-owned OHLCV chart overlays. */
+  buildChartSvg(pair: string, candles: Candle[]): string;
+}
+
+/** Turns a strategy signal into a trade command using portfolio state. */
+export interface RiskManager {
+  check(signal: Signal, snapshot: Snapshot): Command | null;
+}
+
+/** Quote + simulated fill venue (live Jupiter or emulated backtest). */
+export interface Exchange {
+  spotPrice(pair: PairConfig): Promise<number>;
+  execute(command: Command, pair: PairConfig): Promise<Order | null>;
 }
 
 export interface ProgramState {
-  mode: RunMode;
-  strategy: StrategyParams;
-  lastSignals: Map<string, Signal>;
-  lastCandles: Map<string, Candle[]>;
-  portfolios: Map<string, Portfolio>;
+  readonly strategy: Strategy;
+  readonly lastSignals: Map<string, Signal>;
+  readonly lastCandles: Map<string, Candle[]>;
+  readonly portfolios: Map<string, Portfolio>;
 }
 
 export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

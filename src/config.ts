@@ -1,13 +1,12 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { getToken } from "./db/tokens.js";
-import type { PairConfig, RunMode, StrategyMode, StrategyParams } from "./types.js";
+import type { PairConfig, StrategyMode } from "./types.js";
 
 loadDotenv();
 
 const envSchema = z.object({
-  MODE: z.enum(["signal", "paper"]).default("signal"),
-  STRATEGY: z.enum(["intraday", "swing"]).default("intraday"),
+  STRATEGY: z.enum(["ema-rsi", "bollinger", "grid"]).default("ema-rsi"),
   JUPITER_API_KEY: z.string().optional().default(""),
   WATCHLIST: z.string().default("SOL/USDC"),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
@@ -22,7 +21,6 @@ export interface TelegramConfig {
 }
 
 export interface AppConfig {
-  mode: RunMode;
   strategy: StrategyMode;
   jupiterApiKey: string;
   watchlist: string[];
@@ -66,10 +64,7 @@ async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig
   };
 }
 
-export async function loadConfig(overrides?: {
-  mode?: RunMode;
-  dataDir?: string;
-}): Promise<AppConfig> {
+export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppConfig> {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -93,7 +88,6 @@ export async function loadConfig(overrides?: {
   const chatId = env.TELEGRAM_CHAT_ID.trim();
 
   const config: AppConfig = {
-    mode: overrides?.mode ?? env.MODE,
     strategy: env.STRATEGY,
     jupiterApiKey: env.JUPITER_API_KEY,
     watchlist,
@@ -107,28 +101,4 @@ export async function loadConfig(overrides?: {
   }
 
   return config;
-}
-
-export function strategyParams(mode: StrategyMode): StrategyParams {
-  if (mode === "swing") {
-    return {
-      mode: "swing",
-      timeframe: "4h",
-      emaFast: 12,
-      emaSlow: 26,
-      rsiPeriod: 14,
-      rsiBuyMax: 70,
-      rsiSellMin: 30,
-    };
-  }
-
-  return {
-    mode: "intraday",
-    timeframe: "15m",
-    emaFast: 9,
-    emaSlow: 21,
-    rsiPeriod: 14,
-    rsiBuyMax: 70,
-    rsiSellMin: 30,
-  };
 }

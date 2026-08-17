@@ -1,24 +1,28 @@
-import { loadConfig, strategyParams } from "./config.js";
+import { loadConfig } from "./config.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
+import { runPaper } from "./engine/paper.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
-import type { Candle, Portfolio, ProgramState, RunMode, ShutdownCb, Signal } from "./types.js";
+import { SimpleRiskManager } from "./risk/risk-manager.js";
+import { loadStrategy } from "./strategy/strategy.js";
+import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, StrategyMode } from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
-  pnpm watch     # MODE=signal (or override via CLI)
-  pnpm paper     # MODE=paper
+  pnpm watch     # signal recommendations only
+  pnpm paper     # recommendations + virtual portfolio
   pnpm backtest  # Replay OHLCV with emulated Jupiter fills
 
   tsx src/index.ts watch|paper [--once]
-  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--force-refresh]
+  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper)
-  --days <n>        Backtest lookback in days (default: 30 intraday / 90 swing)
+  --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
+  --strategy <name> Override strategy (ema-rsi | bollinger | grid; default: env STRATEGY)
   --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
 `);
   process.exit(1);
@@ -28,28 +32,54 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
 
-  if (command === "backtest") {
-    await runBacktestCommand(argv.slice(1));
-    return;
+  switch (command) {
+    case "backtest":
+      await runBacktestCommand(argv.slice(1));
+      return;
+    case "watch":
+      await runWatchCommand(argv.slice(1));
+      return;
+    case "paper":
+      await runPaperCommand(argv.slice(1));
+      return;
+    default:
+      usage();
   }
+}
 
+async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
+  const config = await loadConfig();
+  const strategy = loadStrategy(config.strategy);
+  const programState: ProgramState = {
+    strategy,
+    lastSignals: new Map<string, Signal>(),
+    lastCandles: new Map<string, Candle[]>(),
+    portfolios: new Map<string, Portfolio>(),
+  };
 
-  if (command !== "watch" && command !== "paper") {
-    usage();
-  }
+  const telegram = Telegram.start(once ? undefined : config.telegram, programState);
+  const shutdownCb: ShutdownCb = once
+    ? async (_reason, _exitCode) => {
+        /* --once: main returns after the single tick; no process.exit */
+      }
+    : installLifecycleNotifiers(telegram);
 
-  const mode: RunMode = command === "paper" ? "paper" : "signal";
-  const config = await loadConfig({ mode });
+  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
+}
 
-  const portfolios: Map<string, Portfolio> =
-    mode === "paper"
-      ? await PaperPortfolio.load(config.pairs, config.paperCashUsdc)
-      : new Map<string, Portfolio>();
+async function runPaperCommand(argv: string[]): Promise<void> {
+  const once = argv.includes("--once");
+  const config = await loadConfig();
+  const strategy = loadStrategy(config.strategy);
+  const risk = new SimpleRiskManager(strategy.getRiskParams());
+  const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
+    config.pairs,
+    config.paperCashUsdc,
+  );
 
   const programState: ProgramState = {
-    mode: config.mode,
-    strategy: strategyParams(config.strategy),
+    strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
     portfolios,
@@ -62,14 +92,33 @@ async function main(): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runWatch({ config, state: programState, telegram, once, shutdownCb });
+  await runPaper({
+    config,
+    strategy,
+    risk,
+    state: programState,
+    telegram,
+    once,
+    shutdownCb,
+  });
 }
+
+const VALID_STRATEGIES: StrategyMode[] = ["ema-rsi", "bollinger", "grid"];
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
-  const config = await loadConfig({ mode: "signal" });
+  const config = await loadConfig();
+
+  const strategyMode: StrategyMode = flags.strategy
+    ? validateStrategyFlag(flags.strategy)
+    : config.strategy;
+
+  const strategy = loadStrategy(strategyMode);
+  const risk = new SimpleRiskManager(strategy.getRiskParams());
   const results = await runBacktest({
     config,
+    strategy,
+    risk,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
@@ -77,8 +126,15 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
   });
 
   for (const result of results) {
-    printBacktestReport(result);
+    await printBacktestReport(result);
   }
+}
+
+function validateStrategyFlag(value: string): StrategyMode {
+  if (VALID_STRATEGIES.includes(value as StrategyMode)) {
+    return value as StrategyMode;
+  }
+  throw new Error(`Invalid --strategy "${value}". Valid options: ${VALID_STRATEGIES.join(", ")}`);
 }
 
 main().catch((err: unknown) => {

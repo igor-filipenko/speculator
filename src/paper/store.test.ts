@@ -21,12 +21,15 @@ describe("paper store (DuckDB)", () => {
 
   it("saves and loads a portfolio round-trip", async () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
-    const trade = portfolio.applySignalSync({
+    const trade = portfolio.applyOrderSync({
       pair: "SOL/USDC",
       side: "BUY",
       reason: "test buy",
       price: 100,
+      size: 10,
       at: new Date("2026-07-31T10:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
     });
     assert.ok(trade);
 
@@ -47,22 +50,28 @@ describe("paper store (DuckDB)", () => {
 
   it("upserting one pair does not erase another", async () => {
     const sol = new PaperPortfolio("SOL/USDC", 1000);
-    sol.applySignalSync({
+    sol.applyOrderSync({
       pair: "SOL/USDC",
       side: "BUY",
       reason: "sol buy",
       price: 100,
+      size: 10,
       at: new Date("2026-07-31T10:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
     });
     await savePaperState(new Map([["SOL/USDC", sol]]), dataDir);
 
     const other = new PaperPortfolio("BONK/USDC", 500);
-    other.applySignalSync({
+    other.applyOrderSync({
       pair: "BONK/USDC",
       side: "BUY",
       reason: "bonk buy",
       price: 0.00001,
+      size: 50_000_000,
       at: new Date("2026-07-31T11:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
     });
     await savePaperState(new Map([["BONK/USDC", other]]), dataDir);
 

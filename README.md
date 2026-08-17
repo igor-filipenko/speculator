@@ -191,7 +191,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env` and `data/speculator.duckdb`.
+Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. `install-runtime` also preserves `data/speculator.duckdb`. `./deploy/deploy.sh` **stops** the service, then overwrites remote `data/speculator.duckdb` with the local file (and `.wal` if present).
 
 #### A. From the VPS (git clone + `install-runtime`)
 
@@ -269,8 +269,9 @@ git pull && pnpm install && pnpm build && \
 
 ```bash
 ./deploy/deploy.sh user@vps.example.com /opt/speculator
-ssh user@vps.example.com 'sudo systemctl restart speculator'
 ```
+
+The script stops `speculator`, copies runtime files and local `data/speculator.duckdb`, then starts the service again.
 
 Change `/opt/speculator` if you use another runtime path.
 

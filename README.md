@@ -28,15 +28,18 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable             | Meaning                                                              |
-| -------------------- | -------------------------------------------------------------------- |
-| `STRATEGY`           | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)  |
-| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended           |
-| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`) |
-| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                      |
-| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)  |
-| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)         |
-| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                             |
+| Variable             | Meaning                                                                 |
+| -------------------- | ----------------------------------------------------------------------- |
+| `STRATEGY`           | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)     |
+| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended              |
+| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)    |
+| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                         |
+| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)     |
+| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)            |
+| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                |
+| `DUCKDB_MODE`        | `standalone` (default), `server`, or `client` — see DuckDB Modes        |
+| `DUCKDB_URL`         | Quack URI for server (bind) or client (connect), e.g. `quack:localhost` |
+| `DUCKDB_SECRET`      | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`  |
 
 Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
 
@@ -127,6 +130,42 @@ pnpm exec tsx src/index.ts paper --once
 ```
 
 Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+
+## DuckDB Modes
+
+By default (`DUCKDB_MODE=standalone`) every command opens `data/speculator.duckdb` directly. Two additional modes let you share a single database across multiple processes:
+
+| Mode         | What it does                                                                                                                                                                                                                                         |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `standalone` | Local file only — default, no network (existing behaviour).                                                                                                                                                                                          |
+| `server`     | Opens the local file **and** starts a [Quack](https://duckdb.org/docs/current/quack/overview.html) HTTP server. Any `paper`/`watch`/`backtest` command can serve simultaneously, or use the dedicated `pnpm database` command for a DB-only process. |
+| `client`     | Connects to a remote Quack server via `DUCKDB_URL`; no local file is opened. All SQL is forwarded transparently — no code changes needed.                                                                                                            |
+
+### Server process
+
+```bash
+# .env
+DUCKDB_MODE=server
+DUCKDB_URL=quack:localhost          # or quack:0.0.0.0:9494 for remote access
+DUCKDB_SECRET=change-me-strong-token
+```
+
+```bash
+pnpm database          # DB-only server (no trading engine)
+# or
+pnpm paper             # paper bot AND quack server in one process
+```
+
+### Client process
+
+```bash
+# .env on the client machine
+DUCKDB_MODE=client
+DUCKDB_URL=quack:db-host:9494
+DUCKDB_SECRET=change-me-strong-token
+```
+
+All `paper`/`watch`/`backtest` commands work unchanged. Quack is a [DuckDB core extension](https://duckdb.org/docs/current/core_extensions/quack.html) (beta in v1.5.3; stable scheduled for v2.0.0, Sept 2026) and is auto-installed on first use.
 
 ## Deploy (Ubuntu VPS + systemd)
 

@@ -9,11 +9,8 @@ dist-test/
 
 # Logs / local state
 *.log
-# Leftover legacy JSON state (now stored in data/speculator.duckdb)
-signals.jsonl
-paper-state.json
-data/ohlcv/
 data/speculator.duckdb
+data/speculator.duckdb.wal
 
 # OS / editor
 .DS_Store

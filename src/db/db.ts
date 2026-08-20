@@ -6,7 +6,43 @@ const DB_FILE = "speculator.duckdb";
 
 const DEFAULT_DATA_DIR = join(process.cwd(), "data");
 
-/** Cached connections keyed by absolute DB path. */
+type DuckDBMode = "standalone" | "server" | "client";
+
+function readMode(): DuckDBMode {
+  const raw = process.env["DUCKDB_MODE"] ?? "standalone";
+  if (raw === "standalone" || raw === "server" || raw === "client") return raw;
+  throw new Error(`Invalid DUCKDB_MODE "${raw}". Expected standalone | server | client.`);
+}
+
+function readUrl(): string {
+  return process.env["DUCKDB_URL"] ?? "quack:localhost";
+}
+
+function readSecret(): string {
+  const mode = readMode();
+  const secret = process.env["DUCKDB_SECRET"] ?? "";
+  if (mode === "server" || mode === "client") {
+    if (!secret) throw new Error("DUCKDB_SECRET is required when DUCKDB_MODE is server or client");
+    if (secret.includes("'")) throw new Error("DUCKDB_SECRET must not contain single quotes");
+  }
+  return secret;
+}
+
+/** `true` when the client should use TLS. Default is false (plain HTTP). */
+function readSsl(): boolean {
+  const raw = (process.env["DUCKDB_SSL"] ?? "false").trim().toLowerCase();
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0" || raw === "") return false;
+  throw new Error(`Invalid DUCKDB_SSL "${raw}". Expected true or false.`);
+}
+
+/** @internal Extract the host portion from a quack: URI (strips brackets for IPv6). */
+function parseQuackHost(url: string): string {
+  const stripped = url.replace(/^quack:\/\//, "").replace(/^quack:/, "");
+  return (stripped.split(":")[0] ?? "localhost").replace(/^\[/, "").replace(/\]$/, "");
+}
+
+/** Cached connections keyed by absolute DB path (standalone/server) or `client:<url>` (client). */
 const connections = new Map<string, Promise<DuckDBConnection>>();
 
 /** Path to the shared app DuckDB file. */
@@ -19,24 +55,143 @@ export function defaultDataDir(): string {
   return DEFAULT_DATA_DIR;
 }
 
-/** Open (or reuse) the shared speculator DuckDB and ensure schema exists. */
+/** Open (or reuse) the shared speculator DuckDB connection for the current DUCKDB_MODE. */
 export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckDBConnection> {
+  const mode = readMode();
+
+  if (mode === "client") {
+    const url = readUrl();
+    const cacheKey = `client:${url}`;
+    let pending = connections.get(cacheKey);
+    if (!pending) {
+      pending = openClientConnection(url, readSecret(), readSsl());
+      connections.set(cacheKey, pending);
+    }
+    return pending;
+  }
+
   await mkdir(dataDir, { recursive: true });
   const path = speculatorDbPath(dataDir);
-
   let pending = connections.get(path);
   if (!pending) {
-    pending = openConnection(path);
+    pending = openLocalConnection(path, mode);
     connections.set(path, pending);
   }
   return pending;
 }
 
-async function openConnection(path: string): Promise<DuckDBConnection> {
+async function openLocalConnection(
+  path: string,
+  mode: "standalone" | "server",
+): Promise<DuckDBConnection> {
   const instance = await DuckDBInstance.fromCache(path);
   const connection = await instance.connect();
   await initSchema(connection);
+  if (mode === "server") {
+    await startQuackServer(connection);
+  }
   return connection;
+}
+
+async function startQuackServer(connection: DuckDBConnection): Promise<void> {
+  const url = readUrl();
+  const secret = readSecret();
+  const host = parseQuackHost(url);
+  const isLocal = /^(localhost|127\.0\.0\.1|::1)$/i.test(host);
+
+  let sql = `CALL quack_serve('${url}', token => '${secret}'`;
+  if (!isLocal) sql += `, allow_other_hostname => true`;
+  sql += `)`;
+
+  const reader = await connection.runAndReadAll(sql);
+  await reader.readAll();
+  const row = reader.getRowObjectsJS()[0];
+  if (row) {
+    const listenUri = typeof row["listen_uri"] === "string" ? row["listen_uri"] : url;
+    console.log(`[db] Quack server listening at ${listenUri}`);
+  }
+}
+
+/** Render a bind value as a SQL literal for embedding inside quack_query. */
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Cannot bind non-finite number ${String(value)} to SQL`);
+    }
+    return String(value);
+  }
+  if (typeof value === "bigint") return String(value);
+  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
+  if (value instanceof Date) return `'${value.toISOString()}'`;
+  throw new Error(`Unsupported bind parameter type: ${typeof value}`);
+}
+
+/**
+ * Substitute DuckDB named parameters (`$symbol`, `$fromTime`) into SQL.
+ * Required because quack_query sends a string to the server — client bind
+ * values never reach the remote statement.
+ */
+function bindNamedParams(sql: string, values?: unknown): string {
+  if (values == null) return sql;
+  if (Array.isArray(values)) {
+    throw new Error("Client-mode quack_query proxy only supports named bind parameters");
+  }
+  if (typeof values !== "object") return sql;
+  const params = values as Record<string, unknown>;
+  const names = Object.keys(params).sort((a, b) => b.length - a.length);
+  let out = sql;
+  for (const name of names) {
+    out = out.replace(new RegExp(`\\$${name}\\b`, "g"), () => sqlLiteral(params[name]));
+  }
+  return out;
+}
+
+function wrapQuackQuery(url: string, sql: string, secret: string, ssl: boolean): string {
+  let tag = "qq";
+  while (sql.includes(`$${tag}$`)) tag += "q";
+  let query = `FROM quack_query('${url}', $${tag}$${sql}$${tag}$, token => '${secret}'`;
+  if (!ssl) query += `, disable_ssl => true`;
+  query += `)`;
+  return query;
+}
+
+async function openClientConnection(
+  url: string,
+  secret: string,
+  ssl: boolean,
+): Promise<DuckDBConnection> {
+  // DuckDB 1.5.x quack ATTACH hits a binder error on any server schema that contains
+  // column defaults with function calls (DEFAULT now(), DEFAULT nextval(...)).  The
+  // workaround is to skip ATTACH entirely and route every SQL statement through
+  // quack_query(), which sends the SQL to the server over HTTP and returns the result.
+  // A Proxy intercepts run() / runAndReadAll() so all existing callers are transparent.
+  const instance = await DuckDBInstance.create(":memory:");
+  const rawConn = await instance.connect();
+  await rawConn.run(`LOAD quack`);
+
+  return new Proxy(rawConn, {
+    get(target: DuckDBConnection, prop: string | symbol): unknown {
+      if (prop === "run") {
+        return async (sql: string, values?: unknown): Promise<void> => {
+          await target.runAndReadAll(
+            wrapQuackQuery(url, bindNamedParams(sql, values), secret, ssl),
+          );
+        };
+      }
+      if (prop === "runAndReadAll") {
+        return (sql: string, values?: unknown) =>
+          target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret, ssl));
+      }
+      // Delegate every other property / method to the underlying connection.
+      const val: unknown = Reflect.get(target, prop);
+      if (typeof val === "function") {
+        return (val as (this: DuckDBConnection) => unknown).bind(target);
+      }
+      return val;
+    },
+  });
 }
 
 /** Create schemas/tables if missing. Add future persistence tables here. */
@@ -131,7 +286,7 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
   `);
 }
 
-/** Close cached connection for tests (optional cleanup). */
+/** Clear cached connections (for tests). */
 export function resetSpeculatorDbCache(): void {
   connections.clear();
 }

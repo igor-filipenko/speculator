@@ -12,6 +12,7 @@
     "watch": "tsx src/index.ts watch",
     "paper": "tsx src/index.ts paper",
     "backtest": "tsx src/index.ts backtest",
+    "database": "tsx src/index.ts database",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
@@ -29,7 +30,7 @@
     ]
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.5-r.1",
+    "@duckdb/node-api": "1.5.5-r.4",
     "@neabyte/candlestick-cli": "1.1.2",
     "@resvg/resvg-js": "2.6.2",
     "dotenv": "^16.6.1",

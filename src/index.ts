@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.js";
+import { defaultDataDir, getSpeculatorDb } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { runWatch } from "./engine/watch.js";
@@ -10,9 +11,10 @@ import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, StrategyMode 
 
 function usage(): never {
   console.log(`Usage:
-  pnpm watch     # signal recommendations only
-  pnpm paper     # recommendations + virtual portfolio
-  pnpm backtest  # Replay OHLCV with emulated Jupiter fills
+  pnpm watch      # signal recommendations only
+  pnpm paper      # recommendations + virtual portfolio
+  pnpm backtest   # Replay OHLCV with emulated Jupiter fills
+  pnpm database   # Start DuckDB Quack server (requires DUCKDB_MODE=server in .env)
 
   tsx src/index.ts watch|paper [--once]
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh]
@@ -41,6 +43,9 @@ async function main(): Promise<void> {
       return;
     case "paper":
       await runPaperCommand(argv.slice(1));
+      return;
+    case "database":
+      await runDatabaseCommand();
       return;
     default:
       usage();
@@ -101,6 +106,40 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     once,
     shutdownCb,
   });
+}
+
+async function runDatabaseCommand(): Promise<void> {
+  const mode = process.env["DUCKDB_MODE"];
+  if (mode !== "server") {
+    console.error(
+      `pnpm database requires DUCKDB_MODE=server (current: ${mode ?? "standalone (default)"}). Set it in .env and restart.`,
+    );
+    process.exit(1);
+  }
+
+  const url = process.env["DUCKDB_URL"] ?? "quack:localhost";
+  const conn = await getSpeculatorDb(defaultDataDir());
+
+  let stopping = false;
+  const keepalive = setInterval(() => {
+    // keeps Node.js event loop alive while quack serves requests
+  }, 2_147_483_647);
+
+  const stop = async (reason: string, code: number): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(keepalive);
+    try {
+      await conn.run(`CALL quack_stop('${url}')`);
+    } catch {
+      // ignore: quack may already be stopped
+    }
+    console.log(`[database] Stopped (${reason})`);
+    process.exit(code);
+  };
+
+  process.once("SIGINT", () => void stop("SIGINT", 130));
+  process.once("SIGTERM", () => void stop("SIGTERM", 0));
 }
 
 const VALID_STRATEGIES: StrategyMode[] = ["ema-rsi", "bollinger", "grid"];

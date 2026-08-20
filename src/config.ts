@@ -5,15 +5,33 @@ import type { PairConfig, StrategyMode } from "./types.js";
 
 loadDotenv();
 
-const envSchema = z.object({
-  STRATEGY: z.enum(["ema-rsi", "bollinger", "grid"]).default("ema-rsi"),
-  JUPITER_API_KEY: z.string().optional().default(""),
-  WATCHLIST: z.string().default("SOL/USDC"),
-  POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
-  PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
-  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
-  TELEGRAM_CHAT_ID: z.string().optional().default(""),
-});
+const envSchema = z
+  .object({
+    STRATEGY: z.enum(["ema-rsi", "bollinger", "grid"]).default("ema-rsi"),
+    JUPITER_API_KEY: z.string().optional().default(""),
+    WATCHLIST: z.string().default("SOL/USDC"),
+    POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+    PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
+    TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+    TELEGRAM_CHAT_ID: z.string().optional().default(""),
+    DUCKDB_MODE: z.enum(["standalone", "server", "client"]).default("standalone"),
+    DUCKDB_URL: z.string().default("quack:localhost"),
+    DUCKDB_SECRET: z.string().default(""),
+    DUCKDB_SSL: z.preprocess(
+      (v) => {
+        if (v === undefined || v === null || v === "") return "false";
+        if (typeof v !== "string") return "false";
+        return v.trim().toLowerCase();
+      },
+      z.enum(["true", "false", "1", "0"]),
+    ),
+  })
+  .refine(
+    (data) =>
+      (data.DUCKDB_MODE !== "server" && data.DUCKDB_MODE !== "client") ||
+      data.DUCKDB_SECRET.length > 0,
+    { message: "DUCKDB_SECRET is required when DUCKDB_MODE is server or client" },
+  );
 
 export interface TelegramConfig {
   botToken: string;

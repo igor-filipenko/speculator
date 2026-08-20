@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { defaultDataDir, getSpeculatorDb } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
+import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
@@ -13,14 +14,15 @@ function usage(): never {
   console.log(`Usage:
   pnpm watch      # signal recommendations only
   pnpm paper      # recommendations + virtual portfolio
+  pnpm trade      # recommendations + live Jupiter swaps
   pnpm backtest   # Replay OHLCV with emulated Jupiter fills
   pnpm database   # Start DuckDB Quack server (requires DUCKDB_MODE=server in .env)
 
-  tsx src/index.ts watch|paper [--once]
+  tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh]
 
 Options:
-  --once            Run a single poll iteration and exit (watch/paper)
+  --once            Run a single poll iteration and exit (watch/paper/trade)
   --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
@@ -43,6 +45,9 @@ async function main(): Promise<void> {
       return;
     case "paper":
       await runPaperCommand(argv.slice(1));
+      return;
+    case "trade":
+      await runTradeCommand(argv.slice(1));
       return;
     case "database":
       await runDatabaseCommand();
@@ -101,6 +106,40 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     config,
     strategy,
     risk,
+    state: programState,
+    telegram,
+    once,
+    shutdownCb,
+  });
+}
+
+async function runTradeCommand(argv: string[]): Promise<void> {
+  const once = argv.includes("--once");
+  const config = await loadConfig();
+  const strategy = loadStrategy(config.strategy);
+  const risk = new SimpleRiskManager(strategy.getRiskParams());
+  const runtime = await createLiveRuntime(config);
+  console.log(`Wallet ${runtime.walletAddress}`);
+
+  const programState: ProgramState = {
+    strategy,
+    lastSignals: new Map<string, Signal>(),
+    lastCandles: new Map<string, Candle[]>(),
+    portfolios: runtime.portfolios,
+  };
+
+  const telegram = Telegram.start(once ? undefined : config.telegram, programState);
+  const shutdownCb: ShutdownCb = once
+    ? async (_reason, _exitCode) => {
+        /* --once: main returns after the single tick; no process.exit */
+      }
+    : installLifecycleNotifiers(telegram);
+
+  await runTrade({
+    config,
+    strategy,
+    risk,
+    exchange: runtime.exchange,
     state: programState,
     telegram,
     once,

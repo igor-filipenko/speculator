@@ -4,8 +4,8 @@ TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`
 
 - **OHLCV:** GeckoTerminal (candles for EMA/RSI)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
+- **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
-- **v1 scope:** signals + optional paper portfolio + backtest (no live swaps)
 
 See [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
 
@@ -28,32 +28,36 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable             | Meaning                                                                 |
-| -------------------- | ----------------------------------------------------------------------- |
-| `STRATEGY`           | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)     |
-| `JUPITER_API_KEY`    | From [portal.jup.ag](https://portal.jup.ag/) — recommended              |
-| `WATCHLIST`          | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)    |
-| `POLL_INTERVAL_MS`   | Poll interval (default `60000`)                                         |
-| `PAPER_CASH_USDC`    | Starting virtual USDC for paper mode (when no paper rows in DuckDB)     |
-| `TELEGRAM_BOT_TOKEN` | Optional bot token from [@BotFather](https://t.me/BotFather)            |
-| `TELEGRAM_CHAT_ID`   | Optional chat id for alerts and commands                                |
-| `DUCKDB_MODE`        | `standalone` (default), `server`, or `client` — see DuckDB Modes        |
-| `DUCKDB_URL`         | Quack URI for server (bind) or client (connect), e.g. `quack:localhost` |
-| `DUCKDB_SECRET`      | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`  |
-| `DUCKDB_SSL`         | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)  |
+| Variable               | Meaning                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| `STRATEGY`             | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)            |
+| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                     |
+| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)           |
+| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                |
+| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when no paper rows in DuckDB)            |
+| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo |
+| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)       |
+| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                           |
+| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                         |
+| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                   |
+| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                       |
+| `DUCKDB_MODE`          | `standalone` (default), `server`, or `client` — see DuckDB Modes               |
+| `DUCKDB_URL`           | Quack URI for server (bind) or client (connect), e.g. `quack:localhost`        |
+| `DUCKDB_SECRET`        | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`         |
+| `DUCKDB_SSL`           | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)         |
 
-Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
+Mode is selected by CLI: `pnpm watch` (signals only), `pnpm paper` (signals + virtual portfolio), or `pnpm trade` (signals + live Jupiter swaps).
 
 ### Telegram (optional)
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                     |
-| ------------ | ----------------------------------------- |
-| `/start`     | Greeting and command list                 |
-| `/report`    | Last signal per pair (including HOLD)     |
-| `/chart`     | OHLCV candle chart with EMA/RSI           |
-| `/portfolio` | Current paper portfolio (paper mode only) |
+| Command      | Reply                                 |
+| ------------ | ------------------------------------- |
+| `/start`     | Greeting and command list             |
+| `/report`    | Last signal per pair (including HOLD) |
+| `/chart`     | OHLCV candle chart with EMA/RSI       |
+| `/portfolio` | Current paper or live portfolio       |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -80,7 +84,7 @@ Compile to `dist/`:
 pnpm build
 ```
 
-Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
+Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `trade` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
 
 ## Run
 
@@ -95,6 +99,14 @@ Paper trading (virtual long-only portfolio, simulated fills from Jupiter quotes)
 ```bash
 pnpm paper
 ```
+
+Live trading (on-chain Jupiter swaps; spends real tokens):
+
+```bash
+pnpm trade
+```
+
+Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `live.portfolios` / `live.trades` with the transaction signature.
 
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
 
@@ -128,9 +140,10 @@ Single iteration (smoke test):
 ```bash
 pnpm exec tsx src/index.ts watch --once
 pnpm exec tsx src/index.ts paper --once
+pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
 
 ## DuckDB Modes
 
@@ -342,7 +355,7 @@ Mean-reversion for ranging markets (4h, BB period 20, stdDev 2). Buys only on **
 
 `/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
 
-Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
+Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
 ## Project layout
 
@@ -356,22 +369,28 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, paper, signals
+  db/                      # DuckDB: candles, paper, live, signals
   market/gecko-terminal.ts
-  exchange/jupiter.ts      # live Exchange (Jupiter quote only)
+  exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
+  exchange/jupiter-swap.ts # live Swap API V2 order + execute
+  exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # SimpleRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
   strategy/ema-rsi.ts
   strategy/bollinger.ts
-  strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger)
+  strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger | grid)
   strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
   strategy/bollinger-svg.ts # BB SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)
+  live/portfolio.ts        # on-chain cash/size + ledger
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
+  engine/tick.ts           # shared paper/trade poll loop
   engine/watch.ts
+  engine/paper.ts
+  engine/trade.ts
   engine/backtest.ts
 ```

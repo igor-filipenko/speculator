@@ -20,6 +20,7 @@ function flatSnapshot(entryPrice = 0): Snapshot {
     realizedPnl: 0,
     equity: 100,
     trades: [],
+    simulated: true,
   };
 }
 
@@ -30,6 +31,7 @@ function longSnapshot(entryPrice: number): Snapshot {
     realizedPnl: 0,
     equity: entryPrice,
     trades: [],
+    simulated: true,
   };
 }
 

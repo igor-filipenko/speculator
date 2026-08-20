@@ -14,8 +14,15 @@ export function logSignal(signal: Signal): void {
 export function logTrade(trade: Trade): void {
   const pnl = trade.realizedPnl != null ? ` realizedPnl=${trade.realizedPnl.toFixed(4)} USDC` : "";
   const reason = trade.reason ? ` — ${trade.reason}` : "";
+  const sig = trade.txSignature != null ? ` sig=${trade.txSignature}` : "";
+  if (trade.simulated) {
+    console.log(
+      `  → PAPER ${trade.side} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)} (simulated)${pnl}${reason}`,
+    );
+    return;
+  }
   console.log(
-    `  → PAPER ${trade.side} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)} (simulated)${pnl}${reason}`,
+    `  → LIVE ${trade.side} size=${trade.size.toFixed(6)} @ ${trade.price.toFixed(6)}${sig}${pnl}${reason}`,
   );
 }
 
@@ -24,8 +31,9 @@ export function logSnapshot(snapshot: Snapshot): void {
     snapshot.position.side === "long"
       ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
       : "flat";
+  const label = snapshot.simulated ? "paper" : "live";
   console.log(
-    `  paper cash=${snapshot.cashUsdc.toFixed(4)} USDC | position=${pos} | equity=${snapshot.equity.toFixed(4)} | realizedPnl=${snapshot.realizedPnl.toFixed(4)}`,
+    `  ${label} cash=${snapshot.cashUsdc.toFixed(4)} USDC | position=${pos} | equity=${snapshot.equity.toFixed(4)} | realizedPnl=${snapshot.realizedPnl.toFixed(4)}`,
   );
 }
 

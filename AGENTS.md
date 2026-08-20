@@ -4,52 +4,61 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI or Bollinger on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, plus offline **backtest** replay with emulated fill costs.
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI or Bollinger on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
 
 Build/run: [README.md](./README.md).
 
-## Hard constraints (v1)
+## Hard constraints
 
-- **Do not** add live Jupiter swaps, wallet signing, Executor/dry-run layers, or `TradeIntent` unless the user explicitly expands scope.
-- Candle-replay **backtest** (`pnpm backtest`) is in scope: Gecko OHLCV + DuckDB cache (`data/speculator.duckdb`) + Jupiter-like fee/slippage emulation. Do not call live Jupiter during backtest.
+- Live Jupiter swaps and wallet signing are in scope for **`pnpm trade` only**. Paper and watch stay quote-only; backtest must not call live Jupiter.
+- Candle-replay **backtest** (`pnpm backtest`): Gecko OHLCV + DuckDB cache (`data/speculator.duckdb`) + Jupiter-like fee/slippage emulation.
 - **Do not** add shorts, leverage, or multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
 - Comments and user-facing docs in this repo are **English**.
 - Format with **Prettier** (`pnpm format`); `pnpm check` includes `format:check`. Prefer the Prettier VS Code/Cursor extension (format on save is enabled in `.vscode/settings.json`).
-- Keep the dependency surface small: prefer `fetch` + zod + tsx + `@duckdb/node-api`; `grammy` is allowed for optional Telegram notify/commands. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
-- Never commit secrets (`.env`, private keys). Use `.env.example` only.
+- Keep the dependency surface small: prefer `fetch` + zod + tsx + `@duckdb/node-api`; `grammy` is allowed for optional Telegram notify/commands; `@solana/web3.js` is allowed for live keypair signing and RPC balances. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
+- Never commit secrets (`.env`, private keys, keypair JSON). Use `.env.example` only.
 
 ## Layout
 
 ```
 src/
-  index.ts              # CLI entry: watch | paper | backtest
+  index.ts              # CLI entry: watch | paper | trade | backtest
   config.ts             # zod + dotenv
-  types.ts              # Candle, Signal, Position
+  types.ts              # Candle, Signal, Position, Order, Trade
   db/
-    speculator-db.ts    # shared DuckDB bootstrap (data/speculator.duckdb)
+    db.ts               # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
     paper.ts            # paper.portfolios / paper.trades
+    live.ts             # live.portfolios / live.trades
     signals.ts          # signals history
     tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
-  exchange/jupiter.ts          # live Exchange (Jupiter quote only)
+  exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
+  exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)
+  exchange/wallet.ts           # JSON keypair load + RPC balances
+  exchange/amounts.ts          # atomic units, SOL reserve, fill math
   exchange/emulated-quote.ts   # backtest fill cost model
   exchange/emulated-exchange.ts
   strategy/indicators.ts
   strategy/ema-rsi.ts
   strategy/bollinger.ts
-  strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger)
+  strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger | grid)
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command
   strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
   strategy/bollinger-svg.ts # Bollinger band SVG
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (DuckDB)
+  live/portfolio.ts     # on-chain cash/size + ledger entry/PnL
+  live/store.ts         # live persisted shapes
   notify/console.ts
   notify/telegram.ts    # optional alerts + inbound commands (grammY polling)
+  engine/tick.ts        # shared poll loop (paper + trade)
   engine/watch.ts
+  engine/paper.ts
+  engine/trade.ts
   engine/backtest.ts    # offline candle replay
 ```
 
@@ -57,7 +66,7 @@ src/
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
 - Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
-- Paper and backtest fills must be labeled **simulated** in logs; they are not real on-chain prices after fees/slippage.
+- Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One long position per pair: ignore BUY when already long; ignore SELL when flat.
 - When changing strategy defaults, update `.env.example` (and README) together.
 - After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0`).
@@ -65,6 +74,6 @@ src/
 
 ## Security
 
-- Treat `JUPITER_API_KEY` and `TELEGRAM_BOT_TOKEN` as secrets.
-- Do not introduce code paths that load or log private keys in v1.
+- Treat `JUPITER_API_KEY`, `TELEGRAM_BOT_TOKEN`, and the wallet keypair as secrets.
+- Never log private key bytes or keypair file contents; log only the public key.
 - Prefer high-trust, maintained packages; avoid adding deps with known high/critical CVEs.

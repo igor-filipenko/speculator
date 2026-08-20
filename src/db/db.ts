@@ -104,6 +104,48 @@ async function startQuackServer(connection: DuckDBConnection): Promise<void> {
   }
 }
 
+/** Render a bind value as a SQL literal for embedding inside quack_query. */
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Cannot bind non-finite number ${String(value)} to SQL`);
+    }
+    return String(value);
+  }
+  if (typeof value === "bigint") return String(value);
+  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
+  if (value instanceof Date) return `'${value.toISOString()}'`;
+  throw new Error(`Unsupported bind parameter type: ${typeof value}`);
+}
+
+/**
+ * Substitute DuckDB named parameters (`$symbol`, `$fromTime`) into SQL.
+ * Required because quack_query sends a string to the server — client bind
+ * values never reach the remote statement.
+ */
+function bindNamedParams(sql: string, values?: unknown): string {
+  if (values == null) return sql;
+  if (Array.isArray(values)) {
+    throw new Error("Client-mode quack_query proxy only supports named bind parameters");
+  }
+  if (typeof values !== "object") return sql;
+  const params = values as Record<string, unknown>;
+  const names = Object.keys(params).sort((a, b) => b.length - a.length);
+  let out = sql;
+  for (const name of names) {
+    out = out.replace(new RegExp(`\\$${name}\\b`, "g"), () => sqlLiteral(params[name]));
+  }
+  return out;
+}
+
+function wrapQuackQuery(url: string, sql: string, secret: string): string {
+  let tag = "qq";
+  while (sql.includes(`$${tag}$`)) tag += "q";
+  return `FROM quack_query('${url}', $${tag}$${sql}$${tag}$, token => '${secret}')`;
+}
+
 async function openClientConnection(url: string, secret: string): Promise<DuckDBConnection> {
   // DuckDB 1.5.x quack ATTACH hits a binder error on any server schema that contains
   // column defaults with function calls (DEFAULT now(), DEFAULT nextval(...)).  The
@@ -114,20 +156,16 @@ async function openClientConnection(url: string, secret: string): Promise<DuckDB
   const rawConn = await instance.connect();
   await rawConn.run(`LOAD quack`);
 
-  function quackQuerySql(sql: string): string {
-    // Embed sql inside a SQL string literal: escape single quotes by doubling them.
-    return `FROM quack_query('${url}', '${sql.replace(/'/g, "''")}', token => '${secret}')`;
-  }
-
   return new Proxy(rawConn, {
     get(target: DuckDBConnection, prop: string | symbol): unknown {
       if (prop === "run") {
-        return async (sql: string): Promise<void> => {
-          await target.runAndReadAll(quackQuerySql(sql));
+        return async (sql: string, values?: unknown): Promise<void> => {
+          await target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret));
         };
       }
       if (prop === "runAndReadAll") {
-        return (sql: string) => target.runAndReadAll(quackQuerySql(sql));
+        return (sql: string, values?: unknown) =>
+          target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret));
       }
       // Delegate every other property / method to the underlying connection.
       const val: unknown = Reflect.get(target, prop);

@@ -185,6 +185,18 @@ describe("client mode — integration", () => {
     assert.ok(Number(row["n"]) >= 4, "client should see seeded tokens via remote schema");
   });
 
+  it("binds named parameters through the proxy (getToken-style $symbol)", async () => {
+    const conn = await getSpeculatorDb();
+    const reader = await conn.runAndReadAll(
+      `SELECT count(*)::BIGINT AS n FROM candles WHERE symbol = $symbol`,
+      { symbol: "TEST/USDC" },
+    );
+    await reader.readAll();
+    const row = reader.getRowObjectsJS()[0];
+    assert.ok(row, "expected a result row");
+    assert.equal(Number(row["n"]), 1, "named $symbol bind should reach the remote query");
+  });
+
   it("writes candles through the proxy and reads them back", async () => {
     const conn = await getSpeculatorDb();
     await conn.run(

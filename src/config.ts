@@ -17,6 +17,14 @@ const envSchema = z
     DUCKDB_MODE: z.enum(["standalone", "server", "client"]).default("standalone"),
     DUCKDB_URL: z.string().default("quack:localhost"),
     DUCKDB_SECRET: z.string().default(""),
+    DUCKDB_SSL: z.preprocess(
+      (v) => {
+        if (v === undefined || v === null || v === "") return "false";
+        if (typeof v !== "string") return "false";
+        return v.trim().toLowerCase();
+      },
+      z.enum(["true", "false", "1", "0"]),
+    ),
   })
   .refine(
     (data) =>

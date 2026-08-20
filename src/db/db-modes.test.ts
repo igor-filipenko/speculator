@@ -29,7 +29,7 @@ function restoreEnv(snap: EnvSnapshot): void {
   }
 }
 
-const ENV_KEYS = ["DUCKDB_MODE", "DUCKDB_URL", "DUCKDB_SECRET"] as const;
+const ENV_KEYS = ["DUCKDB_MODE", "DUCKDB_URL", "DUCKDB_SECRET", "DUCKDB_SSL"] as const;
 
 // ---------------------------------------------------------------------------
 // standalone mode

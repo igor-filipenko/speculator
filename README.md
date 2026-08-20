@@ -40,6 +40,7 @@ Edit `.env`:
 | `DUCKDB_MODE`        | `standalone` (default), `server`, or `client` — see DuckDB Modes        |
 | `DUCKDB_URL`         | Quack URI for server (bind) or client (connect), e.g. `quack:localhost` |
 | `DUCKDB_SECRET`      | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`  |
+| `DUCKDB_SSL`         | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)  |
 
 Mode is selected by CLI: `pnpm watch` (signals only) or `pnpm paper` (signals + virtual portfolio).
 
@@ -163,6 +164,7 @@ pnpm paper             # paper bot AND quack server in one process
 DUCKDB_MODE=client
 DUCKDB_URL=quack:db-host:9494
 DUCKDB_SECRET=change-me-strong-token
+DUCKDB_SSL=false                    # default; set true to require TLS
 ```
 
 All `paper`/`watch`/`backtest` commands work unchanged. Quack is a [DuckDB core extension](https://duckdb.org/docs/current/core_extensions/quack.html) (beta in v1.5.3; stable scheduled for v2.0.0, Sept 2026) and is auto-installed on first use.

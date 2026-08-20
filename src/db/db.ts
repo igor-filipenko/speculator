@@ -28,6 +28,14 @@ function readSecret(): string {
   return secret;
 }
 
+/** `true` when the client should use TLS. Default is false (plain HTTP). */
+function readSsl(): boolean {
+  const raw = (process.env["DUCKDB_SSL"] ?? "false").trim().toLowerCase();
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0" || raw === "") return false;
+  throw new Error(`Invalid DUCKDB_SSL "${raw}". Expected true or false.`);
+}
+
 /** @internal Extract the host portion from a quack: URI (strips brackets for IPv6). */
 function parseQuackHost(url: string): string {
   const stripped = url.replace(/^quack:\/\//, "").replace(/^quack:/, "");
@@ -56,7 +64,7 @@ export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckD
     const cacheKey = `client:${url}`;
     let pending = connections.get(cacheKey);
     if (!pending) {
-      pending = openClientConnection(url, readSecret());
+      pending = openClientConnection(url, readSecret(), readSsl());
       connections.set(cacheKey, pending);
     }
     return pending;
@@ -140,13 +148,20 @@ function bindNamedParams(sql: string, values?: unknown): string {
   return out;
 }
 
-function wrapQuackQuery(url: string, sql: string, secret: string): string {
+function wrapQuackQuery(url: string, sql: string, secret: string, ssl: boolean): string {
   let tag = "qq";
   while (sql.includes(`$${tag}$`)) tag += "q";
-  return `FROM quack_query('${url}', $${tag}$${sql}$${tag}$, token => '${secret}')`;
+  let query = `FROM quack_query('${url}', $${tag}$${sql}$${tag}$, token => '${secret}'`;
+  if (!ssl) query += `, disable_ssl => true`;
+  query += `)`;
+  return query;
 }
 
-async function openClientConnection(url: string, secret: string): Promise<DuckDBConnection> {
+async function openClientConnection(
+  url: string,
+  secret: string,
+  ssl: boolean,
+): Promise<DuckDBConnection> {
   // DuckDB 1.5.x quack ATTACH hits a binder error on any server schema that contains
   // column defaults with function calls (DEFAULT now(), DEFAULT nextval(...)).  The
   // workaround is to skip ATTACH entirely and route every SQL statement through
@@ -160,12 +175,14 @@ async function openClientConnection(url: string, secret: string): Promise<DuckDB
     get(target: DuckDBConnection, prop: string | symbol): unknown {
       if (prop === "run") {
         return async (sql: string, values?: unknown): Promise<void> => {
-          await target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret));
+          await target.runAndReadAll(
+            wrapQuackQuery(url, bindNamedParams(sql, values), secret, ssl),
+          );
         };
       }
       if (prop === "runAndReadAll") {
         return (sql: string, values?: unknown) =>
-          target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret));
+          target.runAndReadAll(wrapQuackQuery(url, bindNamedParams(sql, values), secret, ssl));
       }
       // Delegate every other property / method to the underlying connection.
       const val: unknown = Reflect.get(target, prop);

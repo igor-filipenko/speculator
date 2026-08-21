@@ -13,6 +13,7 @@ import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, StrategyMode 
 
 function usage(): never {
   console.log(`Usage:
+  pnpm start      # engine from MODE in .env (watch | paper | trade | database)
   pnpm watch      # signal recommendations only
   pnpm paper      # recommendations + virtual portfolio
   pnpm trade      # recommendations + live Jupiter swaps
@@ -35,22 +36,53 @@ Options:
   process.exit(1);
 }
 
+const ENGINE_MODES = ["watch", "paper", "trade", "database"] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest"] as const;
+
+type CliCommand = (typeof CLI_COMMANDS)[number];
+
+function isCliCommand(value: string): value is CliCommand {
+  return (CLI_COMMANDS as readonly string[]).includes(value);
+}
+
+function isEngineMode(value: string): value is (typeof ENGINE_MODES)[number] {
+  return (ENGINE_MODES as readonly string[]).includes(value);
+}
+
+/** CLI subcommand wins; otherwise MODE from env (default paper). */
+function resolveCommand(argv: string[]): { command: CliCommand; rest: string[] } {
+  const first = argv[0];
+  if (first !== undefined && isCliCommand(first)) {
+    return { command: first, rest: argv.slice(1) };
+  }
+  if (first !== undefined && !first.startsWith("-")) {
+    usage();
+  }
+
+  const mode = (process.env["MODE"] ?? "paper").trim();
+  if (!isEngineMode(mode)) {
+    console.error(`Invalid MODE "${mode}". Expected watch | paper | trade | database.`);
+    usage();
+  }
+  return { command: mode, rest: argv };
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const command = argv[0];
+  const { command, rest } = resolveCommand(argv);
 
   switch (command) {
     case "backtest":
-      await runBacktestCommand(argv.slice(1));
+      await runBacktestCommand(rest);
       return;
     case "watch":
-      await runWatchCommand(argv.slice(1));
+      await runWatchCommand(rest);
       return;
     case "paper":
-      await runPaperCommand(argv.slice(1));
+      await runPaperCommand(rest);
       return;
     case "trade":
-      await runTradeCommand(argv.slice(1));
+      await runTradeCommand(rest);
       return;
     case "wallet":
       await runWalletCommand();
@@ -58,8 +90,6 @@ async function main(): Promise<void> {
     case "database":
       await runDatabaseCommand();
       return;
-    default:
-      usage();
   }
 }
 

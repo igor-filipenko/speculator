@@ -15,6 +15,7 @@
     "wallet": "tsx src/index.ts wallet",
     "backtest": "tsx src/index.ts backtest",
     "database": "tsx src/index.ts database",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",

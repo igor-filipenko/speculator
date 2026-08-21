@@ -23,7 +23,7 @@ Build/run: [README.md](./README.md).
 
 ```
 src/
-  index.ts              # CLI entry: watch | paper | trade | wallet | backtest
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/

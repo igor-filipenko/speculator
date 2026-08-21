@@ -28,25 +28,32 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable               | Meaning                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `STRATEGY`             | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)            |
-| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                     |
-| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)           |
-| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                |
-| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when no paper rows in DuckDB)            |
-| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo |
-| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)       |
-| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                           |
-| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                         |
-| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                   |
-| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                       |
-| `DUCKDB_MODE`          | `standalone` (default), `server`, or `client` — see DuckDB Modes               |
-| `DUCKDB_URL`           | Quack URI for server (bind) or client (connect), e.g. `quack:localhost`        |
-| `DUCKDB_SECRET`        | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`         |
-| `DUCKDB_SSL`           | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)         |
+| Variable               | Meaning                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| `STRATEGY`             | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)                    |
+| `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` \| `database` (default `paper`) |
+| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                             |
+| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)                   |
+| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                        |
+| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when no paper rows in DuckDB)                    |
+| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo         |
+| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)               |
+| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                                   |
+| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                                 |
+| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                           |
+| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                               |
+| `DUCKDB_MODE`          | `standalone` (default), `server`, or `client` — see DuckDB Modes                       |
+| `DUCKDB_URL`           | Quack URI for server (bind) or client (connect), e.g. `quack:localhost`                |
+| `DUCKDB_SECRET`        | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`                 |
+| `DUCKDB_SSL`           | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)                 |
 
-Mode is selected by CLI: `pnpm watch` (signals only), `pnpm paper` (signals + virtual portfolio), `pnpm trade` (signals + live Jupiter swaps), or `pnpm wallet` (live portfolio snapshot).
+Set `MODE` in `.env` (`watch` | `paper` | `trade` | `database`), then:
+
+```bash
+pnpm start
+```
+
+Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot).
 
 ### Telegram (optional)
 
@@ -87,6 +94,12 @@ pnpm build
 Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `trade` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
 
 ## Run
+
+Engine from `MODE` in `.env` (default `paper`):
+
+```bash
+pnpm start
+```
 
 Recommendations only (forces signal mode):
 
@@ -240,7 +253,7 @@ sudo systemctl enable --now speculator
 sudo systemctl status speculator
 ```
 
-The unit defaults to **`pnpm paper`**. For signals only, change `ExecStart` to `/usr/bin/pnpm watch`.
+The unit reads `MODE` from `.env` (default **`paper`**). For signals only, set `MODE=watch`.
 
 ### Alternative: runtime install under `/opt/speculator`
 

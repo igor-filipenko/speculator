@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+      "solanaMcp": {
+        "url": "https://mcp.solana.com/mcp"
+      },  
+      "jupiter": {
+        "url": "https://developers.jup.ag/docs/mcp"
+      },
+      "helius": {
+        "command": "npx",
+        "args": ["helius-mcp@latest"]
+      }
+    }
+  }

@@ -12,6 +12,7 @@
     "watch": "tsx src/index.ts watch",
     "paper": "tsx src/index.ts paper",
     "trade": "tsx src/index.ts trade",
+    "wallet": "tsx src/index.ts wallet",
     "backtest": "tsx src/index.ts backtest",
     "database": "tsx src/index.ts database",
     "typecheck": "tsc --noEmit",

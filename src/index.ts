@@ -3,6 +3,7 @@ import { defaultDataDir, getSpeculatorDb } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
+import { runWallet } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
@@ -15,10 +16,12 @@ function usage(): never {
   pnpm watch      # signal recommendations only
   pnpm paper      # recommendations + virtual portfolio
   pnpm trade      # recommendations + live Jupiter swaps
+  pnpm wallet     # sync live portfolio from chain and print balances
   pnpm backtest   # Replay OHLCV with emulated Jupiter fills
   pnpm database   # Start DuckDB Quack server (requires DUCKDB_MODE=server in .env)
 
   tsx src/index.ts watch|paper|trade [--once]
+  tsx src/index.ts wallet
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh]
 
 Options:
@@ -48,6 +51,9 @@ async function main(): Promise<void> {
       return;
     case "trade":
       await runTradeCommand(argv.slice(1));
+      return;
+    case "wallet":
+      await runWalletCommand();
       return;
     case "database":
       await runDatabaseCommand();
@@ -145,6 +151,11 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     once,
     shutdownCb,
   });
+}
+
+async function runWalletCommand(): Promise<void> {
+  const config = await loadConfig();
+  await runWallet(config);
 }
 
 async function runDatabaseCommand(): Promise<void> {

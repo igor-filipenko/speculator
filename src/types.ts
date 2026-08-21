@@ -138,8 +138,8 @@ export interface Order {
 export interface Portfolio {
   getSnapshot(markPrice: number): Snapshot;
   applyOrder(order: Order): Promise<Trade | null>;
-  /** Refresh on-chain balances before sizing (live portfolios only). */
-  syncFromChain?(markPrice: number): Promise<void>;
+  /** Refresh on-chain balances before sizing. Paper is a no-op. */
+  syncFromChain(markPrice: number): Promise<void>;
 }
 
 export interface RequiredCandles {

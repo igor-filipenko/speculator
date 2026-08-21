@@ -104,7 +104,7 @@ export async function processPair(args: {
   const price = await exchange.spotPrice(pair);
 
   const portfolio = portfolios.get(pair.symbol);
-  if (portfolio?.syncFromChain) {
+  if (portfolio) {
     await portfolio.syncFromChain(price);
   }
 

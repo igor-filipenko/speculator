@@ -23,7 +23,7 @@ Build/run: [README.md](./README.md).
 
 ```
 src/
-  index.ts              # CLI entry: watch | paper | trade | backtest
+  index.ts              # CLI entry: watch | paper | trade | wallet | backtest
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/
@@ -59,6 +59,7 @@ src/
   engine/watch.ts
   engine/paper.ts
   engine/trade.ts
+  engine/wallet.ts      # one-shot live portfolio print
   engine/backtest.ts    # offline candle replay
 ```
 

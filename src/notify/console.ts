@@ -37,6 +37,21 @@ export function logSnapshot(snapshot: Snapshot): void {
   );
 }
 
+/** CLI report matching the Telegram `/portfolio` fields. */
+export function logPortfolio(pair: string, snapshot: Snapshot): void {
+  const pos =
+    snapshot.position.side === "long"
+      ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
+      : "flat";
+  console.log("");
+  console.log(pair);
+  console.log(`Cash ${snapshot.cashUsdc.toFixed(4)} USDC`);
+  console.log(`Position ${pos}`);
+  console.log(`Equity ${snapshot.equity.toFixed(4)}`);
+  console.log(`Realized P&L ${snapshot.realizedPnl.toFixed(4)}`);
+  console.log(snapshot.simulated ? "simulated" : "live");
+}
+
 /** Persist one signal to DuckDB for later analysis. */
 export async function persistSignal(signal: Signal): Promise<void> {
   await insertSignal(signal);

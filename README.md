@@ -46,7 +46,7 @@ Edit `.env`:
 | `DUCKDB_SECRET`        | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`         |
 | `DUCKDB_SSL`           | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)         |
 
-Mode is selected by CLI: `pnpm watch` (signals only), `pnpm paper` (signals + virtual portfolio), or `pnpm trade` (signals + live Jupiter swaps).
+Mode is selected by CLI: `pnpm watch` (signals only), `pnpm paper` (signals + virtual portfolio), `pnpm trade` (signals + live Jupiter swaps), or `pnpm wallet` (live portfolio snapshot).
 
 ### Telegram (optional)
 
@@ -107,6 +107,12 @@ pnpm trade
 ```
 
 Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `live.portfolios` / `live.trades` with the transaction signature.
+
+Print on-chain live portfolio (sync + snapshot, no swaps):
+
+```bash
+pnpm wallet
+```
 
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
 
@@ -392,5 +398,6 @@ src/
   engine/watch.ts
   engine/paper.ts
   engine/trade.ts
+  engine/wallet.ts         # one-shot live portfolio print
   engine/backtest.ts
 ```

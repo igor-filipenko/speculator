@@ -12,6 +12,10 @@ const envSchema = z
     WATCHLIST: z.string().default("SOL/USDC"),
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
     PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
+    WALLET_KEYPAIR_PATH: z.string().optional().default(""),
+    SOLANA_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
+    SLIPPAGE_BPS: z.coerce.number().int().min(1).max(10_000).default(50),
+    LIVE_SOL_RESERVE_SOL: z.coerce.number().nonnegative().default(0.05),
     TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
     TELEGRAM_CHAT_ID: z.string().optional().default(""),
     DUCKDB_MODE: z.enum(["standalone", "server", "client"]).default("standalone"),
@@ -45,8 +49,30 @@ export interface AppConfig {
   pollIntervalMs: number;
   paperCashUsdc: number;
   pairs: PairConfig[];
+  /** Solana CLI JSON keypair path — required for trade mode only. */
+  walletKeypairPath?: string;
+  solanaRpcUrl: string;
+  slippageBps: number;
+  liveSolReserveSol: number;
   /** Present only when both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set. */
   telegram?: TelegramConfig;
+}
+
+const DEFAULT_SOLANA_RPC = "https://api.mainnet-beta.solana.com";
+
+/** Throw if trade mode is missing a keypair path. */
+export function assertTradeConfig(
+  config: AppConfig,
+): asserts config is AppConfig & { walletKeypairPath: string } {
+  if (!config.walletKeypairPath) {
+    throw new Error(
+      "WALLET_KEYPAIR_PATH is required for trade mode (Solana CLI JSON keypair file)",
+    );
+  }
+}
+
+export function isPublicSolanaRpc(url: string): boolean {
+  return url === DEFAULT_SOLANA_RPC;
 }
 
 async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig> {
@@ -105,6 +131,8 @@ export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppC
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();
   const chatId = env.TELEGRAM_CHAT_ID.trim();
 
+  const walletKeypairPath = env.WALLET_KEYPAIR_PATH.trim();
+
   const config: AppConfig = {
     strategy: env.STRATEGY,
     jupiterApiKey: env.JUPITER_API_KEY,
@@ -112,7 +140,14 @@ export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppC
     pollIntervalMs: env.POLL_INTERVAL_MS,
     paperCashUsdc: env.PAPER_CASH_USDC,
     pairs,
+    solanaRpcUrl: env.SOLANA_RPC_URL.trim() || DEFAULT_SOLANA_RPC,
+    slippageBps: env.SLIPPAGE_BPS,
+    liveSolReserveSol: env.LIVE_SOL_RESERVE_SOL,
   };
+
+  if (walletKeypairPath) {
+    config.walletKeypairPath = walletKeypairPath;
+  }
 
   if (botToken && chatId) {
     config.telegram = { botToken, chatId };

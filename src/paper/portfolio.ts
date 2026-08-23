@@ -148,6 +148,11 @@ export class PaperPortfolio implements Portfolio {
     };
   }
 
+  /** Paper cash/size are virtual — nothing to refresh from chain. */
+  async syncFromChain(_markPrice: number): Promise<void> {
+    /* no-op */
+  }
+
   /**
    * Apply a filled order without persisting (for backtests and unit tests).
    */

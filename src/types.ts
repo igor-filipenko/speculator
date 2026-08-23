@@ -1,4 +1,4 @@
-/** Shared domain types for signals and paper trading. */
+/** Shared domain types for signals, paper, backtest, and live trading. */
 
 export type SignalSide = "BUY" | "SELL" | "HOLD";
 
@@ -83,7 +83,9 @@ export interface Trade {
   /** Realized P&L in quote currency (set on SELL). */
   realizedPnl?: number;
   at: Date;
-  simulated: true;
+  simulated: boolean;
+  /** On-chain transaction signature (live fills only). */
+  txSignature?: string;
   /** Strategy / risk reason (e.g. EMA cross or ATR stop). */
   reason?: string;
 }
@@ -95,6 +97,7 @@ export interface Snapshot {
   /** Mark-to-market equity = cash + position * markPrice. */
   equity: number;
   trades: Trade[];
+  simulated: boolean;
 }
 
 /** Intent to trade after risk checks (not yet filled). */
@@ -111,14 +114,16 @@ export interface Command {
   baseSize?: number;
 }
 
-/** Simulated fill returned by an exchange. */
+/** Fill returned by an exchange (simulated paper/backtest or live on-chain). */
 export interface Order {
   pair: string;
   side: "BUY" | "SELL";
   price: number;
   size: number;
   at: Date;
-  simulated: true;
+  simulated: boolean;
+  /** On-chain transaction signature (live fills only). */
+  txSignature?: string;
   reason: string;
   /** Network priority fee in USDC (0 for live paper quotes). */
   priorityFeeUsdc: number;
@@ -133,6 +138,8 @@ export interface Order {
 export interface Portfolio {
   getSnapshot(markPrice: number): Snapshot;
   applyOrder(order: Order): Promise<Trade | null>;
+  /** Refresh on-chain balances before sizing. Paper is a no-op. */
+  syncFromChain(markPrice: number): Promise<void>;
 }
 
 export interface RequiredCandles {
@@ -161,7 +168,7 @@ export interface RiskManager {
   check(signal: Signal, snapshot: Snapshot): Command | null;
 }
 
-/** Quote + simulated fill venue (live Jupiter or emulated backtest). */
+/** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
   execute(command: Command, pair: PairConfig): Promise<Order | null>;

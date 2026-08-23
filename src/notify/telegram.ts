@@ -146,12 +146,20 @@ function formatSignalMessage(signal: Signal): string {
 }
 
 function formatTradeMessage(trade: Trade): string {
+  const heading = trade.simulated
+    ? `📄 *PAPER ${escapeMd(trade.side)}*`
+    : `⚡ *LIVE ${escapeMd(trade.side)}*`;
   const lines = [
-    `📄 *PAPER ${escapeMd(trade.side)}*`,
+    heading,
     `*${escapeMd(trade.pair)}*`,
     `Size ${code(trade.size.toFixed(6))} @ ${code(trade.price.toFixed(6))}`,
-    `_simulated_`,
   ];
+  if (trade.simulated) {
+    lines.push(`_simulated_`);
+  }
+  if (trade.txSignature != null) {
+    lines.push(`Sig ${code(trade.txSignature)}`);
+  }
   if (trade.realizedPnl != null) {
     lines.push(`Realized P&L ${code(`${trade.realizedPnl.toFixed(4)} USDC`)}`);
   }
@@ -167,7 +175,7 @@ function formatStartMessage(): string {
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
     `/chart — ${escapeMd("OHLCV candle chart (EMA/RSI)")}`,
-    `/portfolio — ${escapeMd("current paper portfolio")}`,
+    `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
 }
 
@@ -196,7 +204,7 @@ function formatPortfolioMessage(
   lastSignals: Map<string, Signal>,
 ): string {
   if (portfolios.size === 0) {
-    return ["💼 *Portfolio*", "", `_No paper portfolio loaded\\._`].join("\n");
+    return ["💼 *Portfolio*", "", `_No portfolio loaded\\._`].join("\n");
   }
 
   const blocks: string[] = ["💼 *Portfolio*"];
@@ -215,7 +223,7 @@ function formatPortfolioMessage(
       `Position ${code(pos)}`,
       `Equity ${code(snapshot.equity.toFixed(4))}`,
       `Realized P&L ${code(snapshot.realizedPnl.toFixed(4))}`,
-      `_simulated_`,
+      snapshot.simulated ? `_simulated_` : `_live_`,
     );
   }
   return blocks.join("\n");

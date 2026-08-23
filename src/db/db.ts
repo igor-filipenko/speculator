@@ -197,6 +197,7 @@ async function openClientConnection(
 /** Create schemas/tables if missing. Add future persistence tables here. */
 export async function initSchema(connection: DuckDBConnection): Promise<void> {
   await connection.run(`CREATE SCHEMA IF NOT EXISTS paper`);
+  await connection.run(`CREATE SCHEMA IF NOT EXISTS live`);
   await connection.run(`CREATE SCHEMA IF NOT EXISTS solana`);
 
   await connection.run(`
@@ -245,6 +246,39 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 
   await connection.run(`
     CREATE INDEX IF NOT EXISTS paper_trades_pair_idx ON paper.trades (pair)
+  `);
+
+  await connection.run(`CREATE SEQUENCE IF NOT EXISTS live.trades_id_seq`);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS live.portfolios (
+      pair           VARCHAR NOT NULL PRIMARY KEY,
+      cash_usdc      DOUBLE  NOT NULL,
+      realized_pnl   DOUBLE  NOT NULL,
+      position_side  VARCHAR NOT NULL,
+      position_size  DOUBLE  NOT NULL,
+      entry_price    DOUBLE  NOT NULL,
+      opened_at      TIMESTAMP,
+      updated_at     TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS live.trades (
+      id           BIGINT PRIMARY KEY DEFAULT nextval('live.trades_id_seq'),
+      pair         VARCHAR NOT NULL,
+      side         VARCHAR NOT NULL,
+      price        DOUBLE  NOT NULL,
+      size         DOUBLE  NOT NULL,
+      realized_pnl DOUBLE,
+      "at"         TIMESTAMP NOT NULL,
+      simulated    BOOLEAN NOT NULL DEFAULT false,
+      tx_signature VARCHAR
+    )
+  `);
+
+  await connection.run(`
+    CREATE INDEX IF NOT EXISTS live_trades_pair_idx ON live.trades (pair)
   `);
 
   await connection.run(`

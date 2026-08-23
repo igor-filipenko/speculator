@@ -13,8 +13,8 @@ WorkingDirectory=/opt/speculator
 # Loads JUPITER_API_KEY, TELEGRAM_*, STRATEGY, etc.
 EnvironmentFile=/opt/speculator/.env
 
-# Built runtime (deployed via README one-shot command)
-ExecStart=/usr/bin/node /opt/speculator/dist/index.js paper
+# Built runtime (deployed via README one-shot command). Engine comes from MODE in EnvironmentFile.
+ExecStart=/usr/bin/node /opt/speculator/dist/index.js
 
 Restart=always
 RestartSec=10

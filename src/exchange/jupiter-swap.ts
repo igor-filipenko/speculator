@@ -1,6 +1,12 @@
 import { Keypair, VersionedTransaction } from "@solana/web3.js";
 import type { Command, Exchange, Order, PairConfig } from "../types.js";
-import { fillFromSwapAmounts, hasFeeSol, toAtomic, tradableBaseSize } from "./amounts.js";
+import {
+  fillFromSwapAmounts,
+  hasFeeSol,
+  toAtomic,
+  tradableBaseSize,
+  WSOL_MINT,
+} from "./amounts.js";
 import { JupiterExchange } from "./jupiter.js";
 import type { BalanceSource } from "./wallet.js";
 
@@ -77,7 +83,8 @@ export class JupiterSwapExchange implements Exchange {
   async execute(command: Command, pair: PairConfig): Promise<Order | null> {
     try {
       await this.balances.refresh([pair.baseMint, pair.quoteMint]);
-      if (!hasFeeSol(this.balances.nativeSol(), this.solReserve)) {
+      const wantToBySol = command.side === "BUY" && pair.baseMint === WSOL_MINT;
+      if (!wantToBySol && !hasFeeSol(this.balances.nativeSol(), this.solReserve)) {
         console.error(`[${pair.symbol}] abort swap: native SOL below reserve ${this.solReserve}`);
         return null;
       }

@@ -17,6 +17,15 @@ const PAIR: PairConfig = {
   geckoPoolAddress: "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
 };
 
+const TOKEN_PAIR: PairConfig = {
+  symbol: "JUP/USDC",
+  baseMint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+  quoteMint: USDC,
+  baseDecimals: 6,
+  quoteDecimals: 6,
+  geckoPoolAddress: "test-pool",
+};
+
 class FakeBalances implements BalanceSource {
   readonly owner: PublicKey;
   native = 1;
@@ -49,15 +58,41 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return input.url;
 }
 
-function buyCommand(): Command {
+function buyCommand(pair = "SOL/USDC"): Command {
   return {
-    pair: "SOL/USDC",
+    pair,
     side: "BUY",
     reason: "test",
     at: new Date("2026-08-20T00:00:00.000Z"),
     priceHint: 100,
     quoteBudgetUsdc: 1,
   };
+}
+
+function sellCommand(pair = "SOL/USDC"): Command {
+  return {
+    pair,
+    side: "SELL",
+    reason: "test",
+    at: new Date("2026-08-20T00:00:00.000Z"),
+    priceHint: 100,
+    baseSize: 0.5,
+  };
+}
+
+function belowReserveBalances(): FakeBalances {
+  const balances = new FakeBalances();
+  balances.native = 0.01;
+  return balances;
+}
+
+function trackingFetch(): { fetched: { value: boolean }; fetchImpl: typeof fetch } {
+  const fetched = { value: false };
+  const fetchImpl: typeof fetch = () => {
+    fetched.value = true;
+    return Promise.resolve(new Response("nope", { status: 500 }));
+  };
+  return { fetched, fetchImpl };
 }
 
 describe("JupiterSwapExchange.execute", () => {
@@ -130,26 +165,72 @@ describe("JupiterSwapExchange.execute", () => {
     assert.equal(order, null);
   });
 
-  it("aborts when native SOL is below the fee reserve", async () => {
-    const balances = new FakeBalances();
-    balances.native = 0.01;
+  it("allows BUY SOL when native SOL is below the fee reserve", async () => {
     let fetched = false;
-    const fetchImpl: typeof fetch = () => {
+    const fetchImpl: typeof fetch = (input) => {
       fetched = true;
-      return Promise.resolve(new Response("nope", { status: 500 }));
+      const url = requestUrl(input);
+      if (url.includes("/order")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ transaction: "dGVzdA==", requestId: "req-1" })),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "Success",
+            signature: "SigLowSol",
+            inputAmountResult: "1000000",
+            outputAmountResult: "10000000",
+          }),
+        ),
+      );
     };
 
     const exchange = new JupiterSwapExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
-      balances,
+      balances: belowReserveBalances(),
       solReserve: 0.05,
       fetchImpl,
       signTransaction: (tx) => tx,
     });
 
     const order = await exchange.execute(buyCommand(), PAIR);
+    assert.ok(order);
+    assert.equal(order.txSignature, "SigLowSol");
+    assert.equal(fetched, true);
+  });
+
+  it("aborts a token BUY when native SOL is below the fee reserve", async () => {
+    const { fetched, fetchImpl } = trackingFetch();
+    const exchange = new JupiterSwapExchange({
+      apiKey: "test-key",
+      keypair: Keypair.generate(),
+      balances: belowReserveBalances(),
+      solReserve: 0.05,
+      fetchImpl,
+      signTransaction: (tx) => tx,
+    });
+
+    const order = await exchange.execute(buyCommand(TOKEN_PAIR.symbol), TOKEN_PAIR);
     assert.equal(order, null);
-    assert.equal(fetched, false);
+    assert.equal(fetched.value, false);
+  });
+
+  it("aborts a SELL when native SOL is below the fee reserve", async () => {
+    const { fetched, fetchImpl } = trackingFetch();
+    const exchange = new JupiterSwapExchange({
+      apiKey: "test-key",
+      keypair: Keypair.generate(),
+      balances: belowReserveBalances(),
+      solReserve: 0.05,
+      fetchImpl,
+      signTransaction: (tx) => tx,
+    });
+
+    const order = await exchange.execute(sellCommand(), PAIR);
+    assert.equal(order, null);
+    assert.equal(fetched.value, false);
   });
 });

@@ -109,7 +109,7 @@ export function evaluateGrid(input: GridSignalInput): Signal {
         meta,
       };
     }
-    return hold("long, waiting for TP");
+    return hold(`long, waiting for TP, target ${target.toFixed(4)}, current ${close.toFixed(4)}`);
   }
 
   if (currentAdx != null && currentAdx > params.adxMax) {
@@ -117,7 +117,9 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   }
 
   if (currentTrendEma != null && close < currentTrendEma) {
-    return hold("below trend EMA");
+    return hold(
+      `below trend EMA, current ${close.toFixed(4)}, trend EMA ${currentTrendEma.toFixed(4)}`,
+    );
   }
 
   const nearestLevelBelow = findNearestGridLevelBelow(close, referencePrice, gridSpacing);
@@ -133,7 +135,9 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     };
   }
 
-  return hold("no grid level crossed");
+  return hold(
+    `no grid level crossed, current ${close.toFixed(4)}, nearest level below ${nearestLevelBelow.toFixed(4)}`,
+  );
 }
 
 function findNearestGridLevelBelow(price: number, reference: number, spacing: number): number {

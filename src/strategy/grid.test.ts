@@ -137,6 +137,9 @@ describe("evaluateGrid", () => {
 
     assert.equal(signal.side, "HOLD");
     assert.match(signal.reason, /waiting for TP/);
+    assert.ok(signal.meta?.atr != null);
+    assert.ok(signal.meta?.barHigh != null);
+    assert.ok(signal.meta?.barLow != null);
   });
 
   it("blocks BUY when ADX exceeds adxMax", () => {

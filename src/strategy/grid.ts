@@ -56,13 +56,13 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   const { pair, candles, price, at, params, snapshot } = input;
   const closes = candles.map((c) => c.close);
 
-  const hold = (reason: string): Signal => ({
-    pair,
-    side: "HOLD",
-    reason,
-    price,
-    at,
-  });
+  const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Signal => {
+    const signal: Signal = { pair, side: "HOLD", reason, price, at };
+    if (meta !== undefined) {
+      signal.meta = meta;
+    }
+    return signal;
+  };
 
   if (candles.length < Math.max(params.reanchorBars, params.atrPeriod + 1, 2 * params.adxPeriod)) {
     return hold("warmup");
@@ -109,16 +109,20 @@ export function evaluateGrid(input: GridSignalInput): Signal {
         meta,
       };
     }
-    return hold(`long, waiting for TP, target ${target.toFixed(4)}, current ${close.toFixed(4)}`);
+    return hold(
+      `long, waiting for TP, target ${target.toFixed(4)}, current ${close.toFixed(4)}`,
+      meta,
+    );
   }
 
   if (currentAdx != null && currentAdx > params.adxMax) {
-    return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`);
+    return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`, meta);
   }
 
   if (currentTrendEma != null && close < currentTrendEma) {
     return hold(
       `below trend EMA, current ${close.toFixed(4)}, trend EMA ${currentTrendEma.toFixed(4)}`,
+      meta,
     );
   }
 
@@ -137,6 +141,7 @@ export function evaluateGrid(input: GridSignalInput): Signal {
 
   return hold(
     `no grid level crossed, current ${close.toFixed(4)}, nearest level below ${nearestLevelBelow.toFixed(4)}`,
+    meta,
   );
 }
 

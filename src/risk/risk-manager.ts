@@ -26,7 +26,9 @@ export class SimpleRiskManager implements RiskManager {
 
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
     const peak = peakSinceOpen(snapshot, candles, signal, timeframeSeconds(this.config.timeframe));
-    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, peak);
+    // HOLD may still carry barLow/atr for display; stops only apply on BUY/SELL.
+    const stopExit =
+      signal.side === "HOLD" ? null : evaluateProtectiveExit(signal, snapshot, this.config, peak);
     if (stopExit) {
       return asCommand(stopExit);
     }

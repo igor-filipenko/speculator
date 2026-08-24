@@ -96,10 +96,24 @@ describe("SimpleRiskManager", () => {
     assert.equal(blocked.kind, "risk");
     assert.match(blocked.risk.reason, /min hold/);
 
-    const stopCmd = risk.check(
+    const holdThroughStop = risk.check(
       {
         pair: "SOL/USDC",
         side: "HOLD",
+        reason: "no cross",
+        price: 90,
+        at: new Date((start + 3 * interval) * 1000),
+        meta: { atr: 1, barLow: 85, barHigh: 100 },
+      },
+      portfolio.getSnapshot(90),
+      [],
+    );
+    assert.equal(holdThroughStop.kind, "no-command");
+
+    const stopCmd = risk.check(
+      {
+        pair: "SOL/USDC",
+        side: "SELL",
         reason: "no cross",
         price: 90,
         at: new Date((start + 3 * interval) * 1000),
@@ -140,8 +154,8 @@ describe("SimpleRiskManager", () => {
     const result = risk.check(
       {
         pair: "SOL/USDC",
-        side: "HOLD",
-        reason: "hold",
+        side: "SELL",
+        reason: "exit",
         price: 115,
         at: new Date((t0 + interval) * 1000),
         meta: { atr: 2, barLow: 115, barHigh: 116 },

@@ -128,16 +128,7 @@ function formatSignalMessage(signal: Signal): string {
   ];
 
   if (signal.meta) {
-    const parts: string[] = [];
-    if (signal.meta.emaFast != null) {
-      parts.push(`EMA fast ${code(fmt(signal.meta.emaFast))}`);
-    }
-    if (signal.meta.emaSlow != null) {
-      parts.push(`EMA slow ${code(fmt(signal.meta.emaSlow))}`);
-    }
-    if (signal.meta.rsi != null) {
-      parts.push(`RSI ${code(fmt(signal.meta.rsi))}`);
-    }
+    const parts = formatMetaParts(signal.meta);
     if (parts.length > 0) {
       lines.push("", parts.join(" · "));
     }
@@ -145,6 +136,31 @@ function formatSignalMessage(signal: Signal): string {
 
   lines.push("", `_${escapeMd(signal.at.toISOString())}_`);
   return lines.join("\n");
+}
+
+const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
+  emaFast: "EMA fast",
+  emaSlow: "EMA slow",
+  trendEma: "Trend EMA",
+  rsi: "RSI",
+  atr: "ATR",
+  adx: "ADX",
+  bbMid: "BB mid",
+  bbUpper: "BB upper",
+  bbLower: "BB lower",
+  barLow: "Bar low",
+  barHigh: "Bar high",
+};
+
+function formatMetaParts(meta: NonNullable<Signal["meta"]>): string[] {
+  const parts: string[] = [];
+  for (const key of Object.keys(META_LABELS) as (keyof typeof META_LABELS)[]) {
+    const value = meta[key];
+    if (value != null) {
+      parts.push(`${escapeMd(META_LABELS[key])} ${code(fmt(value))}`);
+    }
+  }
+  return parts;
 }
 
 function formatRiskMessage(risk: Risk): string {

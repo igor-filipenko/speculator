@@ -55,7 +55,7 @@ export interface BacktestResult {
 export interface RunBacktestOptions {
   config: AppConfig;
   strategy: Strategy;
-  risk: RiskManager;
+  riskManager: RiskManager;
   days?: number;
   /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
   fromTime?: number;
@@ -101,7 +101,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       await replayPair({
         pair,
         strategy,
-        risk: options.risk,
+        riskManager: options.riskManager,
         candles,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
@@ -116,13 +116,13 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
 async function replayPair(args: {
   pair: PairConfig;
   strategy: Strategy;
-  risk: RiskManager;
+  riskManager: RiskManager;
   candles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const { pair, strategy, risk, candles, startingCashUsdc } = args;
+  const { pair, strategy, riskManager, candles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -149,8 +149,9 @@ async function replayPair(args: {
       portfolio.getSnapshot(close),
     );
 
-    const command = risk.check(signal, portfolio.getSnapshot(close));
-    if (command) {
+    const result = riskManager.check(signal, portfolio.getSnapshot(close));
+    if (result.kind === "command") {
+      const command = result.command;
       // Protective exits fill at the stop/trail level; cross signals use candle close.
       exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : close);
       const order = await exchange.execute(command, pair);

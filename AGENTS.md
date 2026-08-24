@@ -45,7 +45,7 @@ src/
   strategy/ema-rsi.ts
   strategy/bollinger.ts
   strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger | grid)
-  risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command
+  risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
   strategy/bollinger-svg.ts # Bollinger band SVG
   chart/render-png.ts   # SVG → PNG

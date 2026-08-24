@@ -17,7 +17,7 @@ import { runTradingLoop } from "./tick.js";
 export interface TradeOptions {
   config: AppConfig;
   strategy: Strategy;
-  risk: RiskManager;
+  riskManager: RiskManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;

@@ -1,6 +1,10 @@
 import type {
+  ClearRisk,
   Command,
+  NoCommand,
+  RequiredCommand,
   RiskManager,
+  RiskOrCommand,
   RiskParams,
   Signal,
   Snapshot,
@@ -21,55 +25,54 @@ export class SimpleRiskManager implements RiskManager {
 
   constructor(private readonly config: RiskParams) {}
 
-  check(signal: Signal, snapshot: Snapshot): Command | null {
+  check(signal: Signal, snapshot: Snapshot): RiskOrCommand {
     this.syncPeak(signal, snapshot);
 
     const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, this.peakByPair);
     if (stopExit) {
       this.peakByPair.delete(signal.pair);
-      return stopExit;
+      return asCommand(stopExit);
     }
 
     if (signal.side === "BUY") {
       if (snapshot.position.side === "long") {
-        return null;
+        return blocked(signal, "already long");
       }
       if (snapshot.cashUsdc <= 0 || signal.price <= 0) {
-        return null;
+        return blocked(signal, "no cash or invalid price");
       }
       if (inCooldown(snapshot.trades, signal.at, this.config)) {
-        return null;
+        return blocked(signal, "cooldown after last SELL");
       }
-      return {
+      return asCommand({
         pair: signal.pair,
         side: "BUY",
         reason: signal.reason,
         at: signal.at,
         priceHint: signal.price,
         quoteBudgetUsdc: snapshot.cashUsdc,
-      };
+      });
     }
 
     if (signal.side === "SELL") {
       if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
-        return null;
+        return blocked(signal, "not long");
       }
       if (belowMinHold(snapshot, signal.at, this.config)) {
-        return null;
+        return blocked(signal, "min hold not reached");
       }
       this.peakByPair.delete(signal.pair);
-      return {
+      return asCommand({
         pair: signal.pair,
         side: "SELL",
         reason: signal.reason,
         at: signal.at,
         priceHint: signal.price,
         baseSize: snapshot.position.size,
-      };
+      });
     }
 
-    // still hold
-    return null;
+    return noCommand();
   }
 
   private syncPeak(signal: Signal, snapshot: Snapshot): void {
@@ -82,6 +85,18 @@ export class SimpleRiskManager implements RiskManager {
     const prev = this.peakByPair.get(signal.pair) ?? snapshot.position.entryPrice;
     this.peakByPair.set(signal.pair, Math.max(prev, mark, snapshot.position.entryPrice));
   }
+}
+
+function asCommand(command: Command): RequiredCommand {
+  return { kind: "command", command };
+}
+
+function blocked(signal: Signal, reason: string): ClearRisk {
+  return { kind: "risk", risk: { signal, reason } };
+}
+
+function noCommand(): NoCommand {
+  return { kind: "no-command" };
 }
 
 /** ATR hard stop / trailing exit using strategy-provided ATR and bar low. */

@@ -2,13 +2,14 @@ import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderOhlcvPng } from "../chart/render-png.js";
-import type { Portfolio, ProgramState, Signal, Trade } from "../types.js";
+import type { Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
   | { type: "start" }
   | { type: "shutdown"; code: number; reason?: string }
   | { type: "signal"; signal: Signal }
+  | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade };
 
 const PARSE_MODE = "MarkdownV2" as const;
@@ -68,6 +69,7 @@ async function notifyTelegram(
       .with({ type: "shutdown" }, (shutdown) => formatShutdownMessage(shutdown))
       .with({ type: "signal", signal: { side: "HOLD" } }, () => null)
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
+      .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
       .exhaustive();
 
@@ -143,6 +145,18 @@ function formatSignalMessage(signal: Signal): string {
 
   lines.push("", `_${escapeMd(signal.at.toISOString())}_`);
   return lines.join("\n");
+}
+
+function formatRiskMessage(risk: Risk): string {
+  return [
+    `⚠️ *${escapeMd(risk.signal.pair)}*  *RISK*`,
+    `Price ${code(risk.signal.price.toFixed(6))}`,
+    `Signal ${code(risk.signal.side)}`,
+    "",
+    `_${escapeMd(risk.reason)}_`,
+    "",
+    `_${escapeMd(risk.signal.at.toISOString())}_`,
+  ].join("\n");
 }
 
 function formatTradeMessage(trade: Trade): string {

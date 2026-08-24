@@ -163,9 +163,31 @@ export interface Strategy {
   buildChartSvg(pair: string, candles: Candle[]): string;
 }
 
+export interface Risk {
+  signal: Signal;
+  reason: string;
+}
+
+export interface ClearRisk {
+  kind: "risk";
+  risk: Risk;
+}
+
+export interface RequiredCommand {
+  kind: "command";
+  command: Command;
+}
+
+export interface NoCommand {
+  kind: "no-command";
+}
+
+/** Tagged result of {@link RiskManager.check}: fill, blocked signal, or HOLD / no-op. */
+export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
+
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
-  check(signal: Signal, snapshot: Snapshot): Command | null;
+  check(signal: Signal, snapshot: Snapshot): RiskOrCommand;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

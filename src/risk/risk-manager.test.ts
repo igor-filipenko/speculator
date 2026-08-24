@@ -46,8 +46,9 @@ describe("SimpleRiskManager", () => {
       meta: { atr: 1, barLow: 99, barHigh: 101 },
     };
     const risk = new SimpleRiskManager(riskParams({ cooldownBars: 4 }));
-    const cmd = risk.check(signal, portfolio.getSnapshot(100));
-    assert.equal(cmd, null);
+    const result = risk.check(signal, portfolio.getSnapshot(100));
+    assert.equal(result.kind, "risk");
+    assert.match(result.risk.reason, /cooldown/);
   });
 
   it("blocks discretionary SELL before minHoldBars but allows ATR stop", () => {
@@ -91,7 +92,8 @@ describe("SimpleRiskManager", () => {
       meta: { atr: 1, barLow: 99, barHigh: 100 },
     };
     const blocked = risk.check(crossSell, portfolio.getSnapshot(90));
-    assert.equal(blocked, null);
+    assert.equal(blocked.kind, "risk");
+    assert.match(blocked.risk.reason, /min hold/);
 
     const stopCmd = risk.check(
       {
@@ -104,9 +106,9 @@ describe("SimpleRiskManager", () => {
       },
       portfolio.getSnapshot(90),
     );
-    assert.ok(stopCmd);
-    assert.equal(stopCmd.side, "SELL");
-    assert.match(stopCmd.reason, /ATR/);
+    assert.equal(stopCmd.kind, "command");
+    assert.equal(stopCmd.command.side, "SELL");
+    assert.match(stopCmd.command.reason, /ATR/);
   });
 });
 

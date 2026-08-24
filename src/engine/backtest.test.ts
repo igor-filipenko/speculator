@@ -169,7 +169,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
       days: 30,
     });
@@ -275,7 +275,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(1000),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
     });
     assert.ok(result);
@@ -301,7 +301,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(500),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
     });
 

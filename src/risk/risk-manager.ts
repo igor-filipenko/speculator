@@ -1,4 +1,5 @@
 import type {
+  Candle,
   ClearRisk,
   Command,
   NoCommand,
@@ -17,20 +18,16 @@ import type {
  * post-SELL cooldown, and min-hold before discretionary cross exits.
  *
  * Market data (ATR, bar high/low) comes from {@link Signal.meta} — strategy owns candles.
+ * Trailing peak is max high of OHLCV since {@link Position.openedAt} (plus entry).
  * Policy knobs are fixed at construction ({@link RiskParams}).
  */
 export class SimpleRiskManager implements RiskManager {
-  /** Peak close/high seen while long, per pair (for trailing stop). */
-  private readonly peakByPair = new Map<string, number>();
-
   constructor(private readonly config: RiskParams) {}
 
-  check(signal: Signal, snapshot: Snapshot): RiskOrCommand {
-    this.syncPeak(signal, snapshot);
-
-    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, this.peakByPair);
+  check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
+    const peak = peakSinceOpen(snapshot, candles, signal, timeframeSeconds(this.config.timeframe));
+    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, peak);
     if (stopExit) {
-      this.peakByPair.delete(signal.pair);
       return asCommand(stopExit);
     }
 
@@ -61,7 +58,6 @@ export class SimpleRiskManager implements RiskManager {
       if (belowMinHold(snapshot, signal.at, this.config)) {
         return blocked(signal, "min hold not reached");
       }
-      this.peakByPair.delete(signal.pair);
       return asCommand({
         pair: signal.pair,
         side: "SELL",
@@ -73,17 +69,6 @@ export class SimpleRiskManager implements RiskManager {
     }
 
     return noCommand();
-  }
-
-  private syncPeak(signal: Signal, snapshot: Snapshot): void {
-    if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
-      this.peakByPair.delete(signal.pair);
-      return;
-    }
-    const barHigh = signal.meta?.barHigh;
-    const mark = barHigh != null && barHigh > 0 ? barHigh : signal.price;
-    const prev = this.peakByPair.get(signal.pair) ?? snapshot.position.entryPrice;
-    this.peakByPair.set(signal.pair, Math.max(prev, mark, snapshot.position.entryPrice));
   }
 }
 
@@ -99,12 +84,38 @@ function noCommand(): NoCommand {
   return { kind: "no-command" };
 }
 
+/** Max of entry, current bar high, and candle highs overlapping the open hold. */
+export function peakSinceOpen(
+  snapshot: Snapshot,
+  candles: Candle[],
+  signal: Signal,
+  intervalSec: number,
+): number {
+  const entry = snapshot.position.entryPrice;
+  const barHigh = signal.meta?.barHigh;
+  const mark = barHigh != null && barHigh > 0 ? barHigh : signal.price;
+  let peak = Math.max(entry, mark);
+
+  const openedAt = snapshot.position.openedAt;
+  if (openedAt == null || candles.length === 0 || intervalSec <= 0) {
+    return peak;
+  }
+
+  const openedSec = openedAt.getTime() / 1000;
+  for (const candle of candles) {
+    if (candle.time + intervalSec > openedSec) {
+      peak = Math.max(peak, candle.high);
+    }
+  }
+  return peak;
+}
+
 /** ATR hard stop / trailing exit using strategy-provided ATR and bar low. */
 export function evaluateProtectiveExit(
   signal: Signal,
   snapshot: Snapshot,
   config: RiskParams,
-  peakByPair?: Map<string, number>,
+  peak?: number,
 ): Command | null {
   const { position } = snapshot;
   if (position.side !== "long" || position.size <= 0 || position.entryPrice <= 0) {
@@ -118,9 +129,7 @@ export function evaluateProtectiveExit(
   }
 
   const stopPrice = position.entryPrice - config.atrStopMult * atrNow;
-  const peakClose =
-    peakByPair?.get(position.pair) ??
-    Math.max(position.entryPrice, signal.meta?.barHigh ?? signal.price);
+  const peakClose = peak ?? Math.max(position.entryPrice, signal.meta?.barHigh ?? signal.price);
   const trailPrice = peakClose - config.atrTrailMult * atrNow;
   const exitLevel = Math.max(stopPrice, trailPrice);
 

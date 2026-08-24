@@ -149,7 +149,7 @@ async function replayPair(args: {
       portfolio.getSnapshot(close),
     );
 
-    const result = riskManager.check(signal, portfolio.getSnapshot(close));
+    const result = riskManager.check(signal, portfolio.getSnapshot(close), window);
     if (result.kind === "command") {
       const command = result.command;
       // Protective exits fill at the stop/trail level; cross signals use candle close.

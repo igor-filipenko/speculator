@@ -128,7 +128,7 @@ export async function processPair(args: {
     return;
   }
 
-  const result = riskManager.check(signal, portfolio.getSnapshot(price));
+  const result = riskManager.check(signal, portfolio.getSnapshot(price), candles);
   if (result.kind === "risk") {
     logRisk(result.risk);
     await telegram.notify({ type: "risk", risk: result.risk });

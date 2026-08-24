@@ -187,7 +187,7 @@ export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
-  check(signal: Signal, snapshot: Snapshot): RiskOrCommand;
+  check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

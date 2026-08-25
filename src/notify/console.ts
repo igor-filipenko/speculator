@@ -1,5 +1,5 @@
 import { insertSignal } from "../db/signals.js";
-import type { Signal, Snapshot, Trade } from "../types.js";
+import type { Risk, Signal, Snapshot, Trade } from "../types.js";
 
 export function logSignal(signal: Signal): void {
   const ts = signal.at.toISOString();
@@ -8,6 +8,13 @@ export function logSignal(signal: Signal): void {
     : "";
   console.log(
     `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)} — ${signal.reason}${meta}`,
+  );
+}
+
+export function logRisk(risk: Risk): void {
+  const ts = risk.signal.at.toISOString();
+  console.log(
+    `[${ts}] ${risk.signal.pair} RISK — ${risk.reason} (signal ${risk.signal.side} @ ${risk.signal.price.toFixed(6)})`,
   );
 }
 

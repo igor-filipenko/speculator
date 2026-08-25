@@ -118,7 +118,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
-  const risk = new SimpleRiskManager(strategy.getRiskParams());
+  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
     config.pairs,
     config.paperCashUsdc,
@@ -141,7 +141,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
   await runPaper({
     config,
     strategy,
-    risk,
+    riskManager,
     state: programState,
     telegram,
     once,
@@ -153,7 +153,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
   const strategy = loadStrategy(config.strategy);
-  const risk = new SimpleRiskManager(strategy.getRiskParams());
+  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
   const runtime = await createLiveRuntime(config);
   console.log(`Wallet ${runtime.walletAddress}`);
 
@@ -174,7 +174,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
   await runTrade({
     config,
     strategy,
-    risk,
+    riskManager,
     exchange: runtime.exchange,
     state: programState,
     telegram,
@@ -233,11 +233,11 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     : config.strategy;
 
   const strategy = loadStrategy(strategyMode);
-  const risk = new SimpleRiskManager(strategy.getRiskParams());
+  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
   const results = await runBacktest({
     config,
     strategy,
-    risk,
+    riskManager,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),

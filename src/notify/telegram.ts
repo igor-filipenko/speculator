@@ -2,13 +2,14 @@ import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderOhlcvPng } from "../chart/render-png.js";
-import type { Portfolio, ProgramState, Signal, Trade } from "../types.js";
+import type { Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
   | { type: "start" }
   | { type: "shutdown"; code: number; reason?: string }
   | { type: "signal"; signal: Signal }
+  | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade };
 
 const PARSE_MODE = "MarkdownV2" as const;
@@ -68,6 +69,7 @@ async function notifyTelegram(
       .with({ type: "shutdown" }, (shutdown) => formatShutdownMessage(shutdown))
       .with({ type: "signal", signal: { side: "HOLD" } }, () => null)
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
+      .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
       .exhaustive();
 
@@ -126,16 +128,7 @@ function formatSignalMessage(signal: Signal): string {
   ];
 
   if (signal.meta) {
-    const parts: string[] = [];
-    if (signal.meta.emaFast != null) {
-      parts.push(`EMA fast ${code(fmt(signal.meta.emaFast))}`);
-    }
-    if (signal.meta.emaSlow != null) {
-      parts.push(`EMA slow ${code(fmt(signal.meta.emaSlow))}`);
-    }
-    if (signal.meta.rsi != null) {
-      parts.push(`RSI ${code(fmt(signal.meta.rsi))}`);
-    }
+    const parts = formatMetaParts(signal.meta);
     if (parts.length > 0) {
       lines.push("", parts.join(" · "));
     }
@@ -143,6 +136,43 @@ function formatSignalMessage(signal: Signal): string {
 
   lines.push("", `_${escapeMd(signal.at.toISOString())}_`);
   return lines.join("\n");
+}
+
+const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
+  emaFast: "EMA fast",
+  emaSlow: "EMA slow",
+  trendEma: "Trend EMA",
+  rsi: "RSI",
+  atr: "ATR",
+  adx: "ADX",
+  bbMid: "BB mid",
+  bbUpper: "BB upper",
+  bbLower: "BB lower",
+  barLow: "Bar low",
+  barHigh: "Bar high",
+};
+
+function formatMetaParts(meta: NonNullable<Signal["meta"]>): string[] {
+  const parts: string[] = [];
+  for (const key of Object.keys(META_LABELS) as (keyof typeof META_LABELS)[]) {
+    const value = meta[key];
+    if (value != null) {
+      parts.push(`${escapeMd(META_LABELS[key])} ${code(fmt(value))}`);
+    }
+  }
+  return parts;
+}
+
+function formatRiskMessage(risk: Risk): string {
+  return [
+    `⚠️ *${escapeMd(risk.signal.pair)}*  *RISK*`,
+    `Price ${code(risk.signal.price.toFixed(6))}`,
+    `Signal ${code(risk.signal.side)}`,
+    "",
+    `_${escapeMd(risk.reason)}_`,
+    "",
+    `_${escapeMd(risk.signal.at.toISOString())}_`,
+  ].join("\n");
 }
 
 function formatTradeMessage(trade: Trade): string {

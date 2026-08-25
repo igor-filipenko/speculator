@@ -1,6 +1,6 @@
 import type { AppConfig } from "../config.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import { logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
+import { logRisk, logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import type {
   Candle,
@@ -17,7 +17,7 @@ import type {
 export interface TradingLoopOptions {
   config: AppConfig;
   strategy: Strategy;
-  risk: RiskManager;
+  riskManager: RiskManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;
@@ -30,7 +30,7 @@ export interface TradingLoopOptions {
  * Shared poll loop: candles → signal → risk command → exchange order → portfolio fill.
  */
 export async function runTradingLoop(options: TradingLoopOptions): Promise<void> {
-  const { config, strategy, risk, exchange, once = false, modeLabel } = options;
+  const { config, strategy, riskManager, exchange, once = false, modeLabel } = options;
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
@@ -52,7 +52,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
           pair,
           strategy,
           exchange,
-          risk,
+          riskManager,
           portfolios,
           lastSignals,
           lastCandles,
@@ -86,13 +86,14 @@ export async function processPair(args: {
   pair: PairConfig;
   strategy: Strategy;
   exchange: Exchange;
-  risk: RiskManager;
+  riskManager: RiskManager;
   portfolios: Map<string, Portfolio>;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
   telegram: Telegram;
 }): Promise<void> {
-  const { pair, strategy, exchange, risk, portfolios, lastSignals, lastCandles, telegram } = args;
+  const { pair, strategy, exchange, riskManager, portfolios, lastSignals, lastCandles, telegram } =
+    args;
 
   const requiredCandles = strategy.getRequiredCandles();
   const candles = await fetchCandles({
@@ -127,11 +128,18 @@ export async function processPair(args: {
     return;
   }
 
-  const command = risk.check(signal, portfolio.getSnapshot(price));
-  if (!command) {
+  const result = riskManager.check(signal, portfolio.getSnapshot(price), candles);
+  if (result.kind === "risk") {
+    logRisk(result.risk);
+    await telegram.notify({ type: "risk", risk: result.risk });
     logSnapshot(portfolio.getSnapshot(price));
     return;
   }
+  if (result.kind === "no-command") {
+    logSnapshot(portfolio.getSnapshot(price));
+    return;
+  }
+  const command = result.command;
 
   const order = await exchange.execute(command, pair);
   if (!order) {

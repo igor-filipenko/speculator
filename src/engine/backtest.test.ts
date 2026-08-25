@@ -169,7 +169,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
       days: 30,
     });
@@ -205,7 +205,7 @@ describe("runBacktest", () => {
     assert.ok(adverse > 0);
   });
 
-  it("exits via ATR stop after entry when price crashes", async () => {
+  it("does not ATR-exit on HOLD after entry when price crashes", async () => {
     const start = 1_700_000_000;
     const interval = 15 * 60;
     const candles: Candle[] = [];
@@ -275,13 +275,13 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(1000),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
     });
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
     const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
-    assert.ok(stopSell);
+    assert.equal(stopSell, undefined);
   });
 
   it("keeps flat equity when indicators never fire", async () => {
@@ -301,7 +301,7 @@ describe("runBacktest", () => {
     const [result] = await runBacktest({
       config: makeConfig(500),
       strategy,
-      risk: makeRisk(strategy),
+      riskManager: makeRisk(strategy),
       candles,
     });
 

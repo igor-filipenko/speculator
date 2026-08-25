@@ -7,7 +7,7 @@ import { runTradingLoop } from "./tick.js";
 export interface PaperOptions {
   config: AppConfig;
   strategy: Strategy;
-  risk: RiskManager;
+  riskManager: RiskManager;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */

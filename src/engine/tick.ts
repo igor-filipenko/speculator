@@ -1,4 +1,12 @@
 import type { AppConfig } from "../config.js";
+import { readCandles } from "../db/candles.js";
+import {
+  loadFreshMarketState,
+  toMarketState,
+  toPersistedMarket,
+  upsertMarket,
+  type PersistedMarket,
+} from "../db/market.js";
 import { candleIntervalSeconds, fetchCandles, fetchPoolStats } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import {
@@ -13,6 +21,7 @@ import { Telegram } from "../notify/telegram.js";
 import type {
   Candle,
   Exchange,
+  HtfTimeframe,
   MarketState,
   PairConfig,
   PoolStats,
@@ -21,6 +30,8 @@ import type {
   ShutdownCb,
   Signal,
   StrategyManager,
+  StrategyMode,
+  Timeframe,
 } from "../types.js";
 
 export interface TradingLoopOptions {
@@ -194,8 +205,9 @@ export async function processPair(args: {
 }
 
 /**
- * Load HTF candles (DuckDB cache + Gecko backfill) and evaluate {@link MarketState}.
- * Pool stats failures are logged; candle failures propagate to the caller.
+ * Load HTF {@link MarketState}: reuse `market.states` while the cached bar is open,
+ * otherwise Gecko OHLCV + pool stats, then persist. Pool stats failures are logged;
+ * candle failures propagate to the caller.
  */
 export async function refreshMarketState(args: {
   pair: PairConfig;
@@ -204,16 +216,31 @@ export async function refreshMarketState(args: {
   at: Date;
 }): Promise<MarketState> {
   const required = args.strategyManager.getRequiredCandles();
-  const interval = candleIntervalSeconds(required.timeframe);
-  const toTime = Math.floor(Date.now() / 1000);
-  const fromTime = toTime - required.count * interval;
+  const timeframe = asHtfTimeframe(required.timeframe);
+  const nowSec = Math.floor(args.at.getTime() / 1000);
+  const strategyMode = args.strategyManager.getActiveStrategy().getMode();
+
+  const persisted = await loadFreshMarketState({
+    pair: args.pair.symbol,
+    timeframe,
+    nowSec,
+  });
+  if (persisted !== null) {
+    const cached = await hydrateMarketState(persisted, required.count, args.price, strategyMode);
+    if (cached !== null) {
+      return cached;
+    }
+  }
+
+  const interval = candleIntervalSeconds(timeframe);
+  const fromTime = nowSec - required.count * interval;
 
   const candles = await loadCachedCandles({
     symbol: args.pair.symbol,
     poolAddress: args.pair.geckoPoolAddress,
-    timeframe: required.timeframe,
+    timeframe,
     fromTime,
-    toTime,
+    toTime: nowSec,
   });
 
   let poolStats: PoolStats | undefined;
@@ -227,7 +254,36 @@ export async function refreshMarketState(args: {
   const last = candles[candles.length - 1];
   const at = last !== undefined ? new Date(last.time * 1000) : args.at;
 
-  return args.strategyManager.evaluate(args.pair.symbol, candles, args.price, at, poolStats);
+  const state = args.strategyManager.evaluate(args.pair.symbol, candles, args.price, at, poolStats);
+  await upsertMarket(toPersistedMarket(state));
+  return state;
+}
+
+async function hydrateMarketState(
+  persisted: PersistedMarket,
+  requiredCount: number,
+  livePrice: number,
+  strategyMode: StrategyMode,
+): Promise<MarketState | null> {
+  const interval = candleIntervalSeconds(persisted.timeframe);
+  const fromTime = persisted.barTime - (requiredCount - 1) * interval;
+  const candles = await readCandles(
+    persisted.pair,
+    persisted.timeframe,
+    fromTime,
+    persisted.barTime + 1,
+  );
+  if (candles[candles.length - 1]?.time !== persisted.barTime) {
+    return null;
+  }
+  return toMarketState(persisted, candles, livePrice, strategyMode);
+}
+
+function asHtfTimeframe(timeframe: Timeframe): HtfTimeframe {
+  if (timeframe === "4h" || timeframe === "1d") {
+    return timeframe;
+  }
+  throw new Error(`HTF timeframe must be 4h or 1d, got ${timeframe}`);
 }
 
 export function sleep(ms: number): Promise<void> {

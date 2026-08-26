@@ -3,7 +3,7 @@ import type {
   PersistedLivePosition,
   PersistedLiveTrade,
 } from "../live/store.js";
-import { getSpeculatorDb } from "./db.js";
+import { getConnection } from "./db.js";
 
 const UPSERT_PORTFOLIO_SQL = `
   INSERT INTO live.portfolios (
@@ -97,7 +97,7 @@ function rowToPosition(row: Record<string, unknown>): PersistedLivePosition {
 
 /** Count live portfolio rows (for empty-check). */
 export async function livePortfolioCount(dataDir?: string): Promise<number> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS cnt FROM live.portfolios`);
   await reader.readAll();
   const row = reader.getRowObjectsJS()[0];
@@ -108,7 +108,7 @@ export async function livePortfolioCount(dataDir?: string): Promise<number> {
 export async function loadAllLivePortfolios(
   dataDir?: string,
 ): Promise<Record<string, PersistedLivePortfolio>> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
 
   const portfolioReader = await conn.runAndReadAll(`
     SELECT
@@ -158,7 +158,7 @@ export async function upsertLivePortfolio(
   portfolio: PersistedLivePortfolio,
   dataDir?: string,
 ): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run(UPSERT_PORTFOLIO_SQL, {
     pair: portfolio.position.pair,
     cashUsdc: portfolio.cashUsdc,
@@ -172,7 +172,7 @@ export async function upsertLivePortfolio(
 
 /** Append one live fill. */
 export async function insertLiveTrade(trade: PersistedLiveTrade, dataDir?: string): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run(INSERT_TRADE_SQL, {
     pair: trade.pair,
     side: trade.side,

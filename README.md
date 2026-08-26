@@ -356,7 +356,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes a **MarketState** on each poll from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy and risk manager are still the env/CLI defaults** (`getActiveStrategy` / `getActiveRiskManager`); auto-selection from MarketState is not implemented yet.
+`SimpleStrategyManager` computes a **MarketState** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.states`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy and risk manager are still the env/CLI defaults** (`getActiveStrategy` / `getActiveRiskManager`); auto-selection from MarketState is not implemented yet.
 
 ### EMA trend (`ema-rsi`)
 
@@ -392,7 +392,7 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, paper, live, signals
+  db/                      # DuckDB: candles, market.states, paper, live, signals
   market/gecko-terminal.ts
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute

@@ -1,4 +1,4 @@
-import { getSpeculatorDb } from "./db.js";
+import { getConnection } from "./db.js";
 
 /** One row from `solana.tokens`. */
 export interface SolanaToken {
@@ -33,7 +33,7 @@ function rowToToken(row: Record<string, unknown>): SolanaToken {
 
 /** Load one token by symbol (e.g. SOL, USDC). */
 export async function getToken(symbol: string, dataDir?: string): Promise<SolanaToken | null> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(
     `
     SELECT symbol, mint, decimals, pool_address
@@ -49,7 +49,7 @@ export async function getToken(symbol: string, dataDir?: string): Promise<Solana
 
 /** Load all known Solana tokens. */
 export async function listTokens(dataDir?: string): Promise<SolanaToken[]> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(`
     SELECT symbol, mint, decimals, pool_address
     FROM solana.tokens

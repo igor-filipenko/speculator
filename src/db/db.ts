@@ -45,6 +45,9 @@ function parseQuackHost(url: string): string {
 /** Cached connections keyed by absolute DB path (standalone/server) or `client:<url>` (client). */
 const connections = new Map<string, Promise<DuckDBConnection>>();
 
+/** Optional override so tests can pin a temp directory without threading `dataDir` through db helpers. */
+let pinnedDataDir: string | undefined;
+
 /** Path to the shared app DuckDB file. */
 export function speculatorDbPath(dataDir = DEFAULT_DATA_DIR): string {
   return join(dataDir, DB_FILE);
@@ -55,8 +58,14 @@ export function defaultDataDir(): string {
   return DEFAULT_DATA_DIR;
 }
 
+/** Pin the DuckDB data directory (tests). Pass `undefined` to restore the default. */
+export function setSpeculatorDataDir(dataDir: string | undefined): void {
+  pinnedDataDir = dataDir;
+}
+
 /** Open (or reuse) the shared speculator DuckDB connection for the current DUCKDB_MODE. */
-export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckDBConnection> {
+export async function getConnection(dataDir?: string): Promise<DuckDBConnection> {
+  const resolvedDir = dataDir ?? pinnedDataDir ?? DEFAULT_DATA_DIR;
   const mode = readMode();
 
   if (mode === "client") {
@@ -70,8 +79,8 @@ export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckD
     return pending;
   }
 
-  await mkdir(dataDir, { recursive: true });
-  const path = speculatorDbPath(dataDir);
+  await mkdir(resolvedDir, { recursive: true });
+  const path = speculatorDbPath(resolvedDir);
   let pending = connections.get(path);
   if (!pending) {
     pending = openLocalConnection(path, mode);
@@ -199,6 +208,7 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
   await connection.run(`CREATE SCHEMA IF NOT EXISTS paper`);
   await connection.run(`CREATE SCHEMA IF NOT EXISTS live`);
   await connection.run(`CREATE SCHEMA IF NOT EXISTS solana`);
+  await connection.run(`CREATE SCHEMA IF NOT EXISTS market`);
 
   await connection.run(`
     CREATE TABLE IF NOT EXISTS candles (
@@ -308,6 +318,28 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
     )
   `);
 
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS market.states (
+      pair            VARCHAR   NOT NULL,
+      timeframe       VARCHAR   NOT NULL,
+      bar_time        BIGINT    NOT NULL,
+      "at"            TIMESTAMP NOT NULL,
+      price           DOUBLE    NOT NULL,
+      trend           VARCHAR   NOT NULL,
+      ema200          DOUBLE,
+      ema50           DOUBLE,
+      adx             DOUBLE,
+      atr             DOUBLE,
+      atr_pct         DOUBLE,
+      dist_ema200_pct DOUBLE,
+      market_cap_usd  DOUBLE,
+      fdv_usd         DOUBLE,
+      strategy_mode   VARCHAR   NOT NULL,
+      fetched_at      TIMESTAMP NOT NULL DEFAULT now(),
+      PRIMARY KEY (pair, timeframe)
+    )
+  `);
+
   // Seed known Solana tokens when missing (idempotent).
   await connection.run(`
     INSERT INTO solana.tokens (symbol, mint, decimals, pool_address)
@@ -323,4 +355,5 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 /** Clear cached connections (for tests). */
 export function resetSpeculatorDbCache(): void {
   connections.clear();
+  pinnedDataDir = undefined;
 }

@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { defaultDataDir, getSpeculatorDb } from "./db/db.js";
+import { defaultDataDir, getConnection } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -224,7 +224,7 @@ async function runDatabaseCommand(): Promise<void> {
   }
 
   const url = process.env["DUCKDB_URL"] ?? "quack:localhost";
-  const conn = await getSpeculatorDb(defaultDataDir());
+  const conn = await getConnection(defaultDataDir());
 
   let stopping = false;
   const keepalive = setInterval(() => {

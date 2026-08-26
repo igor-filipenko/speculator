@@ -1,5 +1,5 @@
 import type { PersistedPortfolio, PersistedPosition, PersistedTrade } from "../paper/store.js";
-import { getSpeculatorDb } from "./db.js";
+import { getConnection } from "./db.js";
 
 const UPSERT_PORTFOLIO_SQL = `
   INSERT INTO paper.portfolios (
@@ -91,7 +91,7 @@ function rowToPosition(row: Record<string, unknown>): PersistedPosition {
 
 /** Count paper portfolio rows (for empty-check). */
 export async function paperPortfolioCount(dataDir?: string): Promise<number> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS cnt FROM paper.portfolios`);
   await reader.readAll();
   const row = reader.getRowObjectsJS()[0];
@@ -102,7 +102,7 @@ export async function paperPortfolioCount(dataDir?: string): Promise<number> {
 export async function loadAllPaperPortfolios(
   dataDir?: string,
 ): Promise<Record<string, PersistedPortfolio>> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
 
   const portfolioReader = await conn.runAndReadAll(`
     SELECT
@@ -152,7 +152,7 @@ export async function upsertPaperPortfolio(
   portfolio: PersistedPortfolio,
   dataDir?: string,
 ): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run(UPSERT_PORTFOLIO_SQL, {
     pair: portfolio.position.pair,
     cashUsdc: portfolio.cashUsdc,
@@ -166,7 +166,7 @@ export async function upsertPaperPortfolio(
 
 /** Append one simulated paper fill. */
 export async function insertPaperTrade(trade: PersistedTrade, dataDir?: string): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run(INSERT_TRADE_SQL, {
     pair: trade.pair,
     side: trade.side,
@@ -185,7 +185,7 @@ export async function syncPaperPortfolio(
   portfolio: PersistedPortfolio,
   dataDir?: string,
 ): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const pair = portfolio.position.pair;
 
   await conn.run("BEGIN TRANSACTION");

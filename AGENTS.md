@@ -29,6 +29,7 @@ src/
   db/
     db.ts               # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
+    market.ts           # market.states (HTF MarketState cache)
     paper.ts            # paper.portfolios / paper.trades
     live.ts             # live.portfolios / live.trades
     signals.ts          # signals history

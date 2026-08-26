@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { getSpeculatorDb, resetSpeculatorDbCache } from "./db.js";
+import { getConnection, resetSpeculatorDbCache } from "./db.js";
 import { insertSignal } from "./signals.js";
 
 describe("signals (DuckDB)", () => {
@@ -31,7 +31,7 @@ describe("signals (DuckDB)", () => {
       dataDir,
     );
 
-    const conn = await getSpeculatorDb(dataDir);
+    const conn = await getConnection(dataDir);
     const reader = await conn.runAndReadAll(
       `SELECT pair, side, price, reason, ema_fast, ema_slow, rsi FROM signals`,
     );

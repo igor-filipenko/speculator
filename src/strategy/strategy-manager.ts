@@ -11,8 +11,10 @@ import type {
   StrategyMode,
   Trend,
 } from "../types.js";
+import { BollingerStrategy } from "./bollinger.js";
+import { EmaRsiStrategy } from "./ema-rsi.js";
+import { GridStrategy } from "./grid.js";
 import { adx, atr, ema } from "./indicators.js";
-import { loadStrategy } from "./strategy.js";
 
 /** HTF indicator periods for {@link SimpleStrategyManager}. */
 export interface HtfParams {
@@ -59,6 +61,7 @@ export function evaluateMarketState(input: EvaluateMarketStateInput): MarketStat
     price,
     trend: "unknown",
     strategyMode,
+    candles,
   };
   if (poolStats?.marketCapUsd != null) {
     base.marketCapUsd = poolStats.marketCapUsd;
@@ -178,5 +181,16 @@ export class SimpleStrategyManager implements StrategyManager {
       strategyMode: this.strategy.getMode(),
       ...(poolStats !== undefined ? { poolStats } : {}),
     });
+  }
+}
+
+export function loadStrategy(mode: StrategyMode): Strategy {
+  switch (mode) {
+    case "bollinger":
+      return new BollingerStrategy();
+    case "grid":
+      return new GridStrategy();
+    default:
+      return new EmaRsiStrategy();
   }
 }

@@ -32,6 +32,8 @@ export interface MarketState {
   fdvUsd?: number;
   /** Currently env/CLI, not inferred from the market. */
   strategyMode: StrategyMode;
+  /** HTF OHLCV used to compute this snapshot. */
+  candles: Candle[];
 }
 
 /** Optional Gecko pool overview passed into {@link StrategyManager.evaluate}. */

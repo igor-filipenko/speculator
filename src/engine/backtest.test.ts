@@ -6,8 +6,7 @@ import { PaperPortfolio } from "../paper/portfolio.js";
 import { SimpleRiskManager } from "../risk/risk-manager.js";
 import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
 import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
-import { SimpleStrategyManager } from "../strategy/strategy-manager.js";
-import { loadStrategy } from "../strategy/strategy.js";
+import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
 import type {
   Candle,
   MarketState,
@@ -58,13 +57,14 @@ function managerFor(
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
     getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
-    evaluate: (pair, _candles, price, at): MarketState => ({
+    evaluate: (pair, candles, price, at): MarketState => ({
       pair,
       timeframe: "4h",
       at,
       price,
       trend: "unknown",
       strategyMode: strategy.getMode(),
+      candles,
     }),
   };
 }

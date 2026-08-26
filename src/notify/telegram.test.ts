@@ -18,6 +18,7 @@ const sample: MarketState = {
   marketCapUsd: 12_300_000_000,
   fdvUsd: 14_100_000_000,
   strategyMode: "ema-rsi",
+  candles: [],
 };
 
 describe("formatMarketStatesMessage", () => {

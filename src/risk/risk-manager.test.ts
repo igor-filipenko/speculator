@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { loadStrategy } from "../strategy/strategy.js";
+import { loadStrategy } from "../strategy/strategy-manager.js";
 import type { Candle, Order, RiskParams, Signal } from "../types.js";
 import { evaluateProtectiveExit, SimpleRiskManager } from "./risk-manager.js";
 

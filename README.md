@@ -60,13 +60,13 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                 |
-| ------------ | ------------------------------------- |
-| `/start`     | Greeting and command list             |
-| `/report`    | Last signal per pair (including HOLD) |
-| `/market`    | HTF trend, EMA200, ADX, ATR, mcap/FDV |
-| `/chart`     | OHLCV candle chart with EMA/RSI       |
-| `/portfolio` | Current paper or live portfolio       |
+| Command      | Reply                                     |
+| ------------ | ----------------------------------------- |
+| `/start`     | Greeting and command list                 |
+| `/report`    | Last signal per pair (including HOLD)     |
+| `/market`    | HTF trend chart (EMA200 / ADX) + mcap/FDV |
+| `/chart`     | OHLCV candle chart with EMA/RSI           |
+| `/portfolio` | Current paper or live portfolio           |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -356,7 +356,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes a **MarketState** on each poll from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. Telegram `/market` shows this. The **active strategy and risk manager are still the env/CLI defaults** (`getActiveStrategy` / `getActiveRiskManager`); auto-selection from MarketState is not implemented yet.
+`SimpleStrategyManager` computes a **MarketState** on each poll from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy and risk manager are still the env/CLI defaults** (`getActiveStrategy` / `getActiveRiskManager`); auto-selection from MarketState is not implemented yet.
 
 ### EMA trend (`ema-rsi`)
 
@@ -402,8 +402,8 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
   strategy/ema-rsi.ts
   strategy/bollinger.ts
-  strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger | grid)
-  strategy/strategy-manager.ts # HTF MarketState + getActiveStrategy/RiskManager
+  strategy/strategy-manager.ts # loadStrategy + HTF MarketState; getActiveStrategy/RiskManager
+  strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX for /market
   strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
   strategy/bollinger-svg.ts # BB SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)

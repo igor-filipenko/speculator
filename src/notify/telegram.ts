@@ -1,7 +1,7 @@
 import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
-import { renderOhlcvPng } from "../chart/render-png.js";
+import { renderMarketPng, renderOhlcvPng } from "../chart/render-png.js";
 import type { MarketState, Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
@@ -204,7 +204,7 @@ function formatStartMessage(): string {
     "*Commands*",
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
-    `/market — ${escapeMd("HTF trend, EMA200, ADX, ATR, mcap")}`,
+    `/market — ${escapeMd("HTF trend chart (EMA200, ADX)")}`,
     `/chart — ${escapeMd("OHLCV candle chart (EMA/RSI)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
@@ -409,7 +409,7 @@ function startTelegramCommands(
 
   instance.command("market", async (ctx) => {
     try {
-      await replyMd(ctx, formatMarketStatesMessage(state.lastMarketStates));
+      await sendMarketCharts(ctx, state.lastMarketStates);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Telegram /market failed: ${message}`);
@@ -460,6 +460,51 @@ function startTelegramCommands(
     await instance.stop();
     commandsStarted = false;
   };
+}
+
+/** Send one HTF MarketState chart photo per pair. */
+async function sendMarketCharts(
+  ctx: Context,
+  lastMarketStates: Map<string, MarketState>,
+): Promise<void> {
+  if (lastMarketStates.size === 0) {
+    await replyMd(ctx, formatMarketStatesMessage(lastMarketStates));
+    return;
+  }
+
+  let sent = 0;
+  for (const [pair, market] of lastMarketStates) {
+    if (market.candles.length === 0) {
+      try {
+        await replyMd(ctx, formatMarketStateMessage(market));
+        sent += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Telegram /market text failed for ${pair}: ${message}`);
+      }
+      continue;
+    }
+    try {
+      const png = renderMarketPng(market);
+      await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-market.png`), {
+        caption: formatMarketStateMessage(market),
+        parse_mode: PARSE_MODE,
+      });
+      sent += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Telegram /market failed for ${pair}: ${message}`);
+      try {
+        await replyMd(ctx, `Market chart failed for ${code(pair)}\\.`);
+      } catch {
+        /* ignore secondary reply failure */
+      }
+    }
+  }
+
+  if (sent === 0) {
+    await replyMd(ctx, formatMarketStatesMessage(lastMarketStates));
+  }
 }
 
 /** Send one OHLCV chart photo per pair that has cached candles. */

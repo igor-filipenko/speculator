@@ -62,6 +62,7 @@ describe("evaluateMarketState", () => {
     });
     assert.equal(state.trend, "unknown");
     assert.equal(state.ema200, undefined);
+    assert.equal(state.candles.length, 50);
   });
 
   it("is bullish when close is above EMA200 and ADX is trending", () => {
@@ -129,5 +130,6 @@ describe("evaluateMarketState", () => {
     assert.equal(state.marketCapUsd, 1_000);
     assert.equal(state.fdvUsd, 2_000);
     assert.equal(state.trend, "unknown");
+    assert.deepEqual(state.candles, []);
   });
 });

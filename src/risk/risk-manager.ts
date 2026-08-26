@@ -1,3 +1,4 @@
+import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import type {
   Candle,
   ClearRisk,
@@ -9,7 +10,6 @@ import type {
   RiskParams,
   Signal,
   Snapshot,
-  Timeframe,
   Trade,
 } from "../types.js";
 
@@ -25,7 +25,12 @@ export class SimpleRiskManager implements RiskManager {
   constructor(private readonly config: RiskParams) {}
 
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
-    const peak = peakSinceOpen(snapshot, candles, signal, timeframeSeconds(this.config.timeframe));
+    const peak = peakSinceOpen(
+      snapshot,
+      candles,
+      signal,
+      candleIntervalSeconds(this.config.timeframe),
+    );
     // HOLD may still carry barLow/atr for display; stops only apply on BUY/SELL.
     const stopExit =
       signal.side === "HOLD" ? null : evaluateProtectiveExit(signal, snapshot, this.config, peak);
@@ -168,7 +173,7 @@ function inCooldown(trades: Trade[], at: Date, config: RiskParams): boolean {
   if (!lastSell) {
     return false;
   }
-  const intervalSec = timeframeSeconds(config.timeframe);
+  const intervalSec = candleIntervalSeconds(config.timeframe);
   const elapsedSec = Math.max(0, (at.getTime() - lastSell.at.getTime()) / 1000);
   const barsSince = Math.floor(elapsedSec / intervalSec);
   return barsSince < config.cooldownBars;
@@ -182,12 +187,8 @@ function belowMinHold(snapshot: Snapshot, at: Date, config: RiskParams): boolean
   if (!openedAt) {
     return false;
   }
-  const intervalSec = timeframeSeconds(config.timeframe);
+  const intervalSec = candleIntervalSeconds(config.timeframe);
   const elapsedSec = Math.max(0, (at.getTime() - openedAt.getTime()) / 1000);
   const barsHeld = Math.floor(elapsedSec / intervalSec);
   return barsHeld < config.minHoldBars;
-}
-
-function timeframeSeconds(timeframe: Timeframe): number {
-  return timeframe === "4h" ? 4 * 60 * 60 : 15 * 60;
 }

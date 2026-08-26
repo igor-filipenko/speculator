@@ -1,5 +1,20 @@
 import { insertSignal } from "../db/signals.js";
-import type { Risk, Signal, Snapshot, Trade } from "../types.js";
+import type { MarketState, Risk, Signal, Snapshot, Trade } from "../types.js";
+
+export function logMarket(state: MarketState): void {
+  const ts = state.at.toISOString();
+  const dist =
+    state.distEma200Pct != null ? ` distEma200=${(state.distEma200Pct * 100).toFixed(2)}%` : "";
+  const atrPct = state.atrPct != null ? ` atrPct=${(state.atrPct * 100).toFixed(2)}%` : "";
+  const mcap = state.marketCapUsd != null ? ` mcap=${state.marketCapUsd.toFixed(0)}` : "";
+  const fdv = state.fdvUsd != null ? ` fdv=${state.fdvUsd.toFixed(0)}` : "";
+  console.log(
+    `[${ts}] ${state.pair} MARKET ${state.timeframe} trend=${state.trend}` +
+      ` ema200=${fmt(state.ema200)} ema50=${fmt(state.ema50)} adx=${fmt(state.adx)}` +
+      ` atr=${fmt(state.atr)}${atrPct}${dist}${mcap}${fdv}` +
+      ` strategy=${state.strategyMode} (env)`,
+  );
+}
 
 export function logSignal(signal: Signal): void {
   const ts = signal.at.toISOString();

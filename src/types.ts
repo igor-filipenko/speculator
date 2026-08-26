@@ -6,7 +6,39 @@ export type PositionSide = "flat" | "long";
 
 export type StrategyMode = "ema-rsi" | "bollinger" | "grid";
 
-export type Timeframe = "15m" | "4h";
+export type Timeframe = "15m" | "4h" | "1d";
+
+/** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
+export type HtfTimeframe = "4h" | "1d";
+
+export type Trend = "bullish" | "bearish" | "flat" | "unknown";
+
+/** HTF regime + Gecko pool stats. Does not pick trades (yet). */
+export interface MarketState {
+  pair: string;
+  timeframe: HtfTimeframe;
+  at: Date;
+  price: number;
+  trend: Trend;
+  ema200?: number;
+  ema50?: number;
+  adx?: number;
+  atr?: number;
+  /** ATR / price. */
+  atrPct?: number;
+  /** (price − EMA200) / EMA200. */
+  distEma200Pct?: number;
+  marketCapUsd?: number;
+  fdvUsd?: number;
+  /** Currently env/CLI, not inferred from the market. */
+  strategyMode: StrategyMode;
+}
+
+/** Optional Gecko pool overview passed into {@link StrategyManager.evaluate}. */
+export interface PoolStats {
+  marketCapUsd?: number;
+  fdvUsd?: number;
+}
 
 export interface Candle {
   /** Unix timestamp in seconds (candle open time). */
@@ -190,6 +222,23 @@ export interface RiskManager {
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand;
 }
 
+/**
+ * HTF market regime plus the active strategy / risk (defaults today, inferred later).
+ * Does not fetch candles — callers use {@link getRequiredCandles} then {@link evaluate}.
+ */
+export interface StrategyManager {
+  getActiveStrategy(): Strategy;
+  getActiveRiskManager(): RiskManager;
+  getRequiredCandles(): RequiredCandles;
+  evaluate(
+    pair: string,
+    candles: Candle[],
+    price: number,
+    at: Date,
+    poolStats?: PoolStats,
+  ): MarketState;
+}
+
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
@@ -200,6 +249,7 @@ export interface ProgramState {
   readonly strategy: Strategy;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;
+  readonly lastMarketStates: Map<string, MarketState>;
   readonly portfolios: Map<string, Portfolio>;
 }
 

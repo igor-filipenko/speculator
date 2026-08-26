@@ -1,21 +1,25 @@
 import type { AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import { logSignal, persistSignal } from "../notify/console.js";
+import { logMarket, logSignal, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import type {
   Candle,
   Exchange,
+  MarketState,
   PairConfig,
   ProgramState,
   ShutdownCb,
   Signal,
   Strategy,
+  StrategyManager,
 } from "../types.js";
+import { refreshMarketState, sleep } from "./tick.js";
 
 export interface WatchOptions {
   config: AppConfig;
   strategy: Strategy;
+  strategyManager: StrategyManager;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */
@@ -27,14 +31,15 @@ export interface WatchOptions {
  * Main poll loop: candles → signal → risk command → exchange order → optional paper fill.
  */
 export async function runWatch(options: WatchOptions): Promise<void> {
-  const { config, strategy, once = false } = options;
+  const { config, strategy, strategyManager, once = false } = options;
   const exchange = new JupiterExchange({ apiKey: config.jupiterApiKey });
 
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
+  const lastMarketStates = options.state.lastMarketStates;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting watch mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting watch mode | strategy=${strategy.getDisplayName()} | htf=${config.htf} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });
@@ -47,12 +52,12 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     for (const pair of config.pairs) {
       try {
         await processPair({
-          config,
           pair,
-          strategy,
+          strategyManager,
           exchange,
           lastSignals,
           lastCandles,
+          lastMarketStates,
           telegram,
         });
       } catch (err) {
@@ -80,24 +85,40 @@ export async function runWatch(options: WatchOptions): Promise<void> {
 }
 
 async function processPair(args: {
-  config: AppConfig;
   pair: PairConfig;
-  strategy: Strategy;
+  strategyManager: StrategyManager;
   exchange: Exchange;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
+  lastMarketStates: Map<string, MarketState>;
   telegram: Telegram;
 }): Promise<void> {
-  const { pair, strategy, exchange, lastSignals, lastCandles, telegram } = args;
+  const { pair, strategyManager, exchange, lastSignals, lastCandles, lastMarketStates, telegram } =
+    args;
 
+  const price = await exchange.spotPrice(pair);
+
+  try {
+    const market = await refreshMarketState({
+      pair,
+      strategyManager,
+      price,
+      at: new Date(),
+    });
+    logMarket(market);
+    lastMarketStates.set(pair.symbol, market);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[${pair.symbol}] market state failed: ${message}`);
+  }
+
+  const strategy = strategyManager.getActiveStrategy();
   const required = strategy.getRequiredCandles();
   const candles = await fetchCandles({
     poolAddress: pair.geckoPoolAddress,
     timeframe: required.timeframe,
     limit: required.count,
   });
-
-  const price = await exchange.spotPrice(pair);
 
   const signal = strategy.evaluateSignal(
     pair.symbol,
@@ -111,8 +132,4 @@ async function processPair(args: {
   logSignal(signal);
   await persistSignal(signal);
   await telegram.notify({ type: "signal", signal });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

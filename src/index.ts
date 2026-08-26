@@ -7,9 +7,16 @@ import { runWallet } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
-import { SimpleRiskManager } from "./risk/risk-manager.js";
-import { loadStrategy } from "./strategy/strategy.js";
-import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, StrategyMode } from "./types.js";
+import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
+import type {
+  Candle,
+  MarketState,
+  Portfolio,
+  ProgramState,
+  ShutdownCb,
+  Signal,
+  StrategyMode,
+} from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
@@ -96,11 +103,16 @@ async function main(): Promise<void> {
 async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const programState: ProgramState = {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketStates: new Map<string, MarketState>(),
     portfolios: new Map<string, Portfolio>(),
   };
 
@@ -111,14 +123,25 @@ async function runWatchCommand(argv: string[]): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
+  await runWatch({
+    config,
+    strategy,
+    strategyManager,
+    state: programState,
+    telegram,
+    once,
+    shutdownCb,
+  });
 }
 
 async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
     config.pairs,
     config.paperCashUsdc,
@@ -128,6 +151,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketStates: new Map<string, MarketState>(),
     portfolios,
   };
 
@@ -140,8 +164,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 
   await runPaper({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     state: programState,
     telegram,
     once,
@@ -152,8 +175,11 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 async function runTradeCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const runtime = await createLiveRuntime(config);
   console.log(`Wallet ${runtime.walletAddress}`);
 
@@ -161,6 +187,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketStates: new Map<string, MarketState>(),
     portfolios: runtime.portfolios,
   };
 
@@ -173,8 +200,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
 
   await runTrade({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     exchange: runtime.exchange,
     state: programState,
     telegram,
@@ -232,12 +258,13 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     ? validateStrategyFlag(flags.strategy)
     : config.strategy;
 
-  const strategy = loadStrategy(strategyMode);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode,
+    htf: config.htf,
+  });
   const results = await runBacktest({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),

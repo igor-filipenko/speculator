@@ -45,6 +45,7 @@ src/
   strategy/ema-rsi.ts
   strategy/bollinger.ts
   strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger | grid)
+  strategy/strategy-manager.ts # HTF MarketState; getActiveStrategy / getActiveRiskManager
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
   strategy/bollinger-svg.ts # Bollinger band SVG

@@ -3,7 +3,7 @@ import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import type { Candle, Order, PairConfig, RiskManager, Strategy, Trade } from "../types.js";
+import type { Candle, Order, PairConfig, Strategy, StrategyManager, Trade } from "../types.js";
 
 export interface BacktestCliOptions {
   /** Lookback window in calendar days (0 = 90-day default, ignored when from/to set). */
@@ -54,8 +54,7 @@ export interface BacktestResult {
 
 export interface RunBacktestOptions {
   config: AppConfig;
-  strategy: Strategy;
-  riskManager: RiskManager;
+  strategyManager: StrategyManager;
   days?: number;
   /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
   fromTime?: number;
@@ -69,10 +68,11 @@ export interface RunBacktestOptions {
 }
 
 /**
- * Replay OHLCV through EMA/RSI with emulated exchange fills.
+ * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
-  const strategy = options.strategy;
+  const { strategyManager } = options;
+  const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveBacktestWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
 
@@ -100,8 +100,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     results.push(
       await replayPair({
         pair,
-        strategy,
-        riskManager: options.riskManager,
+        strategyManager,
         candles,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
@@ -115,14 +114,13 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
 
 async function replayPair(args: {
   pair: PairConfig;
-  strategy: Strategy;
-  riskManager: RiskManager;
+  strategyManager: StrategyManager;
   candles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const { pair, strategy, riskManager, candles, startingCashUsdc } = args;
+  const { pair, strategyManager, candles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -140,6 +138,9 @@ async function replayPair(args: {
     const window = candles.slice(0, i + 1);
     const close = candle.close;
     exchange.setMidPrice(close);
+
+    const strategy = strategyManager.getActiveStrategy();
+    const riskManager = strategyManager.getActiveRiskManager();
 
     const signal = strategy.evaluateSignal(
       pair.symbol,
@@ -186,7 +187,7 @@ async function replayPair(args: {
   return {
     metrics: {
       pair: pair.symbol,
-      strategy,
+      strategy: strategyManager.getActiveStrategy(),
       startingCashUsdc,
       endingEquity: snap.equity,
       totalReturnPct,

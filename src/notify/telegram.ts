@@ -2,7 +2,7 @@ import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderOhlcvPng } from "../chart/render-png.js";
-import type { Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
+import type { MarketState, Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
@@ -204,6 +204,7 @@ function formatStartMessage(): string {
     "*Commands*",
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
+    `/market — ${escapeMd("HTF trend, EMA200, ADX, ATR, mcap")}`,
     `/chart — ${escapeMd("OHLCV candle chart (EMA/RSI)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
@@ -227,6 +228,91 @@ function formatReportMessage(lastSignals: Map<string, Signal>): string {
 
   const blocks = [...lastSignals.values()].map(formatSignalMessage);
   return ["📊 *Report*", ...blocks].join("\n\n");
+}
+
+function signedPct(frac: number): string {
+  const pct = frac * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(2)}%`;
+}
+
+function pctOf(frac: number): string {
+  return `${(frac * 100).toFixed(2)}%`;
+}
+
+function formatUsdCompact(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1e9) {
+    return `$${(n / 1e9).toFixed(2)}B`;
+  }
+  if (abs >= 1e6) {
+    return `$${(n / 1e6).toFixed(2)}M`;
+  }
+  if (abs >= 1e3) {
+    return `$${(n / 1e3).toFixed(2)}K`;
+  }
+  return `$${n.toFixed(2)}`;
+}
+
+export function formatMarketStateMessage(state: MarketState): string {
+  const trendIcon = match(state.trend)
+    .with("bullish", () => "🟢")
+    .with("bearish", () => "🔴")
+    .with("flat", () => "⚪")
+    .with("unknown", () => "❔")
+    .exhaustive();
+
+  const lines = [
+    `${trendIcon} *${escapeMd(state.pair)}*  *${escapeMd(state.timeframe)}*`,
+    `Trend ${code(state.trend)}`,
+    `Price ${code(state.price.toFixed(6))}`,
+  ];
+
+  if (state.ema200 != null) {
+    const dist = state.distEma200Pct != null ? ` (${signedPct(state.distEma200Pct)})` : "";
+    lines.push(`EMA200 ${code(state.ema200.toFixed(4))}${escapeMd(dist)}`);
+  }
+  if (state.ema50 != null) {
+    lines.push(`EMA50 ${code(state.ema50.toFixed(4))}`);
+  }
+
+  const adxAtr: string[] = [];
+  if (state.adx != null) {
+    adxAtr.push(`ADX ${code(state.adx.toFixed(2))}`);
+  }
+  if (state.atr != null) {
+    const atrPct = state.atrPct != null ? ` (${pctOf(state.atrPct)})` : "";
+    adxAtr.push(`ATR ${code(state.atr.toFixed(4))}${escapeMd(atrPct)}`);
+  }
+  if (adxAtr.length > 0) {
+    lines.push(adxAtr.join(" · "));
+  }
+
+  if (state.marketCapUsd != null) {
+    lines.push(`MCap ${code(formatUsdCompact(state.marketCapUsd))}`);
+  }
+  if (state.fdvUsd != null) {
+    const label = state.marketCapUsd == null ? "FDV \\(mcap n/a\\)" : "FDV";
+    lines.push(`${label} ${code(formatUsdCompact(state.fdvUsd))}`);
+  }
+
+  lines.push(
+    `Strategy ${code(state.strategyMode)} ${escapeMd("(env)")}`,
+    `Risk ${escapeMd("default (strategy)")}`,
+    `_${escapeMd(state.at.toISOString())}_`,
+  );
+  return lines.join("\n");
+}
+
+export function formatMarketStatesMessage(lastMarketStates: Map<string, MarketState>): string {
+  if (lastMarketStates.size === 0) {
+    return ["📡 *Market*", "", `_No market state yet\\. Wait for the next poll tick\\._`].join(
+      "\n",
+    );
+  }
+
+  const blocks = [...lastMarketStates.values()].map(formatMarketStateMessage);
+  return ["📡 *Market*", ...blocks].join("\n\n");
 }
 
 function formatPortfolioMessage(
@@ -270,7 +356,7 @@ function formatChartCaption(pair: string, signal: Signal | undefined): string {
 }
 
 /**
- * Register /start, /report, /chart, /portfolio and begin long polling.
+ * Register /start, /report, /market, /chart, /portfolio and begin long polling.
  * Only the configured chatId is answered. Returns a stop function for shutdown.
  */
 function startTelegramCommands(
@@ -315,6 +401,20 @@ function startTelegramCommands(
       console.error(`Telegram /report failed: ${message}`);
       try {
         await replyMd(ctx, escapeMd("Failed to fetch last signal."));
+      } catch {
+        /* ignore secondary reply failure */
+      }
+    }
+  });
+
+  instance.command("market", async (ctx) => {
+    try {
+      await replyMd(ctx, formatMarketStatesMessage(state.lastMarketStates));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Telegram /market failed: ${message}`);
+      try {
+        await replyMd(ctx, escapeMd("Failed to fetch market state."));
       } catch {
         /* ignore secondary reply failure */
       }

@@ -30,7 +30,8 @@ Edit `.env`:
 
 | Variable               | Meaning                                                                                |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| `STRATEGY`             | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)                    |
+| `STRATEGY`             | `ema-rsi` (4h EMA trend), `bollinger`, or `grid`                                       |
+| `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                           |
 | `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` \| `database` (default `paper`) |
 | `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                             |
 | `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)                   |
@@ -63,6 +64,7 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [gra
 | ------------ | ------------------------------------- |
 | `/start`     | Greeting and command list             |
 | `/report`    | Last signal per pair (including HOLD) |
+| `/market`    | HTF trend, EMA200, ADX, ATR, mcap/FDV |
 | `/chart`     | OHLCV candle chart with EMA/RSI       |
 | `/portfolio` | Current paper or live portfolio       |
 
@@ -162,7 +164,7 @@ pnpm exec tsx src/index.ts paper --once
 pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/market`, `/chart`, and `/portfolio` from that chat.
 
 ## DuckDB Modes
 
@@ -354,6 +356,8 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
 
+`SimpleStrategyManager` computes a **MarketState** on each poll from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. Telegram `/market` shows this. The **active strategy and risk manager are still the env/CLI defaults** (`getActiveStrategy` / `getActiveRiskManager`); auto-selection from MarketState is not implemented yet.
+
 ### EMA trend (`ema-rsi`)
 
 EMA crossover + RSI band + trend EMA + ADX regime filter:
@@ -399,6 +403,7 @@ src/
   strategy/ema-rsi.ts
   strategy/bollinger.ts
   strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger | grid)
+  strategy/strategy-manager.ts # HTF MarketState + getActiveStrategy/RiskManager
   strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
   strategy/bollinger-svg.ts # BB SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
@@ -406,7 +411,7 @@ src/
   paper/store.ts           # paper load/save (DuckDB)
   live/portfolio.ts        # on-chain cash/size + ledger
   notify/console.ts
-  notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
+  notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio
   engine/tick.ts           # shared paper/trade poll loop
   engine/watch.ts
   engine/paper.ts

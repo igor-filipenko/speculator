@@ -3,13 +3,13 @@ import { describe, it } from "node:test";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { loadStrategy } from "../strategy/strategy-manager.js";
 import type { Candle, Order, RiskParams, Signal } from "../types.js";
-import { evaluateProtectiveExit, SimpleRiskManager } from "./risk-manager.js";
+import { evaluateProtectiveExit, GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 
 function riskParams(overrides: Partial<RiskParams> = {}): RiskParams {
   return { ...loadStrategy("ema-rsi").getRiskParams(), ...overrides };
 }
 
-describe("SimpleRiskManager", () => {
+describe("GenericRiskManager", () => {
   it("blocks BUY during cooldown after SELL", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const buyOrder: Order = {
@@ -45,7 +45,7 @@ describe("SimpleRiskManager", () => {
       at: new Date((start + 2 * interval) * 1000),
       meta: { atr: 1, barLow: 99, barHigh: 101 },
     };
-    const risk = new SimpleRiskManager(riskParams({ cooldownBars: 4 }));
+    const risk = new GenericRiskManager(riskParams({ cooldownBars: 4 }));
     const result = risk.check(signal, portfolio.getSnapshot(100), []);
     assert.equal(result.kind, "risk");
     assert.match(result.risk.reason, /cooldown/);
@@ -67,7 +67,7 @@ describe("SimpleRiskManager", () => {
 
     const start = Math.floor(openedAt.getTime() / 1000);
     const interval = 15 * 60;
-    const risk = new SimpleRiskManager(
+    const risk = new GenericRiskManager(
       riskParams({ minHoldBars: 4, atrStopMult: 2, atrTrailMult: 10 }),
     );
 
@@ -147,7 +147,7 @@ describe("SimpleRiskManager", () => {
       { time: t0, open: 100, high: 120, low: 99, close: 110, volume: 1 },
       { time: t0 + interval, open: 110, high: 116, low: 115, close: 115, volume: 1 },
     ];
-    const risk = new SimpleRiskManager(
+    const risk = new GenericRiskManager(
       riskParams({ atrStopMult: 50, atrTrailMult: 2, minHoldBars: 0 }),
     );
     // Peak 120 − 2×ATR(2) = 116; barLow 115 hits trail. Last-bar-only peak would be 116 → trail 112 (no hit).
@@ -211,5 +211,82 @@ describe("evaluateProtectiveExit", () => {
     assert.ok(cmd);
     assert.equal(cmd.side, "SELL");
     assert.match(cmd.reason, /ATR stop/);
+  });
+});
+
+describe("HighRiskManager", () => {
+  const buy: Signal = {
+    pair: "SOL/USDC",
+    side: "BUY",
+    reason: "cross",
+    price: 100,
+    at: new Date("2026-01-01T00:00:00.000Z"),
+  };
+  const sell: Signal = {
+    pair: "SOL/USDC",
+    side: "SELL",
+    reason: "exit",
+    price: 110,
+    at: new Date("2026-01-01T01:00:00.000Z"),
+  };
+
+  it("blocks BUY", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const risk = new HighRiskManager("trend is bearish", riskParams());
+    const result = risk.check(buy, portfolio.getSnapshot(100), []);
+    assert.equal(result.kind, "risk");
+    if (result.kind === "risk") {
+      assert.match(result.risk.reason, /high risk, trend is bearish/);
+    }
+  });
+
+  it("allows SELL when long", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      side: "BUY",
+      reason: "entry",
+      price: 100,
+      size: 9,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const risk = new HighRiskManager("trend is flat", riskParams());
+    const result = risk.check(sell, portfolio.getSnapshot(110), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.side, "SELL");
+      assert.equal(result.command.baseSize, 9);
+    }
+  });
+
+  it("fires ATR stop on HOLD when long", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      side: "BUY",
+      reason: "entry",
+      price: 100,
+      size: 9,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const hold: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 95,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      meta: { atr: 2, barLow: 95, barHigh: 101 },
+    };
+    const risk = new HighRiskManager("trend is bearish", riskParams({ atrStopMult: 2 }));
+    const result = risk.check(hold, portfolio.getSnapshot(95), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.side, "SELL");
+      assert.match(result.command.reason, /ATR stop/);
+    }
   });
 });

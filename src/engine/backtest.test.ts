@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { SimpleRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager } from "../risk/risk-manager.js";
 import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
 import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
 import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
@@ -44,8 +44,8 @@ function makeConfig(cash = 1000): AppConfig {
   };
 }
 
-function makeRisk(strategy: Strategy): SimpleRiskManager {
-  return new SimpleRiskManager(strategy.getRiskParams());
+function makeRisk(strategy: Strategy): GenericRiskManager {
+  return new GenericRiskManager(strategy.getRiskParams());
 }
 
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
@@ -66,6 +66,7 @@ function managerFor(
       strategyMode: strategy.getMode(),
       candles,
     }),
+    applyMarketState: () => false,
   };
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { MarketState } from "../types.js";
-import { formatMarketStatesMessage } from "./telegram.js";
+import { formatMarketMessage, formatMarketStatesMessage } from "./telegram.js";
 
 const sample: MarketState = {
   pair: "SOL/USDC",
@@ -27,7 +27,7 @@ describe("formatMarketStatesMessage", () => {
     assert.match(text, /No market state yet/);
   });
 
-  it("includes trend, HTF indicators, and env strategy/risk defaults", () => {
+  it("includes trend, HTF indicators, and env strategy", () => {
     const text = formatMarketStatesMessage(new Map([[sample.pair, sample]]));
     assert.match(text, /SOL\/USDC/);
     assert.match(text, /4h/);
@@ -38,6 +38,15 @@ describe("formatMarketStatesMessage", () => {
     assert.match(text, /MCap/);
     assert.match(text, /ema-rsi/);
     assert.match(text, /env/);
-    assert.match(text, /default/);
+    assert.doesNotMatch(text, /Risk /);
+  });
+});
+
+describe("formatMarketMessage", () => {
+  it("includes previous → next trend", () => {
+    const text = formatMarketMessage(sample, "flat");
+    assert.match(text, /MARKET/);
+    assert.match(text, /flat/);
+    assert.match(text, /bullish/);
   });
 });

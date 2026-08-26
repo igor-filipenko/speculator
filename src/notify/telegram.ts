@@ -2,7 +2,7 @@ import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderMarketPng, renderOhlcvPng } from "../chart/render-png.js";
-import type { MarketState, Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
+import type { MarketState, Portfolio, ProgramState, Risk, Signal, Trade, Trend } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
@@ -10,7 +10,8 @@ type TelegramInfo =
   | { type: "shutdown"; code: number; reason?: string }
   | { type: "signal"; signal: Signal }
   | { type: "risk"; risk: Risk }
-  | { type: "trade"; trade: Trade };
+  | { type: "trade"; trade: Trade }
+  | { type: "market"; market: MarketState; previous?: Trend };
 
 const PARSE_MODE = "MarkdownV2" as const;
 
@@ -71,6 +72,11 @@ async function notifyTelegram(
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
       .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
+      .with({ type: "market" }, ({ market, previous }) =>
+        previous !== undefined
+          ? formatMarketMessage(market, previous)
+          : formatMarketMessage(market),
+      )
       .exhaustive();
 
     if (text == null) {
@@ -296,12 +302,22 @@ export function formatMarketStateMessage(state: MarketState): string {
     lines.push(`${label} ${code(formatUsdCompact(state.fdvUsd))}`);
   }
 
-  lines.push(
-    `Strategy ${code(state.strategyMode)} ${escapeMd("(env)")}`,
-    `Risk ${escapeMd("default (strategy)")}`,
-    `_${escapeMd(state.at.toISOString())}_`,
-  );
+  lines.push(`Strategy ${code(state.strategyMode)} ${escapeMd("(env)")}`);
+  lines.push(`_${escapeMd(state.at.toISOString())}_`);
   return lines.join("\n");
+}
+
+export function formatMarketMessage(state: MarketState, previous?: Trend): string {
+  const change =
+    previous !== undefined
+      ? `${escapeMd(previous)} → ${escapeMd(state.trend)}`
+      : escapeMd(state.trend);
+  return [
+    `🔄 *${escapeMd(state.pair)}*  *MARKET*`,
+    change,
+    "",
+    formatMarketStateMessage(state),
+  ].join("\n");
 }
 
 export function formatMarketStatesMessage(lastMarketStates: Map<string, MarketState>): string {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SimpleRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type { Candle } from "../types.js";
 import { evaluateMarketState, htfParamsFor, SimpleStrategyManager } from "./strategy-manager.js";
 
@@ -41,11 +41,42 @@ describe("htfParamsFor / getRequiredCandles", () => {
 });
 
 describe("SimpleStrategyManager defaults", () => {
-  it("returns env-style strategy and SimpleRiskManager from that strategy", () => {
+  it("returns env-style strategy and GenericRiskManager from that strategy", () => {
     const manager = new SimpleStrategyManager({ strategyMode: "grid", htf: "4h" });
     assert.equal(manager.getActiveStrategy().getMode(), "grid");
-    assert.ok(manager.getActiveRiskManager() instanceof SimpleRiskManager);
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
     assert.equal(manager.getActiveRiskManager(), manager.getActiveRiskManager());
+  });
+});
+
+describe("applyMarketState", () => {
+  it("switches to HighRiskManager when trend is not bullish", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "ema-rsi", htf: "4h" });
+    const bullish = evaluateMarketState({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+      strategyMode: "ema-rsi",
+    });
+    assert.equal(bullish.trend, "bullish");
+    assert.equal(manager.applyMarketState(bullish), true);
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+
+    const bearish = evaluateMarketState({
+      pair: "SOL/USDC",
+      candles: series(250, 250, -0.8),
+      price: 50,
+      at,
+      params,
+      strategyMode: "ema-rsi",
+    });
+    assert.equal(bearish.trend, "bearish");
+    assert.equal(manager.applyMarketState(bearish, bullish), true);
+    assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
+    assert.equal(manager.applyMarketState(bearish, bearish), false);
+    assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
   });
 });
 

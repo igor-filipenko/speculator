@@ -127,6 +127,7 @@ export async function processPair(args: {
   const price = await exchange.spotPrice(pair);
 
   try {
+    const previous = lastMarketStates.get(pair.symbol);
     const market = await refreshMarketState({
       pair,
       strategyManager,
@@ -134,7 +135,18 @@ export async function processPair(args: {
       at: new Date(),
     });
     logMarket(market);
+    const trendChanged =
+      previous !== undefined
+        ? strategyManager.applyMarketState(market, previous)
+        : strategyManager.applyMarketState(market);
     lastMarketStates.set(pair.symbol, market);
+    if (trendChanged) {
+      await telegram.notify({
+        type: "market",
+        market,
+        ...(previous !== undefined ? { previous: previous.trend } : {}),
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[${pair.symbol}] market state failed: ${message}`);

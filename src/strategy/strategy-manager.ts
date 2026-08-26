@@ -1,4 +1,4 @@
-import { SimpleRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type {
   Candle,
   HtfTimeframe,
@@ -137,17 +137,17 @@ export interface SimpleStrategyManagerOptions {
 }
 
 /**
- * v1: active strategy / risk are env or CLI defaults.
- * Later both can be chosen from {@link MarketState}.
+ * Active strategy is env/CLI. Risk manager follows HTF {@link MarketState.trend}:
+ * bullish → {@link GenericRiskManager}, otherwise {@link HighRiskManager}.
  */
 export class SimpleStrategyManager implements StrategyManager {
-  private readonly strategy: Strategy;
-  private readonly riskManager: RiskManager;
   private readonly params: HtfParams;
+  private readonly strategy: Strategy;
+  private riskManager: RiskManager;
 
   constructor(options: SimpleStrategyManagerOptions) {
     this.strategy = loadStrategy(options.strategyMode);
-    this.riskManager = new SimpleRiskManager(this.strategy.getRiskParams());
+    this.riskManager = new GenericRiskManager(this.strategy.getRiskParams());
     this.params = htfParamsFor(options.htf);
   }
 
@@ -182,6 +182,28 @@ export class SimpleStrategyManager implements StrategyManager {
       ...(poolStats !== undefined ? { poolStats } : {}),
     });
   }
+
+  applyMarketState(state: MarketState, lastMarketState?: MarketState): boolean {
+    this.riskManager = createRiskManager(state.trend, this.strategy);
+    const changed = lastMarketState?.trend !== state.trend;
+    if (changed) {
+      if (lastMarketState === undefined) {
+        console.log(`[${state.pair}] trend is ${state.trend}`);
+      } else {
+        console.log(
+          `[${state.pair}] trend changed from ${lastMarketState.trend} to ${state.trend}`,
+        );
+      }
+    }
+    return changed;
+  }
+}
+
+export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
+  if (trend === "bullish") {
+    return new GenericRiskManager(strategy.getRiskParams());
+  }
+  return new HighRiskManager(`trend is ${trend}`, strategy.getRiskParams());
 }
 
 export function loadStrategy(mode: StrategyMode): Strategy {

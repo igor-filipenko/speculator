@@ -221,11 +221,12 @@ export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
+  getDisplayName(): string;
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand;
 }
 
 /**
- * HTF market regime plus the active strategy / risk (defaults today, inferred later).
+ * HTF market regime plus the active strategy / risk (trend picks the risk manager).
  * Does not fetch candles — callers use {@link getRequiredCandles} then {@link evaluate}.
  */
 export interface StrategyManager {
@@ -239,6 +240,8 @@ export interface StrategyManager {
     at: Date,
     poolStats?: PoolStats,
   ): MarketState;
+  /** Sync risk manager to {@link MarketState.trend}. Returns true when the trend changed. */
+  applyMarketState(state: MarketState, lastMarketState?: MarketState): boolean;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

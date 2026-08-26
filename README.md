@@ -144,6 +144,7 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
 | `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
+| `--ignore-trend`  | Do not evaluate/apply HTF market state (no MARKET logs, no trend risk) |
 
 Use either `--days` or `--from`/`--to`, not both.
 

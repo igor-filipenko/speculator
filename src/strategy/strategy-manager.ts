@@ -14,6 +14,7 @@ import type {
 import { BollingerStrategy } from "./mode/bollinger.js";
 import { GridStrategy } from "./mode/grid.js";
 import { adx, atr, ema } from "./indicators.js";
+import { match } from "ts-pattern";
 
 /** HTF indicator periods for {@link SimpleStrategyManager}. */
 export interface HtfParams {
@@ -199,10 +200,12 @@ export class SimpleStrategyManager implements StrategyManager {
 }
 
 export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
-  if (trend === "bullish") {
-    return new GenericRiskManager(strategy.getRiskParams());
-  }
-  return new HighRiskManager(`trend is ${trend}`, strategy.getRiskParams());
+  return match(trend)
+    .with("bullish", () => new GenericRiskManager(strategy.getRiskParams()))
+    .with("flat", () => new GenericRiskManager(strategy.getRiskParams()))
+    .with("bearish", () => new HighRiskManager("trend is bearish", strategy.getRiskParams()))
+    .with("unknown", () => new HighRiskManager("trend is unknown", strategy.getRiskParams()))
+    .exhaustive();
 }
 
 export function loadStrategy(mode: StrategyMode): Strategy {

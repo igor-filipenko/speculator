@@ -3,8 +3,13 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { GenericRiskManager } from "../risk/risk-manager.js";
-import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
+import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import {
+  evaluateMarketState,
+  htfParamsFor,
+  loadStrategy,
+  SimpleStrategyManager,
+} from "../strategy/strategy-manager.js";
 import type {
   Candle,
   MarketState,
@@ -45,6 +50,32 @@ function makeConfig(cash = 1000): AppConfig {
 
 function makeRisk(strategy: Strategy): GenericRiskManager {
   return new GenericRiskManager(strategy.getRiskParams());
+}
+
+function htfAwareManager(strategy: Strategy): StrategyManager {
+  const params = htfParamsFor("4h");
+  let riskManager: RiskManager = new GenericRiskManager(strategy.getRiskParams());
+  return {
+    getActiveStrategy: () => strategy,
+    getActiveRiskManager: () => riskManager,
+    getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
+    evaluate: (pair, candles, price, at): MarketState =>
+      evaluateMarketState({
+        pair,
+        candles,
+        price,
+        at,
+        params,
+        strategyMode: strategy.getMode(),
+      }),
+    applyMarketState: (state, prev) => {
+      riskManager =
+        state.trend === "bullish"
+          ? new GenericRiskManager(strategy.getRiskParams())
+          : new HighRiskManager(`trend is ${state.trend}`, strategy.getRiskParams());
+      return prev?.trend !== state.trend;
+    },
+  };
 }
 
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
@@ -100,8 +131,7 @@ function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }
   };
 }
 
-function series(count: number, startPrice: number, delta: number): Candle[] {
-  const start = 1_700_000_000;
+function series(count: number, startPrice: number, delta: number, start = 1_700_000_000): Candle[] {
   const interval = 15 * 60;
   const candles: Candle[] = [];
   let price = startPrice;
@@ -119,19 +149,46 @@ function series(count: number, startPrice: number, delta: number): Candle[] {
   return candles;
 }
 
+function htfSeries(count: number, startPrice: number, delta: number, start: number): Candle[] {
+  const interval = 4 * 60 * 60;
+  const candles: Candle[] = [];
+  let price = startPrice;
+  for (let i = 0; i < count; i++) {
+    price += delta;
+    const close = price;
+    candles.push({
+      time: start + i * interval,
+      open: close - delta / 2,
+      high: close + Math.abs(delta) + 0.2,
+      low: close - Math.abs(delta) - 0.2,
+      close,
+      volume: 1,
+    });
+  }
+  return candles;
+}
+
 describe("parseBacktestArgs", () => {
   it("parses --days and --force-refresh", () => {
     assert.deepEqual(parseBacktestArgs(["--days", "14", "--force-refresh"]), {
       days: 14,
       forceRefresh: true,
+      ignoreTrend: false,
     });
     assert.deepEqual(parseBacktestArgs(["--days=7"]), {
       days: 7,
       forceRefresh: false,
+      ignoreTrend: false,
     });
     assert.deepEqual(parseBacktestArgs([]), {
       days: 0,
       forceRefresh: false,
+      ignoreTrend: false,
+    });
+    assert.deepEqual(parseBacktestArgs(["--ignore-trend"]), {
+      days: 0,
+      forceRefresh: false,
+      ignoreTrend: true,
     });
   });
 
@@ -264,6 +321,52 @@ describe("runBacktest", () => {
     assert.equal(result.trades.length, 0);
     assert.equal(result.metrics.endingEquity, 500);
     assert.equal(result.metrics.totalReturnPct, 0);
+  });
+
+  it("evaluates HTF market state and blocks BUY when trend is not bullish", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+    });
+    assert.ok(result);
+    assert.equal(result.trades.filter((t) => t.side === "BUY").length, 0);
+  });
+
+  it("allows BUY when HTF trend is bullish", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 50, 0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
+  });
+
+  it("skips HTF apply and log when ignoreTrend is set", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+      ignoreTrend: true,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
   });
 });
 

@@ -32,7 +32,7 @@ function sampleState(candles: Candle[]): MarketState {
     at: new Date("2026-01-01T00:00:00.000Z"),
     price: candles[candles.length - 1]?.close ?? 100,
     trend: "bullish",
-    strategyMode: "ema-rsi",
+    strategyMode: "bollinger",
     candles,
   };
 }

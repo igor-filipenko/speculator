@@ -4,7 +4,7 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "ema-rsi" | "bollinger" | "grid";
+export type StrategyMode = "bollinger" | "grid";
 
 export type Timeframe = "15m" | "4h" | "1d";
 

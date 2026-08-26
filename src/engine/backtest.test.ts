@@ -4,8 +4,6 @@ import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { GenericRiskManager } from "../risk/risk-manager.js";
-import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
-import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
 import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
 import type {
   Candle,
@@ -13,6 +11,7 @@ import type {
   Order,
   RiskManager,
   RiskParams,
+  SignalSide,
   Strategy,
   StrategyManager,
 } from "../types.js";
@@ -22,7 +21,7 @@ const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
-    strategy: "ema-rsi",
+    strategy: "bollinger",
     htf: "4h",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],
@@ -70,58 +69,51 @@ function managerFor(
   };
 }
 
-function makeStrategy(
-  signalOverrides: Partial<EmaRsiParams> = {},
-  riskOverrides: Partial<RiskParams> = {},
-): Strategy {
-  const params: EmaRsiParams = { ...emaRsiParamsFor(), ...signalOverrides };
-  const risk: RiskParams = { ...loadStrategy("ema-rsi").getRiskParams(), ...riskOverrides };
+function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }): Strategy {
+  const risk: RiskParams = {
+    timeframe: "15m",
+    atrStopMult: 100,
+    atrTrailMult: 100,
+    cooldownBars: 0,
+    minHoldBars: 0,
+    ...opts.risk,
+  };
   return {
-    getDisplayName: () => `ema-rsi (${params.timeframe})`,
-    getMode: () => "ema-rsi",
+    getDisplayName: () => "scripted",
+    getMode: () => "bollinger",
     getRiskParams: () => risk,
-    getRequiredCandles: () => ({
-      timeframe: params.timeframe,
-      count:
-        Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
-        params.rsiPeriod +
-        5,
-    }),
-    evaluateSignal: (pair, candles, price, at) =>
-      evaluateEmaRsi({ pair, candles, strategy: params, price, at }),
-    buildChartSvg: (pair, candles) => buildOhlcvSvg({ pair, candles, strategy: params }),
+    getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+    evaluateSignal: (pair, candles, price, at) => {
+      const last = candles[candles.length - 1]!;
+      const i = candles.length - 1;
+      const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";
+      return {
+        pair,
+        side,
+        reason: side === "BUY" ? "scripted buy" : "hold",
+        price,
+        at,
+        meta: { atr: 1, barLow: last.low, barHigh: last.high },
+      };
+    },
+    buildChartSvg: () => "<svg></svg>",
   };
 }
 
-/** Build a long downtrend then sharp uptrend to force a bullish EMA cross. */
-function crossoverCandles(): Candle[] {
+function series(count: number, startPrice: number, delta: number): Candle[] {
   const start = 1_700_000_000;
   const interval = 15 * 60;
   const candles: Candle[] = [];
-  let price = 200;
-  // Decline long enough to warm indicators with fast below slow.
-  for (let i = 0; i < 80; i++) {
-    price -= 0.8;
+  let price = startPrice;
+  for (let i = 0; i < count; i++) {
+    price += delta;
     candles.push({
       time: start + i * interval,
-      open: price + 0.4,
+      open: price - delta / 2,
       high: price + 0.5,
       low: price - 0.5,
       close: price,
       volume: 10,
-    });
-  }
-  // Sharp rally to cross fast above slow while RSI is not maxed out.
-  for (let i = 0; i < 25; i++) {
-    price += 4;
-    const t = start + (80 + i) * interval;
-    candles.push({
-      time: t,
-      open: price - 2,
-      high: price + 1,
-      low: price - 3,
-      close: price,
-      volume: 20,
     });
   }
   return candles;
@@ -180,23 +172,10 @@ describe("parseBacktestDate", () => {
 
 describe("runBacktest", () => {
   it("replays fixture candles with emulated costs and no paper-state writes", async () => {
-    const candles = crossoverCandles();
+    const candles = series(20, 100, 0.2);
     const startingCash = 1000;
-    // Loose filters so the classic cross fixture still fires a BUY (cost-model smoke).
-    const strategy = makeStrategy(
-      {
-        rsiBuyMin: 0,
-        rsiBuyMax: 100,
-        trendEmaPeriod: 5,
-        adxMin: 0,
-      },
-      {
-        cooldownBars: 0,
-        minHoldBars: 0,
-        atrStopMult: 100,
-        atrTrailMult: 100,
-      },
-    );
+    const buyIndex = 5;
+    const strategy = scriptedStrategy({ buyIndex });
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
       strategyManager: managerFor(strategy),
@@ -208,10 +187,9 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
-    assert.equal(result.metrics.strategy.getMode(), "ema-rsi");
+    assert.equal(result.metrics.strategy.getMode(), "bollinger");
     assert.ok(result.equityCurve.length === candles.length);
 
-    // With a forced bullish cross we expect at least one simulated BUY.
     assert.ok(result.trades.length >= 1);
     const buy = result.trades[0];
     assert.ok(buy);
@@ -223,7 +201,6 @@ describe("runBacktest", () => {
     const emulated = emulateFillPrice({ side: "BUY", close: buyBar.close, tier: "liquid" });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
 
-    // Priority fee + adverse price → size below cash/mid.
     const midSize = startingCash / buyBar.close;
     assert.ok(buy.size < midSize);
 
@@ -236,71 +213,21 @@ describe("runBacktest", () => {
   });
 
   it("does not ATR-exit on HOLD after entry when price crashes", async () => {
-    const start = 1_700_000_000;
-    const interval = 15 * 60;
-    const candles: Candle[] = [];
-    let price = 100;
-    for (let i = 0; i < 40; i++) {
-      price += 0.2;
-      candles.push({
-        time: start + i * interval,
-        open: price - 0.1,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
-    for (let i = 0; i < 6; i++) {
-      price -= 0.4;
-      candles.push({
-        time: start + (40 + i) * interval,
-        open: price + 0.2,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
-    for (let i = 0; i < 8; i++) {
-      price += 0.5;
-      candles.push({
-        time: start + (46 + i) * interval,
-        open: price - 0.2,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
+    const candles = series(40, 100, 0.2);
+    const last = candles[candles.length - 1]!;
     candles.push({
-      time: start + 54 * interval,
-      open: price,
-      high: price,
-      low: price - 20,
-      close: price - 15,
+      time: last.time + 15 * 60,
+      open: last.close,
+      high: last.close,
+      low: last.close - 20,
+      close: last.close - 15,
       volume: 5,
     });
 
-    const strategy = makeStrategy(
-      {
-        emaFast: 5,
-        emaSlow: 12,
-        trendEmaPeriod: 20,
-        rsiPeriod: 14,
-        rsiBuyMin: 20,
-        rsiBuyMax: 90,
-        atrPeriod: 5,
-        adxPeriod: 5,
-        adxMin: 0,
-      },
-      {
-        atrStopMult: 1.5,
-        atrTrailMult: 50,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      },
-    );
+    const strategy = scriptedStrategy({
+      buyIndex: 20,
+      risk: { atrStopMult: 1.5, atrTrailMult: 50 },
+    });
 
     const [result] = await runBacktest({
       config: makeConfig(1000),
@@ -314,7 +241,7 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("ema-rsi");
+    const strategy = loadStrategy("bollinger");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
@@ -329,7 +256,7 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
-      strategyManager: new SimpleStrategyManager({ strategyMode: "ema-rsi", htf: "4h" }),
+      strategyManager: new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" }),
       candles,
     });
 

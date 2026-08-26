@@ -6,9 +6,9 @@ import type {
   SignalSide,
   Strategy,
   Timeframe,
-} from "../types.js";
+} from "../../types.js";
 import { buildBollingerSvg } from "./bollinger-svg.js";
-import { adx, atr, bollinger, ema, rsi } from "./indicators.js";
+import { adx, atr, bollinger, ema, rsi } from "../indicators.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;

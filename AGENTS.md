@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI or Bollinger on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Grid on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
 
 Build/run: [README.md](./README.md).
 
@@ -43,13 +43,13 @@ src/
   exchange/emulated-quote.ts   # backtest fill cost model
   exchange/emulated-exchange.ts
   strategy/indicators.ts
-  strategy/ema-rsi.ts
-  strategy/bollinger.ts
+  strategy/mode/bollinger.ts
+  strategy/mode/grid.ts
   strategy/strategy-manager.ts # loadStrategy + HTF MarketState; getActiveStrategy / getActiveRiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
-  strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
-  strategy/bollinger-svg.ts # Bollinger band SVG
+  strategy/mode/bollinger-svg.ts # Bollinger band SVG
+  strategy/mode/grid-svg.ts      # ATR grid SVG
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (DuckDB)

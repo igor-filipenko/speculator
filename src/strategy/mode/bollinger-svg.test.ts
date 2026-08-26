@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle } from "../types.js";
-import { emaRsiParamsFor } from "./ema-rsi.js";
-import { buildOhlcvSvg } from "./ema-rsi-svg.js";
+import type { Candle } from "../../types.js";
+import { bollingerParamsFor } from "./bollinger.js";
+import { buildBollingerSvg } from "./bollinger-svg.js";
 
-const strategy = emaRsiParamsFor();
+const strategy = bollingerParamsFor();
 
 function makeCandles(n: number): Candle[] {
   const out: Candle[] = [];
@@ -27,28 +27,27 @@ function makeCandles(n: number): Candle[] {
   return out;
 }
 
-describe("buildOhlcvSvg", () => {
-  it("renders a non-empty SVG with EMA and RSI labels", () => {
-    const svg = buildOhlcvSvg({
+describe("buildBollingerSvg", () => {
+  it("renders a non-empty SVG with BB and RSI labels", () => {
+    const svg = buildBollingerSvg({
       pair: "SOL/USDC",
       candles: makeCandles(40),
       strategy,
     });
     assert.ok(svg.includes("<svg"));
     assert.ok(svg.includes("SOL/USDC"));
-    assert.ok(svg.includes("EMA12"));
-    assert.ok(svg.includes("EMA26"));
+    assert.ok(svg.includes("BB mid"));
     assert.ok(svg.includes("RSI14"));
     assert.ok(svg.length > 500);
   });
 
   it("grows with candle count", () => {
-    const small = buildOhlcvSvg({
+    const small = buildBollingerSvg({
       pair: "SOL/USDC",
       candles: makeCandles(20),
       strategy,
     });
-    const large = buildOhlcvSvg({
+    const large = buildBollingerSvg({
       pair: "SOL/USDC",
       candles: makeCandles(80),
       strategy,
@@ -58,7 +57,7 @@ describe("buildOhlcvSvg", () => {
 
   it("rejects an empty series", () => {
     assert.throws(
-      () => buildOhlcvSvg({ pair: "SOL/USDC", candles: [], strategy }),
+      () => buildBollingerSvg({ pair: "SOL/USDC", candles: [], strategy }),
       /empty candle series/,
     );
   });

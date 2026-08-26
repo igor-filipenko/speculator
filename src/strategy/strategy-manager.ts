@@ -11,9 +11,8 @@ import type {
   StrategyMode,
   Trend,
 } from "../types.js";
-import { BollingerStrategy } from "./bollinger.js";
-import { EmaRsiStrategy } from "./ema-rsi.js";
-import { GridStrategy } from "./grid.js";
+import { BollingerStrategy } from "./mode/bollinger.js";
+import { GridStrategy } from "./mode/grid.js";
 import { adx, atr, ema } from "./indicators.js";
 
 /** HTF indicator periods for {@link SimpleStrategyManager}. */
@@ -212,7 +211,5 @@ export function loadStrategy(mode: StrategyMode): Strategy {
       return new BollingerStrategy();
     case "grid":
       return new GridStrategy();
-    default:
-      return new EmaRsiStrategy();
   }
 }

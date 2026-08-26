@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { loadStrategy } from "../strategy/strategy-manager.js";
 import type { Candle, Order, RiskParams, Signal } from "../types.js";
 import { evaluateProtectiveExit, GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 
 function riskParams(overrides: Partial<RiskParams> = {}): RiskParams {
-  return { ...loadStrategy("ema-rsi").getRiskParams(), ...overrides };
+  return {
+    timeframe: "15m",
+    atrStopMult: 2,
+    atrTrailMult: 2.5,
+    cooldownBars: 2,
+    minHoldBars: 1,
+    ...overrides,
+  };
 }
 
 describe("GenericRiskManager", () => {

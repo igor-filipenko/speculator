@@ -1,6 +1,6 @@
-import type { Candle } from "../types.js";
+import type { Candle } from "../../types.js";
 import type { GridParams } from "./grid.js";
-import { atr, ema } from "./indicators.js";
+import { atr, ema } from "../indicators.js";
 
 export interface GridChartInput {
   pair: string;

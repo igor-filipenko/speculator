@@ -61,9 +61,9 @@ describe("toMarketState", () => {
     const persisted = samplePersisted();
     const candles = sampleState().candles;
     const livePrice = 110;
-    const state = toMarketState(persisted, candles, livePrice, "ema-rsi");
+    const state = toMarketState(persisted, candles, livePrice, "bollinger");
     assert.equal(state.price, livePrice);
-    assert.equal(state.strategyMode, "ema-rsi");
+    assert.equal(state.strategyMode, "bollinger");
     assert.equal(state.candles, candles);
     assert.ok(state.ema200 != null);
     assert.equal(state.distEma200Pct, (livePrice - state.ema200) / state.ema200);

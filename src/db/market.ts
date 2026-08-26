@@ -249,8 +249,12 @@ function asTrend(value: unknown): Trend {
 
 function asStrategyMode(value: unknown): StrategyMode {
   const raw = asString(value, "strategy_mode");
-  if (raw === "ema-rsi" || raw === "bollinger" || raw === "grid") {
+  if (raw === "bollinger" || raw === "grid") {
     return raw;
+  }
+  // Pre-removal cache rows.
+  if (raw === "ema-rsi") {
+    return "bollinger";
   }
   throw new Error(`invalid strategy mode "${raw}"`);
 }

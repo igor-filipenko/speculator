@@ -7,7 +7,7 @@ loadDotenv();
 
 const envSchema = z
   .object({
-    STRATEGY: z.enum(["ema-rsi", "bollinger", "grid"]).default("ema-rsi"),
+    STRATEGY: z.enum(["bollinger", "grid"]).default("bollinger"),
     HTF: z.enum(["4h", "1d"]).default("4h"),
     JUPITER_API_KEY: z.string().optional().default(""),
     WATCHLIST: z.string().default("SOL/USDC"),

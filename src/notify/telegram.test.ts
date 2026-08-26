@@ -17,7 +17,7 @@ const sample: MarketState = {
   distEma200Pct: 0.0288,
   marketCapUsd: 12_300_000_000,
   fdvUsd: 14_100_000_000,
-  strategyMode: "ema-rsi",
+  strategyMode: "bollinger",
   candles: [],
 };
 
@@ -36,7 +36,7 @@ describe("formatMarketStatesMessage", () => {
     assert.match(text, /ADX/);
     assert.match(text, /ATR/);
     assert.match(text, /MCap/);
-    assert.match(text, /ema-rsi/);
+    assert.match(text, /bollinger/);
     assert.match(text, /env/);
     assert.doesNotMatch(text, /Risk /);
   });

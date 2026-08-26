@@ -37,7 +37,7 @@ Options:
   --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
-  --strategy <name> Override strategy (ema-rsi | bollinger | grid; default: env STRATEGY)
+  --strategy <name> Override strategy (bollinger | grid; default: env STRATEGY)
   --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
 `);
   process.exit(1);
@@ -248,7 +248,7 @@ async function runDatabaseCommand(): Promise<void> {
   process.once("SIGTERM", () => void stop("SIGTERM", 0));
 }
 
-const VALID_STRATEGIES: StrategyMode[] = ["ema-rsi", "bollinger", "grid"];
+const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);

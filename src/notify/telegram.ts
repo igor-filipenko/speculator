@@ -211,7 +211,7 @@ function formatStartMessage(): string {
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
     `/market — ${escapeMd("HTF trend chart (EMA200, ADX)")}`,
-    `/chart — ${escapeMd("OHLCV candle chart (EMA/RSI)")}`,
+    `/chart — ${escapeMd("OHLCV candle chart (strategy overlays)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
 }

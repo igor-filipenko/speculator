@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal (candles for EMA/RSI)
+- **OHLCV:** GeckoTerminal (candles for Bollinger / Grid)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -30,7 +30,7 @@ Edit `.env`:
 
 | Variable               | Meaning                                                                                |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| `STRATEGY`             | `ema-rsi` (4h EMA trend), `bollinger`, or `grid`                                       |
+| `STRATEGY`             | `bollinger` (default) or `grid`                                                        |
 | `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                           |
 | `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` \| `database` (default `paper`) |
 | `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                             |
@@ -65,7 +65,7 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [gra
 | `/start`     | Greeting and command list                 |
 | `/report`    | Last signal per pair (including HOLD)     |
 | `/market`    | HTF trend chart (EMA200 / ADX) + mcap/FDV |
-| `/chart`     | OHLCV candle chart with EMA/RSI           |
+| `/chart`     | OHLCV candle chart with strategy overlays |
 | `/portfolio` | Current paper or live portfolio           |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
@@ -358,16 +358,6 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 `SimpleStrategyManager` computes a **MarketState** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.states`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` → `GenericRiskManager`, otherwise `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
-### EMA trend (`ema-rsi`)
-
-EMA crossover + RSI band + trend EMA + ADX regime filter:
-
-| Mode      | Timeframe | EMA     | Entry filters                               | ATR stop/trail | Cooldown |
-| --------- | --------- | ------- | ------------------------------------------- | -------------- | -------- |
-| `ema-rsi` | 4h        | 12 / 26 | RSI `[40, 60)`; close &gt; EMA 50; ADX ≥ 20 | 2× / 2.5×      | 2 bars   |
-
-Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from peak close. ADX does **not** block exits. Discretionary cross-SELL respects `minHoldBars` (1); protective stops still fire immediately.
-
 ### Bollinger flat (`bollinger`)
 
 Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on **lower-band reclaim** with filters:
@@ -376,7 +366,11 @@ Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on
 | ----------- | ------------------------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
 | `bollinger` | reclaim lower; RSI(14) &lt; 30; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
 
-`/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode (EMA/RSI chart for trend modes).
+`/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+
+### Grid (`grid`)
+
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX ≤ 30 and close is above trend EMA 20. Sells at entry + one grid spacing (needs portfolio snapshot). ATR stop/trail 2.5× / 3×, cooldown 1 bar.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
@@ -400,12 +394,12 @@ src/
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
-  strategy/ema-rsi.ts
-  strategy/bollinger.ts
+  strategy/mode/bollinger.ts
+  strategy/mode/grid.ts
   strategy/strategy-manager.ts # loadStrategy + HTF MarketState; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX for /market
-  strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
-  strategy/bollinger-svg.ts # BB SVG for /chart
+  strategy/mode/bollinger-svg.ts # BB SVG for /chart
+  strategy/mode/grid-svg.ts      # grid SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)

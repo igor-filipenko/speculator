@@ -32,7 +32,7 @@ const at = new Date("2026-01-01T00:00:00.000Z");
 
 describe("htfParamsFor / getRequiredCandles", () => {
   it("uses 200-EMA warmup of at least 220 bars on the given HTF", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "ema-rsi", htf: "4h" });
+    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
     const required = manager.getRequiredCandles();
     assert.equal(required.timeframe, "4h");
     assert.ok(required.count >= 200);
@@ -51,14 +51,14 @@ describe("SimpleStrategyManager defaults", () => {
 
 describe("applyMarketState", () => {
   it("switches to HighRiskManager when trend is not bullish", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "ema-rsi", htf: "4h" });
+    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
     const bullish = evaluateMarketState({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),
       price: 250,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
     });
     assert.equal(bullish.trend, "bullish");
     assert.equal(manager.applyMarketState(bullish), true);
@@ -70,7 +70,7 @@ describe("applyMarketState", () => {
       price: 50,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
     });
     assert.equal(bearish.trend, "bearish");
     assert.equal(manager.applyMarketState(bearish, bullish), true);
@@ -89,7 +89,7 @@ describe("evaluateMarketState", () => {
       price: candles[candles.length - 1]!.close,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
     });
     assert.equal(state.trend, "unknown");
     assert.equal(state.ema200, undefined);
@@ -105,7 +105,7 @@ describe("evaluateMarketState", () => {
       price: close,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
     });
     assert.equal(state.trend, "bullish");
     assert.ok(state.ema200 != null && close > state.ema200);
@@ -141,7 +141,7 @@ describe("evaluateMarketState", () => {
       price: close,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
     });
     assert.equal(state.trend, "flat");
     assert.ok(state.ema200 != null);
@@ -155,7 +155,7 @@ describe("evaluateMarketState", () => {
       price: 100,
       at,
       params,
-      strategyMode: "ema-rsi",
+      strategyMode: "bollinger",
       poolStats: { marketCapUsd: 1_000, fdvUsd: 2_000 },
     });
     assert.equal(state.marketCapUsd, 1_000);

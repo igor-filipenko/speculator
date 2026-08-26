@@ -12,9 +12,9 @@ import { adx, atr, bollinger, ema } from "./indicators.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;
-  /** SMA / band lookback (typically 20). */
+  /** SMA / band lookback. */
   period: number;
-  /** Band width in population standard deviations (typically 2). */
+  /** Band width in population standard deviations. */
   stdDev: number;
   /** Slow trend EMA; BUY only when close is above it (avoid catching knives). */
   trendEmaPeriod: number;
@@ -42,12 +42,12 @@ const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
 export function bollingerParamsFor(): BollingerParams {
   return {
     timeframe: "15m",
-    period: 20,
-    stdDev: 2,
-    trendEmaPeriod: 40,
+    period: 16,
+    stdDev: 1.5,
+    trendEmaPeriod: 50,
     atrPeriod: 14,
     adxPeriod: 14,
-    adxMax: 24,
+    adxMax: 32,
     minBandToMidPct: 0.004,
   };
 }
@@ -152,13 +152,13 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 4h mean-reversion: BB reclaim + trend EMA + ADX flat gate; exit at mid. */
+/** 15m mean-reversion: BB reclaim + trend EMA + ADX flat gate; exit at mid. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;
 
-  constructor() {
-    this.params = bollingerParamsFor();
+  constructor(params?: BollingerParams) {
+    this.params = params ?? bollingerParamsFor();
     this.risk = { timeframe: this.params.timeframe, ...BOLLINGER_RISK };
   }
 

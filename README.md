@@ -370,11 +370,11 @@ Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging markets (4h, BB period 20, stdDev 2). Buys only on **lower-band reclaim** with filters:
+Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on **lower-band reclaim** with filters:
 
 | Mode        | Entry                                                                | Exit                         | ATR stop/trail | Cooldown | minHold |
 | ----------- | -------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
-| `bollinger` | reclaim lower; ADX ≤ 15; close &gt; EMA 50; (mid−lower)/close ≥ 1.5% | close ≥ BB mid (SMA), or ATR | 2.5× / 3×      | 4 bars   | 1 bar   |
+| `bollinger` | reclaim lower; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
 
 `/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
 

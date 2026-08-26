@@ -8,7 +8,7 @@ import type {
   Timeframe,
 } from "../types.js";
 import { buildBollingerSvg } from "./bollinger-svg.js";
-import { adx, atr, bollinger, ema } from "./indicators.js";
+import { adx, atr, bollinger, ema, rsi } from "./indicators.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;
@@ -29,6 +29,10 @@ export interface BollingerParams {
    * Skips setups where mean-reversion distance cannot cover ~RT fees.
    */
   minBandToMidPct: number;
+  /** Wilder RSI period (oversold gate on lower-band reclaim). */
+  rsiPeriod: number;
+  /** BUY only when RSI < this (skip weak lower-band touches). */
+  rsiBuyMax: number;
 }
 
 const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
@@ -42,13 +46,15 @@ const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
 export function bollingerParamsFor(): BollingerParams {
   return {
     timeframe: "15m",
-    period: 16,
+    period: 14,
     stdDev: 1.5,
     trendEmaPeriod: 50,
     atrPeriod: 14,
     adxPeriod: 14,
     adxMax: 32,
     minBandToMidPct: 0.004,
+    rsiPeriod: 14,
+    rsiBuyMax: 45,
   };
 }
 
@@ -64,8 +70,9 @@ export interface BollingerInput {
 /**
  * Mean-reversion Bollinger for flat markets.
  * BUY on lower-band **reclaim** (prev close ≤ lower, close > lower) when:
- * ADX ≤ adxMax, close > trend EMA, and (mid − lower) / close ≥ minBandToMidPct.
- * SELL when close ≥ middle (SMA basis). ADX does not block exits.
+ * ADX ≤ adxMax, close > trend EMA, (mid − lower) / close ≥ minBandToMidPct,
+ * and RSI < rsiBuyMax (oversold; skip weak touches).
+ * SELL when close ≥ middle (SMA basis). ADX / RSI do not block exits.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -76,6 +83,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const trendSeries = ema(closes, strategy.trendEmaPeriod);
   const atrSeries = atr(candles, strategy.atrPeriod);
   const adxSeries = adx(candles, strategy.adxPeriod);
+  const rsiSeries = rsi(closes, strategy.rsiPeriod);
 
   const i = closes.length - 1;
   const prev = i - 1;
@@ -86,6 +94,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const trendEma = trendSeries[i];
   const atrNow = atrSeries[i];
   const adxNow = adxSeries[i];
+  const rsiNow = rsiSeries[i];
   const lastBar = candles[i];
 
   const meta: NonNullable<Signal["meta"]> = {};
@@ -95,6 +104,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (trendEma != null) meta.trendEma = trendEma;
   if (atrNow != null) meta.atr = atrNow;
   if (adxNow != null) meta.adx = adxNow;
+  if (rsiNow != null) meta.rsi = rsiNow;
   if (lastBar != null) {
     meta.barLow = lastBar.low;
     meta.barHigh = lastBar.high;
@@ -114,6 +124,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     bbLowerPrev == null ||
     trendEma == null ||
     adxNow == null ||
+    rsiNow == null ||
     prev < 0
   ) {
     return {
@@ -129,7 +140,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const reclaimedLower = closePrev <= bbLowerPrev && close > bbLower;
 
   let side: SignalSide = "HOLD";
-  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)})`;
+  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
 
   if (reclaimedLower) {
     if (adxNow > strategy.adxMax) {
@@ -138,11 +149,14 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = `Lower reclaim ignored: close ${fmt(close)} <= trend EMA${strategy.trendEmaPeriod} ${fmt(trendEma)}`;
     } else if (bandToMidPct < strategy.minBandToMidPct) {
       reason = `Lower reclaim ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
+    } else if (rsiNow >= strategy.rsiBuyMax) {
+      reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
     } else {
       side = "BUY";
       reason =
         `Reclaimed lower BB (prev ${fmt(closePrev)} ≤ ${fmt(bbLowerPrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; close > trend EMA; band→mid ${pct(bandToMidPct)}`;
+        `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; close > trend EMA; band→mid ${pct(bandToMidPct)}; ` +
+        `RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
   } else if (close >= bbMid) {
     side = "SELL";
@@ -152,7 +166,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m mean-reversion: BB reclaim + trend EMA + ADX flat gate; exit at mid. */
+/** 15m mean-reversion: BB reclaim + RSI oversold + trend EMA + ADX flat gate; exit at mid. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;
@@ -175,8 +189,8 @@ export class BollingerStrategy implements Strategy {
   }
 
   getRequiredCandles(): RequiredCandles {
-    const { timeframe, period, trendEmaPeriod, atrPeriod, adxPeriod } = this.params;
-    const warm = Math.max(period, trendEmaPeriod, atrPeriod, adxPeriod * 2) + 5;
+    const { timeframe, period, trendEmaPeriod, atrPeriod, adxPeriod, rsiPeriod } = this.params;
+    const warm = Math.max(period, trendEmaPeriod, atrPeriod, adxPeriod * 2, rsiPeriod) + 5;
     return {
       timeframe,
       count: Math.max(warm, 160),

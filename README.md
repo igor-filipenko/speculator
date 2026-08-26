@@ -372,11 +372,11 @@ Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from 
 
 Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on **lower-band reclaim** with filters:
 
-| Mode        | Entry                                                                | Exit                         | ATR stop/trail | Cooldown | minHold |
-| ----------- | -------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
-| `bollinger` | reclaim lower; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
+| Mode        | Entry                                                                                 | Exit                         | ATR stop/trail | Cooldown | minHold |
+| ----------- | ------------------------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
+| `bollinger` | reclaim lower; RSI(14) &lt; 30; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
 
-`/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
+`/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode (EMA/RSI chart for trend modes).
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 

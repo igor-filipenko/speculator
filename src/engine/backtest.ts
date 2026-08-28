@@ -3,11 +3,10 @@ import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
-import { logMarket } from "../notify/console.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import type {
   Candle,
-  MarketState,
+  MarketIndicators,
   Order,
   PairConfig,
   Strategy,
@@ -23,7 +22,7 @@ export interface BacktestCliOptions {
   /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
   toTime?: number;
   forceRefresh: boolean;
-  /** Skip HTF market state (no applyMarketState, no MARKET logs). */
+  /** Skip HTF market indicators (no applyMarketIndicators, no MARKET logs). */
   ignoreTrend: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
   strategy?: string;
@@ -202,7 +201,7 @@ async function replayPair(args: {
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
   let htfEnd = 0;
-  let lastMarket: MarketState | undefined;
+  let lastMarket: MarketIndicators | undefined;
 
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
@@ -211,7 +210,7 @@ async function replayPair(args: {
     exchange.setMidPrice(close);
 
     if (!ignoreTrend) {
-      const synced = syncMarketState({
+      const synced = syncMarketIndicators({
         pair: pair.symbol,
         strategyManager,
         htfCandles,
@@ -301,15 +300,15 @@ function advanceHtfEnd(htfCandles: Candle[], atTime: number, htfEnd: number): nu
   return end;
 }
 
-function syncMarketState(args: {
+function syncMarketIndicators(args: {
   pair: string;
   strategyManager: StrategyManager;
   htfCandles: Candle[];
   atTime: number;
   price: number;
   htfEnd: number;
-  lastMarket: MarketState | undefined;
-}): { htfEnd: number; lastMarket: MarketState | undefined } {
+  lastMarket: MarketIndicators | undefined;
+}): { htfEnd: number; lastMarket: MarketIndicators | undefined } {
   const htfEnd = advanceHtfEnd(args.htfCandles, args.atTime, args.htfEnd);
   if (htfEnd === 0 || htfEnd === args.htfEnd) {
     return { htfEnd, lastMarket: args.lastMarket };
@@ -323,12 +322,7 @@ function syncMarketState(args: {
     args.price,
     new Date(lastHtf.time * 1000),
   );
-  const first = args.lastMarket === undefined;
-  const trendChanged = args.lastMarket !== undefined && args.lastMarket.trend !== market.trend;
-  if (first || trendChanged) {
-    logMarket(market);
-  }
-  args.strategyManager.applyMarketState(market, args.lastMarket);
+  args.strategyManager.applyMarketIndicators(market, args.lastMarket);
   return { htfEnd, lastMarket: market };
 }
 

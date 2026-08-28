@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, MarketState } from "../types.js";
+import type { Candle, MarketIndicators } from "../types.js";
 import { buildMarketStateSvg } from "./market-state-svg.js";
 import { htfParamsFor } from "./strategy-manager.js";
 
@@ -25,14 +25,13 @@ function makeCandles(n: number): Candle[] {
   return out;
 }
 
-function sampleState(candles: Candle[]): MarketState {
+function sampleState(candles: Candle[]): MarketIndicators {
   return {
     pair: "SOL/USDC",
     timeframe: "4h",
     at: new Date("2026-01-01T00:00:00.000Z"),
     price: candles[candles.length - 1]?.close ?? 100,
     trend: "bullish",
-    strategyMode: "bollinger",
     candles,
   };
 }

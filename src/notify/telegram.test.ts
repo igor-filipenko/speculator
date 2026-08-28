@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { MarketState } from "../types.js";
-import { formatMarketMessage, formatMarketStatesMessage } from "./telegram.js";
+import type { MarketIndicators } from "../types.js";
+import { formatMarketIndicatorsListMessage, formatMarketMessage } from "./telegram.js";
 
-const sample: MarketState = {
+const sample: MarketIndicators = {
   pair: "SOL/USDC",
   timeframe: "4h",
   at: new Date("2026-01-01T00:00:00.000Z"),
@@ -17,18 +17,17 @@ const sample: MarketState = {
   distEma200Pct: 0.0288,
   marketCapUsd: 12_300_000_000,
   fdvUsd: 14_100_000_000,
-  strategyMode: "bollinger",
   candles: [],
 };
 
-describe("formatMarketStatesMessage", () => {
+describe("formatMarketIndicatorsListMessage", () => {
   it("asks to wait when empty", () => {
-    const text = formatMarketStatesMessage(new Map());
-    assert.match(text, /No market state yet/);
+    const text = formatMarketIndicatorsListMessage(new Map());
+    assert.match(text, /No market indicators yet/);
   });
 
-  it("includes trend, HTF indicators, and env strategy", () => {
-    const text = formatMarketStatesMessage(new Map([[sample.pair, sample]]));
+  it("includes trend and HTF indicators", () => {
+    const text = formatMarketIndicatorsListMessage(new Map([[sample.pair, sample]]));
     assert.match(text, /SOL\/USDC/);
     assert.match(text, /4h/);
     assert.match(text, /bullish/);
@@ -36,8 +35,8 @@ describe("formatMarketStatesMessage", () => {
     assert.match(text, /ADX/);
     assert.match(text, /ATR/);
     assert.match(text, /MCap/);
-    assert.match(text, /bollinger/);
-    assert.match(text, /env/);
+    assert.doesNotMatch(text, /bollinger/);
+    assert.doesNotMatch(text, /env/);
     assert.doesNotMatch(text, /Risk /);
   });
 });

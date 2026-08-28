@@ -3,16 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import type { Candle, MarketState } from "../types.js";
+import type { Candle, MarketIndicators } from "../types.js";
 import { resetSpeculatorDbCache, setSpeculatorDataDir } from "./db.js";
 import {
   isMarketCacheFresh,
-  loadFreshMarketState,
-  loadMarket,
-  toMarketState,
-  toPersistedMarket,
-  upsertMarket,
-  type PersistedMarket,
+  loadFreshMarketIndicators,
+  loadMarketIndicators,
+  toMarketIndicators,
+  toPersistedMarketIndicators,
+  upsertMarketIndicators,
+  type PersistedMarketIndicators,
 } from "./market.js";
 
 const INTERVAL_4H = 4 * 60 * 60;
@@ -22,7 +22,7 @@ function bar(time: number, close: number): Candle {
   return { time, open: close, high: close + 1, low: close - 1, close, volume: 10 };
 }
 
-function sampleState(overrides?: Partial<MarketState>): MarketState {
+function sampleIndicators(overrides?: Partial<MarketIndicators>): MarketIndicators {
   const candles = [bar(BAR_TIME - INTERVAL_4H, 99), bar(BAR_TIME, 101)];
   return {
     pair: "SOL/USDC",
@@ -38,14 +38,15 @@ function sampleState(overrides?: Partial<MarketState>): MarketState {
     distEma200Pct: (101 - 90) / 90,
     marketCapUsd: 50_000_000_000,
     fdvUsd: 60_000_000_000,
-    strategyMode: "grid",
     candles,
     ...overrides,
   };
 }
 
-function samplePersisted(overrides?: Partial<PersistedMarket>): PersistedMarket {
-  return { ...toPersistedMarket(sampleState()), ...overrides };
+function samplePersisted(
+  overrides?: Partial<PersistedMarketIndicators>,
+): PersistedMarketIndicators {
+  return { ...toPersistedMarketIndicators(sampleIndicators()), ...overrides };
 }
 
 describe("isMarketCacheFresh", () => {
@@ -56,23 +57,22 @@ describe("isMarketCacheFresh", () => {
   });
 });
 
-describe("toMarketState", () => {
+describe("toMarketIndicators", () => {
   it("overlays live price on ATR% and dist-EMA200", () => {
     const persisted = samplePersisted();
-    const candles = sampleState().candles;
+    const candles = sampleIndicators().candles;
     const livePrice = 110;
-    const state = toMarketState(persisted, candles, livePrice, "bollinger");
-    assert.equal(state.price, livePrice);
-    assert.equal(state.strategyMode, "bollinger");
-    assert.equal(state.candles, candles);
-    assert.ok(state.ema200 != null);
-    assert.equal(state.distEma200Pct, (livePrice - state.ema200) / state.ema200);
-    assert.ok(state.atr != null);
-    assert.equal(state.atrPct, state.atr / livePrice);
+    const indicators = toMarketIndicators(persisted, candles, livePrice);
+    assert.equal(indicators.price, livePrice);
+    assert.equal(indicators.candles, candles);
+    assert.ok(indicators.ema200 != null);
+    assert.equal(indicators.distEma200Pct, (livePrice - indicators.ema200) / indicators.ema200);
+    assert.ok(indicators.atr != null);
+    assert.equal(indicators.atrPct, indicators.atr / livePrice);
   });
 });
 
-describe("market.states (DuckDB)", () => {
+describe("market.indicators (DuckDB)", () => {
   let dataDir: string;
 
   before(async () => {
@@ -85,22 +85,21 @@ describe("market.states (DuckDB)", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it("round-trips a PersistedMarket", async () => {
+  it("round-trips a PersistedMarketIndicators", async () => {
     const persisted = samplePersisted();
-    await upsertMarket(persisted);
+    await upsertMarketIndicators(persisted);
 
-    const loaded = await loadMarket(persisted.pair, persisted.timeframe);
+    const loaded = await loadMarketIndicators(persisted.pair, persisted.timeframe);
     assert.ok(loaded);
     assert.equal(loaded.barTime, BAR_TIME);
     assert.equal(loaded.trend, "bullish");
     assert.equal(loaded.ema200, 90);
     assert.equal(loaded.marketCapUsd, 50_000_000_000);
-    assert.equal(loaded.strategyMode, "grid");
     assert.equal(loaded.at, persisted.at);
   });
 
   it("returns the row while the HTF bar is open", async () => {
-    const fresh = await loadFreshMarketState({
+    const fresh = await loadFreshMarketIndicators({
       pair: "SOL/USDC",
       timeframe: "4h",
       nowSec: BAR_TIME + 60,
@@ -110,7 +109,7 @@ describe("market.states (DuckDB)", () => {
   });
 
   it("returns null when the HTF bar has rolled", async () => {
-    const missed = await loadFreshMarketState({
+    const missed = await loadFreshMarketIndicators({
       pair: "SOL/USDC",
       timeframe: "4h",
       nowSec: BAR_TIME + INTERVAL_4H,
@@ -120,8 +119,8 @@ describe("market.states (DuckDB)", () => {
 
   it("upserts the same pair/timeframe in place", async () => {
     const updated = samplePersisted({ trend: "bearish", price: 80, ema200: 100 });
-    await upsertMarket(updated);
-    const loaded = await loadMarket("SOL/USDC", "4h");
+    await upsertMarketIndicators(updated);
+    const loaded = await loadMarketIndicators("SOL/USDC", "4h");
     assert.ok(loaded);
     assert.equal(loaded.trend, "bearish");
     assert.equal(loaded.price, 80);

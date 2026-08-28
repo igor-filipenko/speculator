@@ -1,5 +1,5 @@
 import { Resvg } from "@resvg/resvg-js";
-import type { Candle, MarketState, Strategy } from "../types.js";
+import type { Candle, MarketIndicators, Strategy } from "../types.js";
 import { buildMarketStateSvg } from "../strategy/market-state-svg.js";
 
 export interface RenderOhlcvPngInput {
@@ -17,9 +17,9 @@ export function renderOhlcvPng(input: RenderOhlcvPngInput): Buffer {
   return Buffer.from(resvg.render().asPng());
 }
 
-/** Render HTF MarketState chart (SVG → PNG) for Telegram `/market`. */
-export function renderMarketPng(state: MarketState): Buffer {
-  const svg = buildMarketStateSvg({ state });
+/** Render HTF MarketIndicators chart (SVG → PNG) for Telegram `/market`. */
+export function renderMarketPng(indicators: MarketIndicators): Buffer {
+  const svg = buildMarketStateSvg({ state: indicators });
   const resvg = new Resvg(svg, {
     fitTo: { mode: "width", value: 900 },
   });

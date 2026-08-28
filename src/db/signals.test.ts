@@ -26,14 +26,14 @@ describe("signals (DuckDB)", () => {
         reason: "test",
         price: 150.5,
         at: new Date("2026-07-31T10:00:00.000Z"),
-        meta: { emaFast: 149, emaSlow: 148, rsi: 55 },
+        meta: { emaFast: 149, emaSlow: 148, rsi: 55, trendEma: 150, atr: 2.5, adx: 22 },
       },
       dataDir,
     );
 
     const conn = await getConnection(dataDir);
     const reader = await conn.runAndReadAll(
-      `SELECT pair, side, price, reason, ema_fast, ema_slow, rsi FROM signals`,
+      `SELECT pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx FROM signals`,
     );
     await reader.readAll();
     const rows = reader.getRowObjectsJS();
@@ -47,5 +47,8 @@ describe("signals (DuckDB)", () => {
     assert.equal(Number(row["ema_fast"]), 149);
     assert.equal(Number(row["ema_slow"]), 148);
     assert.equal(Number(row["rsi"]), 55);
+    assert.equal(Number(row["trend_ema"]), 150);
+    assert.equal(Number(row["atr"]), 2.5);
+    assert.equal(Number(row["adx"]), 22);
   });
 });

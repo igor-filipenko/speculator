@@ -1,12 +1,13 @@
 import type { AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
+import { refreshMarketIndicators } from "../market/htf-cache.js";
 import { logMarket, logSignal, persistSignal } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import type {
   Candle,
   Exchange,
-  MarketState,
+  MarketIndicators,
   PairConfig,
   ProgramState,
   ShutdownCb,
@@ -14,7 +15,7 @@ import type {
   Strategy,
   StrategyManager,
 } from "../types.js";
-import { refreshMarketState, sleep } from "./tick.js";
+import { sleep } from "./tick.js";
 
 export interface WatchOptions {
   config: AppConfig;
@@ -36,7 +37,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
 
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
-  const lastMarketStates = options.state.lastMarketStates;
+  const lastMarketIndicators = options.state.lastMarketIndicators;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
   const startMsg = `Starting watch mode | strategy=${strategy.getDisplayName()} | htf=${config.htf} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
@@ -57,7 +58,7 @@ export async function runWatch(options: WatchOptions): Promise<void> {
           exchange,
           lastSignals,
           lastCandles,
-          lastMarketStates,
+          lastMarketIndicators,
           telegram,
         });
       } catch (err) {
@@ -90,29 +91,37 @@ async function processPair(args: {
   exchange: Exchange;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
-  lastMarketStates: Map<string, MarketState>;
+  lastMarketIndicators: Map<string, MarketIndicators>;
   telegram: Telegram;
 }): Promise<void> {
-  const { pair, strategyManager, exchange, lastSignals, lastCandles, lastMarketStates, telegram } =
-    args;
+  const {
+    pair,
+    strategyManager,
+    exchange,
+    lastSignals,
+    lastCandles,
+    lastMarketIndicators,
+    telegram,
+  } = args;
 
   const price = await exchange.spotPrice(pair);
 
   try {
-    const previous = lastMarketStates.get(pair.symbol);
-    const market = await refreshMarketState({
+    const previous = lastMarketIndicators.get(pair.symbol);
+    const market = await refreshMarketIndicators({
       pair,
-      strategyManager,
+      required: strategyManager.getRequiredCandles(),
       price,
       at: new Date(),
     });
     logMarket(market);
     const trendChanged =
       previous !== undefined
-        ? strategyManager.applyMarketState(market, previous)
-        : strategyManager.applyMarketState(market);
-    lastMarketStates.set(pair.symbol, market);
+        ? strategyManager.applyMarketIndicators(market, previous)
+        : strategyManager.applyMarketIndicators(market);
+    lastMarketIndicators.set(pair.symbol, market);
     if (trendChanged) {
+      console.log(`[${pair.symbol}] trend changed from ${previous?.trend} to ${market.trend}`);
       await telegram.notify({
         type: "market",
         market,
@@ -121,7 +130,7 @@ async function processPair(args: {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[${pair.symbol}] market state failed: ${message}`);
+    console.error(`[${pair.symbol}] market indicators failed: ${message}`);
   }
 
   const strategy = strategyManager.getActiveStrategy();

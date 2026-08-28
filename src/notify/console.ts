@@ -1,18 +1,20 @@
 import { insertSignal } from "../db/signals.js";
-import type { MarketState, Risk, Signal, Snapshot, Trade } from "../types.js";
+import type { MarketIndicators, Risk, Signal, Snapshot, Trade } from "../types.js";
 
-export function logMarket(state: MarketState): void {
-  const ts = state.at.toISOString();
+export function logMarket(indicators: MarketIndicators): void {
+  const ts = indicators.at.toISOString();
   const dist =
-    state.distEma200Pct != null ? ` distEma200=${(state.distEma200Pct * 100).toFixed(2)}%` : "";
-  const atrPct = state.atrPct != null ? ` atrPct=${(state.atrPct * 100).toFixed(2)}%` : "";
-  const mcap = state.marketCapUsd != null ? ` mcap=${state.marketCapUsd.toFixed(0)}` : "";
-  const fdv = state.fdvUsd != null ? ` fdv=${state.fdvUsd.toFixed(0)}` : "";
+    indicators.distEma200Pct != null
+      ? ` distEma200=${(indicators.distEma200Pct * 100).toFixed(2)}%`
+      : "";
+  const atrPct =
+    indicators.atrPct != null ? ` atrPct=${(indicators.atrPct * 100).toFixed(2)}%` : "";
+  const mcap = indicators.marketCapUsd != null ? ` mcap=${indicators.marketCapUsd.toFixed(0)}` : "";
+  const fdv = indicators.fdvUsd != null ? ` fdv=${indicators.fdvUsd.toFixed(0)}` : "";
   console.log(
-    `[${ts}] ${state.pair} MARKET ${state.timeframe} trend=${state.trend}` +
-      ` ema200=${fmt(state.ema200)} ema50=${fmt(state.ema50)} adx=${fmt(state.adx)}` +
-      ` atr=${fmt(state.atr)}${atrPct}${dist}${mcap}${fdv}` +
-      ` strategy=${state.strategyMode} (env)`,
+    `[${ts}] ${indicators.pair} MARKET ${indicators.timeframe} trend=${indicators.trend}` +
+      ` ema200=${fmt(indicators.ema200)} ema50=${fmt(indicators.ema50)} adx=${fmt(indicators.adx)}` +
+      ` atr=${fmt(indicators.atr)}${atrPct}${dist}${mcap}${fdv}`,
   );
 }
 

@@ -5,14 +5,14 @@ import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import {
-  evaluateMarketState,
+  evaluateMarketIndicators,
   htfParamsFor,
   loadStrategy,
   SimpleStrategyManager,
 } from "../strategy/strategy-manager.js";
 import type {
   Candle,
-  MarketState,
+  MarketIndicators,
   Order,
   RiskManager,
   RiskParams,
@@ -59,16 +59,15 @@ function htfAwareManager(strategy: Strategy): StrategyManager {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
     getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
-    evaluate: (pair, candles, price, at): MarketState =>
-      evaluateMarketState({
+    evaluate: (pair, candles, price, at): MarketIndicators =>
+      evaluateMarketIndicators({
         pair,
         candles,
         price,
         at,
         params,
-        strategyMode: strategy.getMode(),
       }),
-    applyMarketState: (state, prev) => {
+    applyMarketIndicators: (state, prev) => {
       riskManager =
         state.trend === "bullish"
           ? new GenericRiskManager(strategy.getRiskParams())
@@ -87,16 +86,15 @@ function managerFor(
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
     getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
-    evaluate: (pair, candles, price, at): MarketState => ({
+    evaluate: (pair, candles, price, at): MarketIndicators => ({
       pair,
       timeframe: "4h",
       at,
       price,
       trend: "unknown",
-      strategyMode: strategy.getMode(),
       candles,
     }),
-    applyMarketState: () => false,
+    applyMarketIndicators: () => false,
   };
 }
 

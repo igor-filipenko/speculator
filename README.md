@@ -357,7 +357,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes a **MarketState** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.states`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` → `GenericRiskManager`, otherwise `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
+`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.indicators`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` → `GenericRiskManager`, otherwise `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -387,8 +387,9 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, market.states, paper, live, signals
+  db/                      # DuckDB: candles, market.indicators, paper, live, signals
   market/gecko-terminal.ts
+  market/htf-cache.ts        # HTF MarketIndicators cache + Gecko refresh
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute
   exchange/wallet.ts       # JSON keypair + RPC balances
@@ -397,7 +398,7 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
-  strategy/strategy-manager.ts # loadStrategy + HTF MarketState; getActiveStrategy/RiskManager
+  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
   strategy/mode/grid-svg.ts      # grid SVG for /chart

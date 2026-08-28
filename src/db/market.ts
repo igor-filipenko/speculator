@@ -1,17 +1,17 @@
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
-import type { Candle, HtfTimeframe, MarketState, StrategyMode, Trend } from "../types.js";
+import type { Candle, HtfTimeframe, MarketIndicators, Trend } from "../types.js";
 import { getConnection } from "./db.js";
 
 const UPSERT_SQL = `
-  INSERT INTO market.states (
+  INSERT INTO market.indicators (
     pair, timeframe, bar_time, "at", price, trend,
     ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
-    market_cap_usd, fdv_usd, strategy_mode, fetched_at
+    market_cap_usd, fdv_usd, fetched_at
   )
   VALUES (
     $pair, $timeframe, $barTime, $at::TIMESTAMP, $price, $trend,
     $ema200, $ema50, $adx, $atr, $atrPct, $distEma200Pct,
-    $marketCapUsd, $fdvUsd, $strategyMode, now()
+    $marketCapUsd, $fdvUsd, now()
   )
   ON CONFLICT (pair, timeframe) DO UPDATE SET
     bar_time = excluded.bar_time,
@@ -26,12 +26,11 @@ const UPSERT_SQL = `
     dist_ema200_pct = excluded.dist_ema200_pct,
     market_cap_usd = excluded.market_cap_usd,
     fdv_usd = excluded.fdv_usd,
-    strategy_mode = excluded.strategy_mode,
     fetched_at = now()
 `;
 
-/** Row in `market.states` (OHLCV stays in `candles`). */
-export interface PersistedMarket {
+/** Row in `market.indicators` (OHLCV stays in `candles`). */
+export interface PersistedMarketIndicators {
   pair: string;
   timeframe: HtfTimeframe;
   /** Open time of the HTF bar this snapshot was computed from (Unix seconds). */
@@ -47,7 +46,6 @@ export interface PersistedMarket {
   distEma200Pct?: number;
   marketCapUsd?: number;
   fdvUsd?: number;
-  strategyMode: StrategyMode;
 }
 
 /**
@@ -58,72 +56,71 @@ export function isMarketCacheFresh(barTime: number, nowSec: number, intervalSec:
   return nowSec < barTime + intervalSec;
 }
 
-export function toPersistedMarket(state: MarketState): PersistedMarket {
-  const last = state.candles[state.candles.length - 1];
-  const persisted: PersistedMarket = {
-    pair: state.pair,
-    timeframe: state.timeframe,
-    barTime: last !== undefined ? last.time : Math.floor(state.at.getTime() / 1000),
-    at: state.at.toISOString(),
-    price: state.price,
-    trend: state.trend,
-    strategyMode: state.strategyMode,
+export function toPersistedMarketIndicators(
+  indicators: MarketIndicators,
+): PersistedMarketIndicators {
+  const last = indicators.candles[indicators.candles.length - 1];
+  const persisted: PersistedMarketIndicators = {
+    pair: indicators.pair,
+    timeframe: indicators.timeframe,
+    barTime: last !== undefined ? last.time : Math.floor(indicators.at.getTime() / 1000),
+    at: indicators.at.toISOString(),
+    price: indicators.price,
+    trend: indicators.trend,
   };
-  if (state.ema200 !== undefined) persisted.ema200 = state.ema200;
-  if (state.ema50 !== undefined) persisted.ema50 = state.ema50;
-  if (state.adx !== undefined) persisted.adx = state.adx;
-  if (state.atr !== undefined) persisted.atr = state.atr;
-  if (state.atrPct !== undefined) persisted.atrPct = state.atrPct;
-  if (state.distEma200Pct !== undefined) persisted.distEma200Pct = state.distEma200Pct;
-  if (state.marketCapUsd !== undefined) persisted.marketCapUsd = state.marketCapUsd;
-  if (state.fdvUsd !== undefined) persisted.fdvUsd = state.fdvUsd;
+  if (indicators.ema200 !== undefined) persisted.ema200 = indicators.ema200;
+  if (indicators.ema50 !== undefined) persisted.ema50 = indicators.ema50;
+  if (indicators.adx !== undefined) persisted.adx = indicators.adx;
+  if (indicators.atr !== undefined) persisted.atr = indicators.atr;
+  if (indicators.atrPct !== undefined) persisted.atrPct = indicators.atrPct;
+  if (indicators.distEma200Pct !== undefined) persisted.distEma200Pct = indicators.distEma200Pct;
+  if (indicators.marketCapUsd !== undefined) persisted.marketCapUsd = indicators.marketCapUsd;
+  if (indicators.fdvUsd !== undefined) persisted.fdvUsd = indicators.fdvUsd;
   return persisted;
 }
 
-/** Rebuild a live {@link MarketState}: overlay spot on price / ATR% / dist-EMA200. */
-export function toMarketState(
-  persisted: PersistedMarket,
+/** Rebuild live {@link MarketIndicators}: overlay spot on price / ATR% / dist-EMA200. */
+export function toMarketIndicators(
+  persisted: PersistedMarketIndicators,
   candles: Candle[],
   livePrice: number,
-  strategyMode: StrategyMode,
-): MarketState {
-  const state: MarketState = {
+): MarketIndicators {
+  const indicators: MarketIndicators = {
     pair: persisted.pair,
     timeframe: persisted.timeframe,
     at: new Date(persisted.at),
     price: livePrice,
     trend: persisted.trend,
-    strategyMode,
     candles,
   };
   if (persisted.ema200 != null) {
-    state.ema200 = persisted.ema200;
+    indicators.ema200 = persisted.ema200;
     if (livePrice > 0 && persisted.ema200 > 0) {
-      state.distEma200Pct = (livePrice - persisted.ema200) / persisted.ema200;
+      indicators.distEma200Pct = (livePrice - persisted.ema200) / persisted.ema200;
     }
   }
   if (persisted.ema50 != null) {
-    state.ema50 = persisted.ema50;
+    indicators.ema50 = persisted.ema50;
   }
   if (persisted.adx != null) {
-    state.adx = persisted.adx;
+    indicators.adx = persisted.adx;
   }
   if (persisted.atr != null) {
-    state.atr = persisted.atr;
+    indicators.atr = persisted.atr;
     if (livePrice > 0) {
-      state.atrPct = persisted.atr / livePrice;
+      indicators.atrPct = persisted.atr / livePrice;
     }
   }
   if (persisted.marketCapUsd != null) {
-    state.marketCapUsd = persisted.marketCapUsd;
+    indicators.marketCapUsd = persisted.marketCapUsd;
   }
   if (persisted.fdvUsd != null) {
-    state.fdvUsd = persisted.fdvUsd;
+    indicators.fdvUsd = persisted.fdvUsd;
   }
-  return state;
+  return indicators;
 }
 
-export async function upsertMarket(row: PersistedMarket): Promise<void> {
+export async function upsertMarketIndicators(row: PersistedMarketIndicators): Promise<void> {
   const conn = await getConnection();
   await conn.run(UPSERT_SQL, {
     pair: row.pair,
@@ -140,22 +137,21 @@ export async function upsertMarket(row: PersistedMarket): Promise<void> {
     distEma200Pct: row.distEma200Pct ?? null,
     marketCapUsd: row.marketCapUsd ?? null,
     fdvUsd: row.fdvUsd ?? null,
-    strategyMode: row.strategyMode,
   });
 }
 
-export async function loadMarket(
+export async function loadMarketIndicators(
   pair: string,
   timeframe: HtfTimeframe,
-): Promise<PersistedMarket | null> {
+): Promise<PersistedMarketIndicators | null> {
   const conn = await getConnection();
   const reader = await conn.runAndReadAll(
     `
     SELECT
       pair, timeframe, bar_time, "at", price, trend,
       ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
-      market_cap_usd, fdv_usd, strategy_mode
-    FROM market.states
+      market_cap_usd, fdv_usd
+    FROM market.indicators
     WHERE pair = $pair AND timeframe = $timeframe
     `,
     { pair, timeframe },
@@ -171,11 +167,11 @@ export interface LoadFreshMarketOptions {
   nowSec: number;
 }
 
-/** Cached {@link PersistedMarket} while the stored HTF bar is still open. */
-export async function loadFreshMarketState(
+/** Cached {@link PersistedMarketIndicators} while the stored HTF bar is still open. */
+export async function loadFreshMarketIndicators(
   options: LoadFreshMarketOptions,
-): Promise<PersistedMarket | null> {
-  const persisted = await loadMarket(options.pair, options.timeframe);
+): Promise<PersistedMarketIndicators | null> {
+  const persisted = await loadMarketIndicators(options.pair, options.timeframe);
   if (persisted === null) {
     return null;
   }
@@ -188,19 +184,18 @@ export async function loadFreshMarketState(
   return persisted;
 }
 
-function rowToPersisted(row: Record<string, unknown>): PersistedMarket {
+function rowToPersisted(row: Record<string, unknown>): PersistedMarketIndicators {
   const at = timestampToIso(row["at"]);
   if (at === undefined) {
-    throw new Error("market.states row missing at");
+    throw new Error("market.indicators row missing at");
   }
-  const persisted: PersistedMarket = {
+  const persisted: PersistedMarketIndicators = {
     pair: asString(row["pair"], "pair"),
     timeframe: asHtfTimeframe(row["timeframe"]),
     barTime: Number(row["bar_time"]),
     at,
     price: Number(row["price"]),
     trend: asTrend(row["trend"]),
-    strategyMode: asStrategyMode(row["strategy_mode"]),
   };
   const ema200 = optionalNumber(row["ema200"]);
   if (ema200 !== undefined) persisted.ema200 = ema200;
@@ -245,18 +240,6 @@ function asTrend(value: unknown): Trend {
     return raw;
   }
   throw new Error(`invalid trend "${raw}"`);
-}
-
-function asStrategyMode(value: unknown): StrategyMode {
-  const raw = asString(value, "strategy_mode");
-  if (raw === "bollinger" || raw === "grid") {
-    return raw;
-  }
-  // Pre-removal cache rows.
-  if (raw === "ema-rsi") {
-    return "bollinger";
-  }
-  throw new Error(`invalid strategy mode "${raw}"`);
 }
 
 function optionalNumber(value: unknown): number | undefined {

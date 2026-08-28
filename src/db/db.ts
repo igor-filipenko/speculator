@@ -203,6 +203,35 @@ async function openClientConnection(
   });
 }
 
+/** Copy `market.states` into `market.indicators` (drops the old table). */
+async function migrateMarketStatesToIndicators(connection: DuckDBConnection): Promise<void> {
+  const reader = await connection.runAndReadAll(`
+    SELECT COUNT(*) AS n
+    FROM information_schema.tables
+    WHERE table_schema = 'market' AND table_name = 'states'
+  `);
+  await reader.readAll();
+  const n = Number(reader.getRowObjectsJS()[0]?.["n"] ?? 0);
+  if (n === 0) {
+    return;
+  }
+
+  await connection.run(`
+    INSERT INTO market.indicators (
+      pair, timeframe, bar_time, "at", price, trend,
+      ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
+      market_cap_usd, fdv_usd, fetched_at
+    )
+    SELECT
+      pair, timeframe, bar_time, "at", price, trend,
+      ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
+      market_cap_usd, fdv_usd, fetched_at
+    FROM market.states
+    ON CONFLICT (pair, timeframe) DO NOTHING
+  `);
+  await connection.run(`DROP TABLE market.states`);
+}
+
 /** Create schemas/tables if missing. Add future persistence tables here. */
 export async function initSchema(connection: DuckDBConnection): Promise<void> {
   await connection.run(`CREATE SCHEMA IF NOT EXISTS paper`);
@@ -299,11 +328,18 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
       side     VARCHAR NOT NULL,
       price    DOUBLE  NOT NULL,
       reason   VARCHAR NOT NULL,
-      ema_fast DOUBLE,
-      ema_slow DOUBLE,
-      rsi      DOUBLE
+      ema_fast  DOUBLE,
+      ema_slow  DOUBLE,
+      rsi       DOUBLE,
+      trend_ema DOUBLE,
+      atr       DOUBLE,
+      adx       DOUBLE
     )
   `);
+
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS trend_ema DOUBLE`);
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS atr DOUBLE`);
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS adx DOUBLE`);
 
   await connection.run(`
     CREATE INDEX IF NOT EXISTS signals_at_idx ON signals ("at")
@@ -319,7 +355,7 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
   `);
 
   await connection.run(`
-    CREATE TABLE IF NOT EXISTS market.states (
+    CREATE TABLE IF NOT EXISTS market.indicators (
       pair            VARCHAR   NOT NULL,
       timeframe       VARCHAR   NOT NULL,
       bar_time        BIGINT    NOT NULL,
@@ -334,11 +370,12 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
       dist_ema200_pct DOUBLE,
       market_cap_usd  DOUBLE,
       fdv_usd         DOUBLE,
-      strategy_mode   VARCHAR   NOT NULL,
       fetched_at      TIMESTAMP NOT NULL DEFAULT now(),
       PRIMARY KEY (pair, timeframe)
     )
   `);
+
+  await migrateMarketStatesToIndicators(connection);
 
   // Seed known Solana tokens when missing (idempotent).
   await connection.run(`

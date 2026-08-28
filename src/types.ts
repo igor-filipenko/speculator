@@ -14,7 +14,7 @@ export type HtfTimeframe = "4h" | "1d";
 export type Trend = "bullish" | "bearish" | "flat" | "unknown";
 
 /** HTF regime + Gecko pool stats. Does not pick trades (yet). */
-export interface MarketState {
+export interface MarketIndicators {
   pair: string;
   timeframe: HtfTimeframe;
   at: Date;
@@ -30,8 +30,6 @@ export interface MarketState {
   distEma200Pct?: number;
   marketCapUsd?: number;
   fdvUsd?: number;
-  /** Currently env/CLI, not inferred from the market. */
-  strategyMode: StrategyMode;
   /** HTF OHLCV used to compute this snapshot. */
   candles: Candle[];
 }
@@ -226,7 +224,7 @@ export interface RiskManager {
 }
 
 /**
- * HTF market regime plus the active strategy / risk (trend picks the risk manager).
+ * HTF market indicators plus the active strategy / risk (trend picks the risk manager).
  * Does not fetch candles — callers use {@link getRequiredCandles} then {@link evaluate}.
  */
 export interface StrategyManager {
@@ -239,9 +237,12 @@ export interface StrategyManager {
     price: number,
     at: Date,
     poolStats?: PoolStats,
-  ): MarketState;
-  /** Sync risk manager to {@link MarketState.trend}. Returns true when the trend changed. */
-  applyMarketState(state: MarketState, lastMarketState?: MarketState): boolean;
+  ): MarketIndicators;
+  /** Sync risk manager to {@link MarketIndicators.trend}. Returns true when the trend changed. */
+  applyMarketIndicators(
+    indicators: MarketIndicators,
+    lastMarketIndicators?: MarketIndicators,
+  ): boolean;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
@@ -254,7 +255,7 @@ export interface ProgramState {
   readonly strategy: Strategy;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;
-  readonly lastMarketStates: Map<string, MarketState>;
+  readonly lastMarketIndicators: Map<string, MarketIndicators>;
   readonly portfolios: Map<string, Portfolio>;
 }
 

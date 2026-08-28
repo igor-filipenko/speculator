@@ -10,7 +10,7 @@ import { PaperPortfolio } from "./paper/portfolio.js";
 import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
 import type {
   Candle,
-  MarketState,
+  MarketIndicators,
   Portfolio,
   ProgramState,
   ShutdownCb,
@@ -113,7 +113,7 @@ async function runWatchCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketStates: new Map<string, MarketState>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: new Map<string, Portfolio>(),
   };
 
@@ -152,7 +152,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketStates: new Map<string, MarketState>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios,
   };
 
@@ -188,7 +188,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketStates: new Map<string, MarketState>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: runtime.portfolios,
   };
 

@@ -29,13 +29,15 @@ src/
   db/
     db.ts               # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
-    market.ts           # market.states (HTF MarketState cache)
+    market.ts           # market.indicators (HTF MarketIndicators cache)
     paper.ts            # paper.portfolios / paper.trades
     live.ts             # live.portfolios / live.trades
     signals.ts          # signals history
     tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
+  market/htf.ts         # HTF EMA/ADX/ATR → MarketIndicators
+  market/htf-cache.ts     # load/cache HTF MarketIndicators
   exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)
   exchange/wallet.ts           # JSON keypair load + RPC balances
@@ -45,7 +47,7 @@ src/
   strategy/indicators.ts
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
-  strategy/strategy-manager.ts # loadStrategy + HTF MarketState; getActiveStrategy / getActiveRiskManager
+  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy / getActiveRiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/mode/bollinger-svg.ts # Bollinger band SVG

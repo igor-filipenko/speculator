@@ -1,9 +1,9 @@
-import type { MarketState } from "../types.js";
+import type { MarketIndicators } from "../types.js";
 import { adx, ema } from "./indicators.js";
 import { htfParamsFor, type HtfParams } from "./strategy-manager.js";
 
 export interface MarketStateChartInput {
-  state: MarketState;
+  state: MarketIndicators;
   params?: HtfParams;
   width?: number;
   height?: number;
@@ -14,7 +14,7 @@ const GAP = 16;
 const PRICE_RATIO = 0.68;
 
 /**
- * HTF MarketState chart: candles + EMA50/200, ADX subplot with the flat threshold.
+ * HTF MarketIndicators chart: candles + EMA50/200, ADX subplot with the flat threshold.
  */
 export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const width = input.width ?? 900;

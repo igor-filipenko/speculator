@@ -4,9 +4,41 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "ema-rsi" | "bollinger" | "grid";
+export type StrategyMode = "bollinger" | "grid";
 
-export type Timeframe = "15m" | "4h";
+export type Timeframe = "15m" | "4h" | "1d";
+
+/** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
+export type HtfTimeframe = "4h" | "1d";
+
+export type Trend = "bullish" | "bearish" | "flat" | "unknown";
+
+/** HTF regime + Gecko pool stats. Does not pick trades (yet). */
+export interface MarketIndicators {
+  pair: string;
+  timeframe: HtfTimeframe;
+  at: Date;
+  price: number;
+  trend: Trend;
+  ema200?: number;
+  ema50?: number;
+  adx?: number;
+  atr?: number;
+  /** ATR / price. */
+  atrPct?: number;
+  /** (price − EMA200) / EMA200. */
+  distEma200Pct?: number;
+  marketCapUsd?: number;
+  fdvUsd?: number;
+  /** HTF OHLCV used to compute this snapshot. */
+  candles: Candle[];
+}
+
+/** Optional Gecko pool overview passed into {@link StrategyManager.evaluate}. */
+export interface PoolStats {
+  marketCapUsd?: number;
+  fdvUsd?: number;
+}
 
 export interface Candle {
   /** Unix timestamp in seconds (candle open time). */
@@ -187,7 +219,30 @@ export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
+  getDisplayName(): string;
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand;
+}
+
+/**
+ * HTF market indicators plus the active strategy / risk (trend picks the risk manager).
+ * Does not fetch candles — callers use {@link getRequiredCandles} then {@link evaluate}.
+ */
+export interface StrategyManager {
+  getActiveStrategy(): Strategy;
+  getActiveRiskManager(): RiskManager;
+  getRequiredCandles(): RequiredCandles;
+  evaluate(
+    pair: string,
+    candles: Candle[],
+    price: number,
+    at: Date,
+    poolStats?: PoolStats,
+  ): MarketIndicators;
+  /** Sync risk manager to {@link MarketIndicators.trend}. Returns true when the trend changed. */
+  applyMarketIndicators(
+    indicators: MarketIndicators,
+    lastMarketIndicators?: MarketIndicators,
+  ): boolean;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
@@ -200,6 +255,7 @@ export interface ProgramState {
   readonly strategy: Strategy;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;
+  readonly lastMarketIndicators: Map<string, MarketIndicators>;
   readonly portfolios: Map<string, Portfolio>;
 }
 

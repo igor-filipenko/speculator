@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import type { DuckDBConnection } from "@duckdb/node-api";
-import { getSpeculatorDb, resetSpeculatorDbCache } from "./db.js";
+import { getConnection, resetSpeculatorDbCache } from "./db.js";
 
 // Dedicated ports to avoid conflicts with a live deployment on the default 9494.
 // Each describe block uses its own port so there is no port-reuse between tests.
@@ -49,7 +49,7 @@ describe("standalone mode", () => {
 
   it("opens a local file and initialises the schema", async () => {
     // No DUCKDB_MODE set → defaults to standalone.
-    const conn = await getSpeculatorDb(dataDir);
+    const conn = await getConnection(dataDir);
     const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS n FROM candles`);
     await reader.readAll();
     const row = reader.getRowObjectsJS()[0];
@@ -58,7 +58,7 @@ describe("standalone mode", () => {
   });
 
   it("seeds solana.tokens on first open", async () => {
-    const conn = await getSpeculatorDb(dataDir);
+    const conn = await getConnection(dataDir);
     const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS n FROM solana.tokens`);
     await reader.readAll();
     const row = reader.getRowObjectsJS()[0];
@@ -84,7 +84,7 @@ describe("server mode", () => {
     process.env["DUCKDB_MODE"] = "server";
     process.env["DUCKDB_URL"] = SERVER_TEST_URL;
     process.env["DUCKDB_SECRET"] = QUACK_SECRET;
-    conn = await getSpeculatorDb(dataDir);
+    conn = await getConnection(dataDir);
   });
 
   after(async () => {
@@ -139,7 +139,7 @@ describe("client mode — integration", () => {
     process.env["DUCKDB_MODE"] = "server";
     process.env["DUCKDB_URL"] = CLIENT_TEST_URL;
     process.env["DUCKDB_SECRET"] = QUACK_SECRET;
-    serverConn = await getSpeculatorDb(serverDir);
+    serverConn = await getConnection(serverDir);
 
     // 2. Insert one test candle directly via the server connection.
     await serverConn.run(`
@@ -166,7 +166,7 @@ describe("client mode — integration", () => {
   });
 
   it("reads candles from the remote server via quack_query proxy", async () => {
-    const conn = await getSpeculatorDb(); // DUCKDB_MODE=client → quack_query proxy
+    const conn = await getConnection(); // DUCKDB_MODE=client → quack_query proxy
     const reader = await conn.runAndReadAll(
       `SELECT count(*)::BIGINT AS n FROM candles WHERE symbol = 'TEST/USDC'`,
     );
@@ -177,7 +177,7 @@ describe("client mode — integration", () => {
   });
 
   it("reads solana.tokens from the remote schema", async () => {
-    const conn = await getSpeculatorDb();
+    const conn = await getConnection();
     const reader = await conn.runAndReadAll(`SELECT count(*)::BIGINT AS n FROM solana.tokens`);
     await reader.readAll();
     const row = reader.getRowObjectsJS()[0];
@@ -186,7 +186,7 @@ describe("client mode — integration", () => {
   });
 
   it("binds named parameters through the proxy (getToken-style $symbol)", async () => {
-    const conn = await getSpeculatorDb();
+    const conn = await getConnection();
     const reader = await conn.runAndReadAll(
       `SELECT count(*)::BIGINT AS n FROM candles WHERE symbol = $symbol`,
       { symbol: "TEST/USDC" },
@@ -198,7 +198,7 @@ describe("client mode — integration", () => {
   });
 
   it("writes candles through the proxy and reads them back", async () => {
-    const conn = await getSpeculatorDb();
+    const conn = await getConnection();
     await conn.run(
       `INSERT INTO candles (symbol, timeframe, time, open, high, low, close, volume)
        VALUES ('PROXY/USDC', '15m', 9000000, 50.0, 55.0, 45.0, 52.0, 200.0)`,

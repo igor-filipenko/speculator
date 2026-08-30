@@ -1,11 +1,11 @@
-import type { Candle } from "../types.js";
-import type { BollingerParams } from "./bollinger.js";
-import { bollinger } from "./indicators.js";
+import type { Candle } from "../../types.js";
+import type { GridParams } from "./grid.js";
+import { atr, ema } from "../indicators.js";
 
-export interface BollingerChartInput {
+export interface GridChartInput {
   pair: string;
   candles: Candle[];
-  strategy: BollingerParams;
+  strategy: GridParams;
   width?: number;
   height?: number;
 }
@@ -13,9 +13,9 @@ export interface BollingerChartInput {
 const PAD = { top: 36, right: 56, bottom: 28, left: 12 };
 
 /**
- * Build an SVG string: price candles + Bollinger mid/upper/lower overlays.
+ * Build an SVG string: price candles + ATR-based grid levels + trend EMA overlay.
  */
-export function buildBollingerSvg(input: BollingerChartInput): string {
+export function buildGridSvg(input: GridChartInput): string {
   const width = input.width ?? 900;
   const height = input.height ?? 520;
   const { pair, candles, strategy } = input;
@@ -25,7 +25,14 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   }
 
   const closes = candles.map((c) => c.close);
-  const bands = bollinger(closes, strategy.period, strategy.stdDev);
+  const trendEmaSeries = ema(closes, strategy.trendEmaPeriod);
+  const atrSeries = atr(candles, strategy.atrPeriod);
+
+  const lastAtr = atrSeries[atrSeries.length - 1];
+  const gridSpacing = lastAtr != null ? lastAtr * strategy.gridMult : 0;
+
+  const anchorSlice = closes.slice(-strategy.reanchorBars);
+  const referencePrice = anchorSlice.reduce((s, v) => s + v, 0) / anchorSlice.length;
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom;
@@ -37,12 +44,10 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
     minP = Math.min(minP, c.low);
     maxP = Math.max(maxP, c.high);
   }
-  for (const series of [bands.mid, bands.upper, bands.lower]) {
-    for (const v of series) {
-      if (v != null) {
-        minP = Math.min(minP, v);
-        maxP = Math.max(maxP, v);
-      }
+  for (const v of trendEmaSeries) {
+    if (v != null) {
+      minP = Math.min(minP, v);
+      maxP = Math.max(maxP, v);
     }
   }
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
@@ -78,6 +83,18 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
     );
   }
 
+  const gridLines: string[] = [];
+  if (gridSpacing > 0) {
+    const levels = computeVisibleGridLevels(referencePrice, gridSpacing, minP, maxP);
+    for (const level of levels) {
+      const y = yPrice(level);
+      gridLines.push(
+        `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + plotW}" y2="${y}" stroke="#6366f1" stroke-width="0.75" stroke-dasharray="6 4" opacity="0.6"/>`,
+        `<text x="${width - PAD.right + 4}" y="${y + 4}" fill="#6366f1" font-family="ui-sans-serif,system-ui,sans-serif" font-size="9">${formatPrice(level)}</text>`,
+      );
+    }
+  }
+
   const linePath = (series: (number | null)[]): string => {
     const parts: string[] = [];
     for (let i = 0; i < series.length; i++) {
@@ -89,11 +106,8 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
     return parts.join(" ");
   };
 
-  const midPath = linePath(bands.mid);
-  const upperPath = linePath(bands.upper);
-  const lowerPath = linePath(bands.lower);
-
-  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev})`;
+  const trendEmaPath = linePath(trendEmaSeries);
+  const title = `${escapeXml(pair)} · ${strategy.timeframe} · Grid(ATR${strategy.atrPeriod}×${strategy.gridMult})`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
 
@@ -104,13 +118,27 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   <text x="${width - PAD.right + 4}" y="${priceTop + 12}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelHi}</text>
   <text x="${width - PAD.right + 4}" y="${priceTop + plotH}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelLo}</text>
   <rect x="${PAD.left}" y="${priceTop}" width="${plotW}" height="${plotH}" fill="none" stroke="#1e293b"/>
+  ${gridLines.join("\n  ")}
   ${candleParts.join("\n  ")}
-  ${upperPath ? `<path d="${upperPath}" fill="none" stroke="#38bdf8" stroke-width="1.25" stroke-dasharray="4 3"/>` : ""}
-  ${midPath ? `<path d="${midPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
-  ${lowerPath ? `<path d="${lowerPath}" fill="none" stroke="#38bdf8" stroke-width="1.25" stroke-dasharray="4 3"/>` : ""}
-  <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">BB mid</text>
-  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">±${strategy.stdDev}σ</text>
+  ${trendEmaPath ? `<path d="${trendEmaPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
+  <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${strategy.trendEmaPeriod}</text>
+  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#6366f1" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">grid ×${strategy.gridMult}</text>
 </svg>`;
+}
+
+function computeVisibleGridLevels(
+  reference: number,
+  spacing: number,
+  minVisible: number,
+  maxVisible: number,
+): number[] {
+  const levels: number[] = [];
+  const minLevel = Math.ceil((minVisible - reference) / spacing);
+  const maxLevel = Math.floor((maxVisible - reference) / spacing);
+  for (let k = minLevel; k <= maxLevel; k++) {
+    levels.push(reference + k * spacing);
+  }
+  return levels;
 }
 
 function formatPrice(n: number): string {

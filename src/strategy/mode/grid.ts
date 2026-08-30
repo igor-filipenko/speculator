@@ -6,9 +6,9 @@ import type {
   Snapshot,
   Strategy,
   Timeframe,
-} from "../types.js";
+} from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
-import { adx, atr, ema } from "./indicators.js";
+import { adx, atr, ema } from "../indicators.js";
 
 export interface GridParams {
   timeframe: Timeframe;

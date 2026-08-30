@@ -1,13 +1,14 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { getToken } from "./db/tokens.js";
-import type { PairConfig, StrategyMode } from "./types.js";
+import type { HtfTimeframe, PairConfig, StrategyMode } from "./types.js";
 
 loadDotenv();
 
 const envSchema = z
   .object({
-    STRATEGY: z.enum(["ema-rsi", "bollinger", "grid"]).default("ema-rsi"),
+    STRATEGY: z.enum(["bollinger", "grid"]).default("bollinger"),
+    HTF: z.enum(["4h", "1d"]).default("4h"),
     JUPITER_API_KEY: z.string().optional().default(""),
     WATCHLIST: z.string().default("SOL/USDC"),
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
@@ -44,6 +45,8 @@ export interface TelegramConfig {
 
 export interface AppConfig {
   strategy: StrategyMode;
+  /** Higher-timeframe bars for StrategyManager (default 4h). */
+  htf: HtfTimeframe;
   jupiterApiKey: string;
   watchlist: string[];
   pollIntervalMs: number;
@@ -135,6 +138,7 @@ export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppC
 
   const config: AppConfig = {
     strategy: env.STRATEGY,
+    htf: env.HTF,
     jupiterApiKey: env.JUPITER_API_KEY,
     watchlist,
     pollIntervalMs: env.POLL_INTERVAL_MS,

@@ -22,7 +22,7 @@
     "format:check": "prettier --check .",
     "format:fix": "prettier --write .",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
-    "test": "rm -rf dist-test && tsc -p tsconfig.test.json && node --test dist-test/**/*.test.js",
+    "test": "rm -rf dist-test && tsc -p tsconfig.test.json && node --test 'dist-test/**/*.test.js'",
     "build": "tsc -p tsconfig.build.json",
     "install-runtime": "node scripts/install-runtime.mjs"
   },

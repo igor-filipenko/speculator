@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal (candles for EMA/RSI)
+- **OHLCV:** GeckoTerminal (candles for Bollinger / Grid)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -30,7 +30,8 @@ Edit `.env`:
 
 | Variable               | Meaning                                                                                |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| `STRATEGY`             | `ema-rsi` (4h EMA trend) or `bollinger` (4h BB flat mean-reversion)                    |
+| `STRATEGY`             | `bollinger` (default) or `grid`                                                        |
+| `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                           |
 | `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` \| `database` (default `paper`) |
 | `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                             |
 | `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)                   |
@@ -59,12 +60,13 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                 |
-| ------------ | ------------------------------------- |
-| `/start`     | Greeting and command list             |
-| `/report`    | Last signal per pair (including HOLD) |
-| `/chart`     | OHLCV candle chart with EMA/RSI       |
-| `/portfolio` | Current paper or live portfolio       |
+| Command      | Reply                                     |
+| ------------ | ----------------------------------------- |
+| `/start`     | Greeting and command list                 |
+| `/report`    | Last signal per pair (including HOLD)     |
+| `/market`    | HTF trend chart (EMA200 / ADX) + mcap/FDV |
+| `/chart`     | OHLCV candle chart with strategy overlays |
+| `/portfolio` | Current paper or live portfolio           |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -142,6 +144,7 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
 | `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
+| `--ignore-trend`  | Do not evaluate/apply HTF market state (no MARKET logs, no trend risk) |
 
 Use either `--days` or `--from`/`--to`, not both.
 
@@ -162,7 +165,7 @@ pnpm exec tsx src/index.ts paper --once
 pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/market`, `/chart`, and `/portfolio` from that chat.
 
 ## DuckDB Modes
 
@@ -352,27 +355,23 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ## Strategy (v1)
 
-ATR stop/trail and cooldown via `SimpleRiskManager`. One virtual long per pair (`flat → long → flat`).
+ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-### EMA trend (`ema-rsi`)
-
-EMA crossover + RSI band + trend EMA + ADX regime filter:
-
-| Mode      | Timeframe | EMA     | Entry filters                               | ATR stop/trail | Cooldown |
-| --------- | --------- | ------- | ------------------------------------------- | -------------- | -------- |
-| `ema-rsi` | 4h        | 12 / 26 | RSI `[40, 60)`; close &gt; EMA 50; ADX ≥ 20 | 2× / 2.5×      | 2 bars   |
-
-Exits: bearish EMA cross with RSI &gt; 45, or ATR(14) hard / trailing stop from peak close. ADX does **not** block exits. Discretionary cross-SELL respects `minHoldBars` (1); protective stops still fire immediately.
+`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.indicators`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` → `GenericRiskManager`, otherwise `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging markets (4h, BB period 20, stdDev 2). Buys only on **lower-band reclaim** with filters:
+Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on **lower-band reclaim** with filters:
 
-| Mode        | Entry                                                                | Exit                         | ATR stop/trail | Cooldown | minHold |
-| ----------- | -------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
-| `bollinger` | reclaim lower; ADX ≤ 15; close &gt; EMA 50; (mid−lower)/close ≥ 1.5% | close ≥ BB mid (SMA), or ATR | 2.5× / 3×      | 4 bars   | 1 bar   |
+| Mode        | Entry                                                                                 | Exit                         | ATR stop/trail | Cooldown | minHold |
+| ----------- | ------------------------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
+| `bollinger` | reclaim lower; RSI(14) &lt; 30; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
 
-`/chart` draws Bollinger mid/upper/lower for this mode (EMA/RSI chart for trend modes).
+`/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+
+### Grid (`grid`)
+
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX ≤ 30 and close is above trend EMA 20. Sells at entry + one grid spacing (needs portfolio snapshot). ATR stop/trail 2.5× / 3×, cooldown 1 bar.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
@@ -388,25 +387,27 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, paper, live, signals
+  db/                      # DuckDB: candles, market.indicators, paper, live, signals
   market/gecko-terminal.ts
+  market/htf-cache.ts        # HTF MarketIndicators cache + Gecko refresh
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute
   exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
-  risk/risk-manager.ts     # SimpleRiskManager + RiskParams (ATR/cooldown)
+  risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
-  strategy/ema-rsi.ts
-  strategy/bollinger.ts
-  strategy/strategy.ts     # loadStrategy (ema-rsi | bollinger | grid)
-  strategy/ema-rsi-svg.ts  # EMA/RSI SVG for /chart
-  strategy/bollinger-svg.ts # BB SVG for /chart
+  strategy/mode/bollinger.ts
+  strategy/mode/grid.ts
+  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy/RiskManager
+  strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX for /market
+  strategy/mode/bollinger-svg.ts # BB SVG for /chart
+  strategy/mode/grid-svg.ts      # grid SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (DuckDB)
   live/portfolio.ts        # on-chain cash/size + ledger
   notify/console.ts
-  notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
+  notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio
   engine/tick.ts           # shared paper/trade poll loop
   engine/watch.ts
   engine/paper.ts

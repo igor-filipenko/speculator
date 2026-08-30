@@ -1,3 +1,4 @@
+import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import type {
   Candle,
   ClearRisk,
@@ -9,7 +10,6 @@ import type {
   RiskParams,
   Signal,
   Snapshot,
-  Timeframe,
   Trade,
 } from "../types.js";
 
@@ -21,11 +21,20 @@ import type {
  * Trailing peak is max high of OHLCV since {@link Position.openedAt} (plus entry).
  * Policy knobs are fixed at construction ({@link RiskParams}).
  */
-export class SimpleRiskManager implements RiskManager {
+export class GenericRiskManager implements RiskManager {
   constructor(private readonly config: RiskParams) {}
 
+  getDisplayName(): string {
+    return "Generic risk manager";
+  }
+
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
-    const peak = peakSinceOpen(snapshot, candles, signal, timeframeSeconds(this.config.timeframe));
+    const peak = peakSinceOpen(
+      snapshot,
+      candles,
+      signal,
+      candleIntervalSeconds(this.config.timeframe),
+    );
     // HOLD may still carry barLow/atr for display; stops only apply on BUY/SELL.
     const stopExit =
       signal.side === "HOLD" ? null : evaluateProtectiveExit(signal, snapshot, this.config, peak);
@@ -168,7 +177,7 @@ function inCooldown(trades: Trade[], at: Date, config: RiskParams): boolean {
   if (!lastSell) {
     return false;
   }
-  const intervalSec = timeframeSeconds(config.timeframe);
+  const intervalSec = candleIntervalSeconds(config.timeframe);
   const elapsedSec = Math.max(0, (at.getTime() - lastSell.at.getTime()) / 1000);
   const barsSince = Math.floor(elapsedSec / intervalSec);
   return barsSince < config.cooldownBars;
@@ -182,12 +191,51 @@ function belowMinHold(snapshot: Snapshot, at: Date, config: RiskParams): boolean
   if (!openedAt) {
     return false;
   }
-  const intervalSec = timeframeSeconds(config.timeframe);
+  const intervalSec = candleIntervalSeconds(config.timeframe);
   const elapsedSec = Math.max(0, (at.getTime() - openedAt.getTime()) / 1000);
   const barsHeld = Math.floor(elapsedSec / intervalSec);
   return barsHeld < config.minHoldBars;
 }
 
-function timeframeSeconds(timeframe: Timeframe): number {
-  return timeframe === "4h" ? 4 * 60 * 60 : 15 * 60;
+/** No new longs while HTF trend is not bullish; ATR stops still fire on HOLD. */
+export class HighRiskManager implements RiskManager {
+  constructor(
+    private readonly message: string,
+    private readonly config: RiskParams,
+  ) {}
+
+  getDisplayName(): string {
+    return "High risk manager";
+  }
+
+  check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
+    const peak = peakSinceOpen(
+      snapshot,
+      candles,
+      signal,
+      candleIntervalSeconds(this.config.timeframe),
+    );
+    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, peak);
+    if (stopExit) {
+      return asCommand(stopExit);
+    }
+
+    if (signal.side === "BUY") {
+      return blocked(signal, `high risk, ${this.message}`);
+    }
+    if (signal.side === "SELL") {
+      if (snapshot.position.side !== "long" || snapshot.position.size <= 0) {
+        return blocked(signal, "not long");
+      }
+      return asCommand({
+        pair: signal.pair,
+        side: "SELL",
+        reason: signal.reason,
+        at: signal.at,
+        priceHint: signal.price,
+        baseSize: snapshot.position.size,
+      });
+    }
+    return noCommand();
+  }
 }

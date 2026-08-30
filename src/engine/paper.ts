@@ -1,13 +1,12 @@
 import type { AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter.js";
-import type { ProgramState, RiskManager, ShutdownCb, Strategy } from "../types.js";
+import type { ProgramState, ShutdownCb, StrategyManager } from "../types.js";
 import { Telegram } from "../notify/telegram.js";
 import { runTradingLoop } from "./tick.js";
 
 export interface PaperOptions {
   config: AppConfig;
-  strategy: Strategy;
-  riskManager: RiskManager;
+  strategyManager: StrategyManager;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */

@@ -1,6 +1,6 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type { Candle, Timeframe } from "../types.js";
-import { getSpeculatorDb } from "./db.js";
+import { getConnection } from "./db.js";
 
 export interface CandleRangeBounds {
   minTime?: number;
@@ -27,7 +27,7 @@ export async function readCandles(
   toTime: number,
   dataDir?: string,
 ): Promise<Candle[]> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(
     `
     SELECT time, open, high, low, close, volume
@@ -64,7 +64,7 @@ export async function readRangeBounds(
   toTime: number,
   dataDir?: string,
 ): Promise<CandleRangeBounds> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(
     `
     SELECT
@@ -110,7 +110,7 @@ export async function upsertCandles(
     return;
   }
 
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run("BEGIN TRANSACTION");
   try {
     for (const c of candles) {
@@ -137,7 +137,7 @@ export async function deleteCandles(
   timeframe: Timeframe,
   dataDir?: string,
 ): Promise<void> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   await conn.run(`DELETE FROM candles WHERE symbol = $symbol AND timeframe = $timeframe`, {
     symbol,
     timeframe,
@@ -149,7 +149,7 @@ export async function candleCount(
   timeframe: Timeframe,
   dataDir?: string,
 ): Promise<number> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   const reader = await conn.runAndReadAll(
     `
     SELECT count(*)::BIGINT AS cnt
@@ -168,6 +168,6 @@ export async function withConnection<T>(
   dataDir: string | undefined,
   fn: (conn: DuckDBConnection) => Promise<T>,
 ): Promise<T> {
-  const conn = await getSpeculatorDb(dataDir);
+  const conn = await getConnection(dataDir);
   return fn(conn);
 }

@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { defaultDataDir, getSpeculatorDb } from "./db/db.js";
+import { defaultDataDir, getConnection } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -7,9 +7,16 @@ import { runWallet } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
-import { SimpleRiskManager } from "./risk/risk-manager.js";
-import { loadStrategy } from "./strategy/strategy.js";
-import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, StrategyMode } from "./types.js";
+import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
+import type {
+  Candle,
+  MarketIndicators,
+  Portfolio,
+  ProgramState,
+  ShutdownCb,
+  Signal,
+  StrategyMode,
+} from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
@@ -23,15 +30,16 @@ function usage(): never {
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
-  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh]
+  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
   --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
-  --strategy <name> Override strategy (ema-rsi | bollinger | grid; default: env STRATEGY)
+  --strategy <name> Override strategy (bollinger | grid; default: env STRATEGY)
   --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
+  --ignore-trend    Skip HTF market state (do not apply or log trend)
 `);
   process.exit(1);
 }
@@ -96,11 +104,16 @@ async function main(): Promise<void> {
 async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const programState: ProgramState = {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: new Map<string, Portfolio>(),
   };
 
@@ -111,14 +124,25 @@ async function runWatchCommand(argv: string[]): Promise<void> {
       }
     : installLifecycleNotifiers(telegram);
 
-  await runWatch({ config, strategy, state: programState, telegram, once, shutdownCb });
+  await runWatch({
+    config,
+    strategy,
+    strategyManager,
+    state: programState,
+    telegram,
+    once,
+    shutdownCb,
+  });
 }
 
 async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
     config.pairs,
     config.paperCashUsdc,
@@ -128,6 +152,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios,
   };
 
@@ -140,8 +165,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 
   await runPaper({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     state: programState,
     telegram,
     once,
@@ -152,8 +176,11 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 async function runTradeCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategy = loadStrategy(config.strategy);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const strategy = strategyManager.getActiveStrategy();
   const runtime = await createLiveRuntime(config);
   console.log(`Wallet ${runtime.walletAddress}`);
 
@@ -161,6 +188,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
+    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: runtime.portfolios,
   };
 
@@ -173,8 +201,7 @@ async function runTradeCommand(argv: string[]): Promise<void> {
 
   await runTrade({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     exchange: runtime.exchange,
     state: programState,
     telegram,
@@ -198,7 +225,7 @@ async function runDatabaseCommand(): Promise<void> {
   }
 
   const url = process.env["DUCKDB_URL"] ?? "quack:localhost";
-  const conn = await getSpeculatorDb(defaultDataDir());
+  const conn = await getConnection(defaultDataDir());
 
   let stopping = false;
   const keepalive = setInterval(() => {
@@ -222,7 +249,7 @@ async function runDatabaseCommand(): Promise<void> {
   process.once("SIGTERM", () => void stop("SIGTERM", 0));
 }
 
-const VALID_STRATEGIES: StrategyMode[] = ["ema-rsi", "bollinger", "grid"];
+const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
@@ -232,13 +259,15 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     ? validateStrategyFlag(flags.strategy)
     : config.strategy;
 
-  const strategy = loadStrategy(strategyMode);
-  const riskManager = new SimpleRiskManager(strategy.getRiskParams());
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode,
+    htf: config.htf,
+  });
   const results = await runBacktest({
     config,
-    strategy,
-    riskManager,
+    strategyManager,
     forceRefresh: flags.forceRefresh,
+    ignoreTrend: flags.ignoreTrend,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),

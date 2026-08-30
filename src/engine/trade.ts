@@ -4,20 +4,12 @@ import { JupiterSwapExchange } from "../exchange/jupiter-swap.js";
 import { loadKeypairFromFile, WalletBalances } from "../exchange/wallet.js";
 import { LivePortfolio } from "../live/portfolio.js";
 import { Telegram } from "../notify/telegram.js";
-import type {
-  Exchange,
-  Portfolio,
-  ProgramState,
-  RiskManager,
-  ShutdownCb,
-  Strategy,
-} from "../types.js";
+import type { Exchange, Portfolio, ProgramState, ShutdownCb, StrategyManager } from "../types.js";
 import { runTradingLoop } from "./tick.js";
 
 export interface TradeOptions {
   config: AppConfig;
-  strategy: Strategy;
-  riskManager: RiskManager;
+  strategyManager: StrategyManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;

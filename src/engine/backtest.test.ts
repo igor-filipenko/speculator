@@ -3,18 +3,31 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
-import { SimpleRiskManager } from "../risk/risk-manager.js";
-import { evaluateEmaRsi, emaRsiParamsFor, type EmaRsiParams } from "../strategy/ema-rsi.js";
-import { buildOhlcvSvg } from "../strategy/ema-rsi-svg.js";
-import { loadStrategy } from "../strategy/strategy.js";
-import type { Candle, Order, RiskParams, Strategy } from "../types.js";
+import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import {
+  evaluateMarketIndicators,
+  htfParamsFor,
+  loadStrategy,
+  SimpleStrategyManager,
+} from "../strategy/strategy-manager.js";
+import type {
+  Candle,
+  MarketIndicators,
+  Order,
+  RiskManager,
+  RiskParams,
+  SignalSide,
+  Strategy,
+  StrategyManager,
+} from "../types.js";
 import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
 function makeConfig(cash = 1000): AppConfig {
   return {
-    strategy: "ema-rsi",
+    strategy: "bollinger",
+    htf: "4h",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
@@ -35,62 +48,119 @@ function makeConfig(cash = 1000): AppConfig {
   };
 }
 
-function makeRisk(strategy: Strategy): SimpleRiskManager {
-  return new SimpleRiskManager(strategy.getRiskParams());
+function makeRisk(strategy: Strategy): GenericRiskManager {
+  return new GenericRiskManager(strategy.getRiskParams());
 }
 
-function makeStrategy(
-  signalOverrides: Partial<EmaRsiParams> = {},
-  riskOverrides: Partial<RiskParams> = {},
-): Strategy {
-  const params: EmaRsiParams = { ...emaRsiParamsFor(), ...signalOverrides };
-  const risk: RiskParams = { ...loadStrategy("ema-rsi").getRiskParams(), ...riskOverrides };
+function htfAwareManager(strategy: Strategy): StrategyManager {
+  const params = htfParamsFor("4h");
+  let riskManager: RiskManager = new GenericRiskManager(strategy.getRiskParams());
   return {
-    getDisplayName: () => `ema-rsi (${params.timeframe})`,
-    getMode: () => "ema-rsi",
-    getRiskParams: () => risk,
-    getRequiredCandles: () => ({
-      timeframe: params.timeframe,
-      count:
-        Math.max(params.emaSlow, params.trendEmaPeriod, params.atrPeriod, params.adxPeriod * 2) +
-        params.rsiPeriod +
-        5,
-    }),
-    evaluateSignal: (pair, candles, price, at) =>
-      evaluateEmaRsi({ pair, candles, strategy: params, price, at }),
-    buildChartSvg: (pair, candles) => buildOhlcvSvg({ pair, candles, strategy: params }),
+    getActiveStrategy: () => strategy,
+    getActiveRiskManager: () => riskManager,
+    getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
+    evaluate: (pair, candles, price, at): MarketIndicators =>
+      evaluateMarketIndicators({
+        pair,
+        candles,
+        price,
+        at,
+        params,
+      }),
+    applyMarketIndicators: (state, prev) => {
+      riskManager =
+        state.trend === "bullish"
+          ? new GenericRiskManager(strategy.getRiskParams())
+          : new HighRiskManager(`trend is ${state.trend}`, strategy.getRiskParams());
+      return prev?.trend !== state.trend;
+    },
   };
 }
 
-/** Build a long downtrend then sharp uptrend to force a bullish EMA cross. */
-function crossoverCandles(): Candle[] {
-  const start = 1_700_000_000;
+/** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
+function managerFor(
+  strategy: Strategy,
+  riskManager: RiskManager = makeRisk(strategy),
+): StrategyManager {
+  return {
+    getActiveStrategy: () => strategy,
+    getActiveRiskManager: () => riskManager,
+    getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
+    evaluate: (pair, candles, price, at): MarketIndicators => ({
+      pair,
+      timeframe: "4h",
+      at,
+      price,
+      trend: "unknown",
+      candles,
+    }),
+    applyMarketIndicators: () => false,
+  };
+}
+
+function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }): Strategy {
+  const risk: RiskParams = {
+    timeframe: "15m",
+    atrStopMult: 100,
+    atrTrailMult: 100,
+    cooldownBars: 0,
+    minHoldBars: 0,
+    ...opts.risk,
+  };
+  return {
+    getDisplayName: () => "scripted",
+    getMode: () => "bollinger",
+    getRiskParams: () => risk,
+    getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+    evaluateSignal: (pair, candles, price, at) => {
+      const last = candles[candles.length - 1]!;
+      const i = candles.length - 1;
+      const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";
+      return {
+        pair,
+        side,
+        reason: side === "BUY" ? "scripted buy" : "hold",
+        price,
+        at,
+        meta: { atr: 1, barLow: last.low, barHigh: last.high },
+      };
+    },
+    buildChartSvg: () => "<svg></svg>",
+  };
+}
+
+function series(count: number, startPrice: number, delta: number, start = 1_700_000_000): Candle[] {
   const interval = 15 * 60;
   const candles: Candle[] = [];
-  let price = 200;
-  // Decline long enough to warm indicators with fast below slow.
-  for (let i = 0; i < 80; i++) {
-    price -= 0.8;
+  let price = startPrice;
+  for (let i = 0; i < count; i++) {
+    price += delta;
     candles.push({
       time: start + i * interval,
-      open: price + 0.4,
+      open: price - delta / 2,
       high: price + 0.5,
       low: price - 0.5,
       close: price,
       volume: 10,
     });
   }
-  // Sharp rally to cross fast above slow while RSI is not maxed out.
-  for (let i = 0; i < 25; i++) {
-    price += 4;
-    const t = start + (80 + i) * interval;
+  return candles;
+}
+
+function htfSeries(count: number, startPrice: number, delta: number, start: number): Candle[] {
+  const interval = 4 * 60 * 60;
+  const candles: Candle[] = [];
+  let price = startPrice;
+  for (let i = 0; i < count; i++) {
+    price += delta;
+    const close = price;
     candles.push({
-      time: t,
-      open: price - 2,
-      high: price + 1,
-      low: price - 3,
-      close: price,
-      volume: 20,
+      time: start + i * interval,
+      open: close - delta / 2,
+      high: close + Math.abs(delta) + 0.2,
+      low: close - Math.abs(delta) - 0.2,
+      close,
+      volume: 1,
     });
   }
   return candles;
@@ -101,14 +171,22 @@ describe("parseBacktestArgs", () => {
     assert.deepEqual(parseBacktestArgs(["--days", "14", "--force-refresh"]), {
       days: 14,
       forceRefresh: true,
+      ignoreTrend: false,
     });
     assert.deepEqual(parseBacktestArgs(["--days=7"]), {
       days: 7,
       forceRefresh: false,
+      ignoreTrend: false,
     });
     assert.deepEqual(parseBacktestArgs([]), {
       days: 0,
       forceRefresh: false,
+      ignoreTrend: false,
+    });
+    assert.deepEqual(parseBacktestArgs(["--ignore-trend"]), {
+      days: 0,
+      forceRefresh: false,
+      ignoreTrend: true,
     });
   });
 
@@ -149,27 +227,13 @@ describe("parseBacktestDate", () => {
 
 describe("runBacktest", () => {
   it("replays fixture candles with emulated costs and no paper-state writes", async () => {
-    const candles = crossoverCandles();
+    const candles = series(20, 100, 0.2);
     const startingCash = 1000;
-    // Loose filters so the classic cross fixture still fires a BUY (cost-model smoke).
-    const strategy = makeStrategy(
-      {
-        rsiBuyMin: 0,
-        rsiBuyMax: 100,
-        trendEmaPeriod: 5,
-        adxMin: 0,
-      },
-      {
-        cooldownBars: 0,
-        minHoldBars: 0,
-        atrStopMult: 100,
-        atrTrailMult: 100,
-      },
-    );
+    const buyIndex = 5;
+    const strategy = scriptedStrategy({ buyIndex });
     const [result] = await runBacktest({
       config: makeConfig(startingCash),
-      strategy,
-      riskManager: makeRisk(strategy),
+      strategyManager: managerFor(strategy),
       candles,
       days: 30,
     });
@@ -178,10 +242,9 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
-    assert.equal(result.metrics.strategy.getMode(), "ema-rsi");
+    assert.equal(result.metrics.strategy.getMode(), "bollinger");
     assert.ok(result.equityCurve.length === candles.length);
 
-    // With a forced bullish cross we expect at least one simulated BUY.
     assert.ok(result.trades.length >= 1);
     const buy = result.trades[0];
     assert.ok(buy);
@@ -193,7 +256,6 @@ describe("runBacktest", () => {
     const emulated = emulateFillPrice({ side: "BUY", close: buyBar.close, tier: "liquid" });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
 
-    // Priority fee + adverse price → size below cash/mid.
     const midSize = startingCash / buyBar.close;
     assert.ok(buy.size < midSize);
 
@@ -206,76 +268,25 @@ describe("runBacktest", () => {
   });
 
   it("does not ATR-exit on HOLD after entry when price crashes", async () => {
-    const start = 1_700_000_000;
-    const interval = 15 * 60;
-    const candles: Candle[] = [];
-    let price = 100;
-    for (let i = 0; i < 40; i++) {
-      price += 0.2;
-      candles.push({
-        time: start + i * interval,
-        open: price - 0.1,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
-    for (let i = 0; i < 6; i++) {
-      price -= 0.4;
-      candles.push({
-        time: start + (40 + i) * interval,
-        open: price + 0.2,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
-    for (let i = 0; i < 8; i++) {
-      price += 0.5;
-      candles.push({
-        time: start + (46 + i) * interval,
-        open: price - 0.2,
-        high: price + 0.3,
-        low: price - 0.3,
-        close: price,
-        volume: 5,
-      });
-    }
+    const candles = series(40, 100, 0.2);
+    const last = candles[candles.length - 1]!;
     candles.push({
-      time: start + 54 * interval,
-      open: price,
-      high: price,
-      low: price - 20,
-      close: price - 15,
+      time: last.time + 15 * 60,
+      open: last.close,
+      high: last.close,
+      low: last.close - 20,
+      close: last.close - 15,
       volume: 5,
     });
 
-    const strategy = makeStrategy(
-      {
-        emaFast: 5,
-        emaSlow: 12,
-        trendEmaPeriod: 20,
-        rsiPeriod: 14,
-        rsiBuyMin: 20,
-        rsiBuyMax: 90,
-        atrPeriod: 5,
-        adxPeriod: 5,
-        adxMin: 0,
-      },
-      {
-        atrStopMult: 1.5,
-        atrTrailMult: 50,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      },
-    );
+    const strategy = scriptedStrategy({
+      buyIndex: 20,
+      risk: { atrStopMult: 1.5, atrTrailMult: 50 },
+    });
 
     const [result] = await runBacktest({
       config: makeConfig(1000),
-      strategy,
-      riskManager: makeRisk(strategy),
+      strategyManager: managerFor(strategy),
       candles,
     });
     assert.ok(result);
@@ -285,7 +296,7 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("ema-rsi");
+    const strategy = loadStrategy("bollinger");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
@@ -300,8 +311,7 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
-      strategy,
-      riskManager: makeRisk(strategy),
+      strategyManager: new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" }),
       candles,
     });
 
@@ -309,6 +319,52 @@ describe("runBacktest", () => {
     assert.equal(result.trades.length, 0);
     assert.equal(result.metrics.endingEquity, 500);
     assert.equal(result.metrics.totalReturnPct, 0);
+  });
+
+  it("evaluates HTF market state and blocks BUY when trend is not bullish", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+    });
+    assert.ok(result);
+    assert.equal(result.trades.filter((t) => t.side === "BUY").length, 0);
+  });
+
+  it("allows BUY when HTF trend is bullish", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 50, 0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
+  });
+
+  it("skips HTF apply and log when ignoreTrend is set", async () => {
+    const intervalHtf = 4 * 60 * 60;
+    const ltfStart = 1_700_000_000;
+    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
+    const ltf = series(20, 100, 0.1);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
+      candles: ltf,
+      htfCandles: htf,
+      ignoreTrend: true,
+    });
+    assert.ok(result);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
   });
 });
 

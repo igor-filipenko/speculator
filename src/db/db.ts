@@ -45,6 +45,9 @@ function parseQuackHost(url: string): string {
 /** Cached connections keyed by absolute DB path (standalone/server) or `client:<url>` (client). */
 const connections = new Map<string, Promise<DuckDBConnection>>();
 
+/** Optional override so tests can pin a temp directory without threading `dataDir` through db helpers. */
+let pinnedDataDir: string | undefined;
+
 /** Path to the shared app DuckDB file. */
 export function speculatorDbPath(dataDir = DEFAULT_DATA_DIR): string {
   return join(dataDir, DB_FILE);
@@ -55,8 +58,14 @@ export function defaultDataDir(): string {
   return DEFAULT_DATA_DIR;
 }
 
+/** Pin the DuckDB data directory (tests). Pass `undefined` to restore the default. */
+export function setSpeculatorDataDir(dataDir: string | undefined): void {
+  pinnedDataDir = dataDir;
+}
+
 /** Open (or reuse) the shared speculator DuckDB connection for the current DUCKDB_MODE. */
-export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckDBConnection> {
+export async function getConnection(dataDir?: string): Promise<DuckDBConnection> {
+  const resolvedDir = dataDir ?? pinnedDataDir ?? DEFAULT_DATA_DIR;
   const mode = readMode();
 
   if (mode === "client") {
@@ -70,8 +79,8 @@ export async function getSpeculatorDb(dataDir = DEFAULT_DATA_DIR): Promise<DuckD
     return pending;
   }
 
-  await mkdir(dataDir, { recursive: true });
-  const path = speculatorDbPath(dataDir);
+  await mkdir(resolvedDir, { recursive: true });
+  const path = speculatorDbPath(resolvedDir);
   let pending = connections.get(path);
   if (!pending) {
     pending = openLocalConnection(path, mode);
@@ -194,11 +203,41 @@ async function openClientConnection(
   });
 }
 
+/** Copy `market.states` into `market.indicators` (drops the old table). */
+async function migrateMarketStatesToIndicators(connection: DuckDBConnection): Promise<void> {
+  const reader = await connection.runAndReadAll(`
+    SELECT COUNT(*) AS n
+    FROM information_schema.tables
+    WHERE table_schema = 'market' AND table_name = 'states'
+  `);
+  await reader.readAll();
+  const n = Number(reader.getRowObjectsJS()[0]?.["n"] ?? 0);
+  if (n === 0) {
+    return;
+  }
+
+  await connection.run(`
+    INSERT INTO market.indicators (
+      pair, timeframe, bar_time, "at", price, trend,
+      ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
+      market_cap_usd, fdv_usd, fetched_at
+    )
+    SELECT
+      pair, timeframe, bar_time, "at", price, trend,
+      ema200, ema50, adx, atr, atr_pct, dist_ema200_pct,
+      market_cap_usd, fdv_usd, fetched_at
+    FROM market.states
+    ON CONFLICT (pair, timeframe) DO NOTHING
+  `);
+  await connection.run(`DROP TABLE market.states`);
+}
+
 /** Create schemas/tables if missing. Add future persistence tables here. */
 export async function initSchema(connection: DuckDBConnection): Promise<void> {
   await connection.run(`CREATE SCHEMA IF NOT EXISTS paper`);
   await connection.run(`CREATE SCHEMA IF NOT EXISTS live`);
   await connection.run(`CREATE SCHEMA IF NOT EXISTS solana`);
+  await connection.run(`CREATE SCHEMA IF NOT EXISTS market`);
 
   await connection.run(`
     CREATE TABLE IF NOT EXISTS candles (
@@ -289,11 +328,18 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
       side     VARCHAR NOT NULL,
       price    DOUBLE  NOT NULL,
       reason   VARCHAR NOT NULL,
-      ema_fast DOUBLE,
-      ema_slow DOUBLE,
-      rsi      DOUBLE
+      ema_fast  DOUBLE,
+      ema_slow  DOUBLE,
+      rsi       DOUBLE,
+      trend_ema DOUBLE,
+      atr       DOUBLE,
+      adx       DOUBLE
     )
   `);
+
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS trend_ema DOUBLE`);
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS atr DOUBLE`);
+  await connection.run(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS adx DOUBLE`);
 
   await connection.run(`
     CREATE INDEX IF NOT EXISTS signals_at_idx ON signals ("at")
@@ -307,6 +353,29 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
       pool_address VARCHAR
     )
   `);
+
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS market.indicators (
+      pair            VARCHAR   NOT NULL,
+      timeframe       VARCHAR   NOT NULL,
+      bar_time        BIGINT    NOT NULL,
+      "at"            TIMESTAMP NOT NULL,
+      price           DOUBLE    NOT NULL,
+      trend           VARCHAR   NOT NULL,
+      ema200          DOUBLE,
+      ema50           DOUBLE,
+      adx             DOUBLE,
+      atr             DOUBLE,
+      atr_pct         DOUBLE,
+      dist_ema200_pct DOUBLE,
+      market_cap_usd  DOUBLE,
+      fdv_usd         DOUBLE,
+      fetched_at      TIMESTAMP NOT NULL DEFAULT now(),
+      PRIMARY KEY (pair, timeframe)
+    )
+  `);
+
+  await migrateMarketStatesToIndicators(connection);
 
   // Seed known Solana tokens when missing (idempotent).
   await connection.run(`
@@ -323,4 +392,5 @@ export async function initSchema(connection: DuckDBConnection): Promise<void> {
 /** Clear cached connections (for tests). */
 export function resetSpeculatorDbCache(): void {
   connections.clear();
+  pinnedDataDir = undefined;
 }

@@ -1,23 +1,30 @@
 import type { AppConfig } from "../config.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import { logRisk, logSignal, logSnapshot, logTrade, persistSignal } from "../notify/console.js";
+import { refreshMarketIndicators } from "../market/htf-cache.js";
+import {
+  logMarket,
+  logRisk,
+  logSignal,
+  logSnapshot,
+  logTrade,
+  persistSignal,
+} from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import type {
   Candle,
   Exchange,
+  MarketIndicators,
   PairConfig,
   Portfolio,
   ProgramState,
-  RiskManager,
   ShutdownCb,
   Signal,
-  Strategy,
+  StrategyManager,
 } from "../types.js";
 
 export interface TradingLoopOptions {
   config: AppConfig;
-  strategy: Strategy;
-  riskManager: RiskManager;
+  strategyManager: StrategyManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;
@@ -30,13 +37,15 @@ export interface TradingLoopOptions {
  * Shared poll loop: candles → signal → risk command → exchange order → portfolio fill.
  */
 export async function runTradingLoop(options: TradingLoopOptions): Promise<void> {
-  const { config, strategy, riskManager, exchange, once = false, modeLabel } = options;
+  const { config, strategyManager, exchange, once = false, modeLabel } = options;
+  const strategy = strategyManager.getActiveStrategy();
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
+  const lastMarketIndicators = options.state.lastMarketIndicators;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting ${modeLabel} mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting ${modeLabel} mode | strategy=${strategy.getDisplayName()} | htf=${config.htf} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });
@@ -50,12 +59,12 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
       try {
         await processPair({
           pair,
-          strategy,
+          strategyManager,
           exchange,
-          riskManager,
           portfolios,
           lastSignals,
           lastCandles,
+          lastMarketIndicators,
           telegram,
         });
       } catch (err) {
@@ -84,16 +93,56 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 
 export async function processPair(args: {
   pair: PairConfig;
-  strategy: Strategy;
+  strategyManager: StrategyManager;
   exchange: Exchange;
-  riskManager: RiskManager;
   portfolios: Map<string, Portfolio>;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
+  lastMarketIndicators: Map<string, MarketIndicators>;
   telegram: Telegram;
 }): Promise<void> {
-  const { pair, strategy, exchange, riskManager, portfolios, lastSignals, lastCandles, telegram } =
-    args;
+  const {
+    pair,
+    strategyManager,
+    exchange,
+    portfolios,
+    lastSignals,
+    lastCandles,
+    lastMarketIndicators,
+    telegram,
+  } = args;
+
+  const price = await exchange.spotPrice(pair);
+
+  try {
+    const previous = lastMarketIndicators.get(pair.symbol);
+    const market = await refreshMarketIndicators({
+      pair,
+      required: strategyManager.getRequiredCandles(),
+      price,
+      at: new Date(),
+    });
+    logMarket(market);
+    const trendChanged =
+      previous !== undefined
+        ? strategyManager.applyMarketIndicators(market, previous)
+        : strategyManager.applyMarketIndicators(market);
+    lastMarketIndicators.set(pair.symbol, market);
+    if (trendChanged) {
+      console.log(`[${pair.symbol}] trend changed from ${previous?.trend} to ${market.trend}`);
+      await telegram.notify({
+        type: "market",
+        market,
+        ...(previous !== undefined ? { previous: previous.trend } : {}),
+      });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[${pair.symbol}] market indicators failed: ${message}`);
+  }
+
+  const strategy = strategyManager.getActiveStrategy();
+  const riskManager = strategyManager.getActiveRiskManager();
 
   const requiredCandles = strategy.getRequiredCandles();
   const candles = await fetchCandles({
@@ -101,8 +150,6 @@ export async function processPair(args: {
     timeframe: requiredCandles.timeframe,
     limit: requiredCandles.count,
   });
-
-  const price = await exchange.spotPrice(pair);
 
   const portfolio = portfolios.get(pair.symbol);
   if (portfolio) {
@@ -158,6 +205,6 @@ export async function processPair(args: {
   await telegram.notify({ type: "trade", trade });
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

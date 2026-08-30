@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using EMA/RSI or Bollinger on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Grid on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
 
 Build/run: [README.md](./README.md).
 
@@ -29,12 +29,15 @@ src/
   db/
     db.ts               # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
+    market.ts           # market.indicators (HTF MarketIndicators cache)
     paper.ts            # paper.portfolios / paper.trades
     live.ts             # live.portfolios / live.trades
     signals.ts          # signals history
     tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
+  market/htf.ts         # HTF EMA/ADX/ATR → MarketIndicators
+  market/htf-cache.ts     # load/cache HTF MarketIndicators
   exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)
   exchange/wallet.ts           # JSON keypair load + RPC balances
@@ -42,12 +45,13 @@ src/
   exchange/emulated-quote.ts   # backtest fill cost model
   exchange/emulated-exchange.ts
   strategy/indicators.ts
-  strategy/ema-rsi.ts
-  strategy/bollinger.ts
-  strategy/strategy.ts         # loadStrategy (ema-rsi | bollinger | grid)
+  strategy/mode/bollinger.ts
+  strategy/mode/grid.ts
+  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy / getActiveRiskManager
+  strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
-  strategy/ema-rsi-svg.ts  # candle + EMA/RSI SVG
-  strategy/bollinger-svg.ts # Bollinger band SVG
+  strategy/mode/bollinger-svg.ts # Bollinger band SVG
+  strategy/mode/grid-svg.ts      # ATR grid SVG
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (DuckDB)

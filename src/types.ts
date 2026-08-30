@@ -13,6 +13,18 @@ export type HtfTimeframe = "4h" | "1d";
 
 export type Trend = "bullish" | "bearish" | "flat" | "unknown";
 
+/** Clustered HTF swing high/low used as support or resistance. */
+export interface PriceLevel {
+  price: number;
+  kind: "support" | "resistance";
+  /** Confirmed swing pivots in this cluster. */
+  touches: number;
+  /** Sum of volume in each pivot's confirmation window. */
+  volume: number;
+  /** Last pivot time (Unix seconds). */
+  lastTime: number;
+}
+
 /** HTF regime + Gecko pool stats. Does not pick trades (yet). */
 export interface MarketIndicators {
   pair: string;
@@ -23,6 +35,10 @@ export interface MarketIndicators {
   ema200?: number;
   ema50?: number;
   adx?: number;
+  /** Wilder +DI at the last HTF bar. */
+  plusDi?: number;
+  /** Wilder −DI at the last HTF bar. */
+  minusDi?: number;
   atr?: number;
   /** ATR / price. */
   atrPct?: number;
@@ -30,6 +46,12 @@ export interface MarketIndicators {
   distEma200Pct?: number;
   marketCapUsd?: number;
   fdvUsd?: number;
+  /** Nearest support below price. */
+  support?: number;
+  /** Nearest resistance above price. */
+  resistance?: number;
+  /** Key clustered S/R (nearest-first within each side). */
+  levels?: PriceLevel[];
   /** HTF OHLCV used to compute this snapshot. */
   candles: Candle[];
 }

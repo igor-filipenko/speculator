@@ -1,4 +1,5 @@
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
+import { attachDerivedFromCandles, htfParamsFor } from "../market/htf.js";
 import type { Candle, HtfTimeframe, MarketIndicators, Trend } from "../types.js";
 import { getConnection } from "./db.js";
 
@@ -117,6 +118,7 @@ export function toMarketIndicators(
   if (persisted.fdvUsd != null) {
     indicators.fdvUsd = persisted.fdvUsd;
   }
+  attachDerivedFromCandles(indicators, candles, livePrice, htfParamsFor(persisted.timeframe));
   return indicators;
 }
 

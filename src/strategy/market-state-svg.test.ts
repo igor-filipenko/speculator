@@ -25,13 +25,16 @@ function makeCandles(n: number): Candle[] {
   return out;
 }
 
-function sampleState(candles: Candle[]): MarketIndicators {
+function sampleState(candles: Candle[], levels?: MarketIndicators["levels"]): MarketIndicators {
   return {
     pair: "SOL/USDC",
     timeframe: "4h",
     at: new Date("2026-01-01T00:00:00.000Z"),
     price: candles[candles.length - 1]?.close ?? 100,
     trend: "bullish",
+    support: 95,
+    resistance: 108,
+    ...(levels !== undefined ? { levels } : {}),
     candles,
   };
 }
@@ -48,7 +51,26 @@ describe("buildMarketStateSvg", () => {
     assert.ok(svg.includes("EMA200"));
     assert.ok(svg.includes("ADX14"));
     assert.ok(svg.includes("bullish"));
+    assert.ok(svg.includes("limegreen"));
+    assert.ok(svg.includes("tomato"));
+    assert.ok(svg.includes("skyblue"));
+    assert.ok(svg.includes("gold"));
     assert.ok(svg.length > 500);
+  });
+
+  it("draws support and resistance level prices", () => {
+    const levels: MarketIndicators["levels"] = [
+      { price: 95.25, kind: "support", touches: 3, lastTime: 1_700_000_000, volume: 12 },
+      { price: 108.5, kind: "resistance", touches: 2, lastTime: 1_700_100_000, volume: 9 },
+    ];
+    const svg = buildMarketStateSvg({
+      state: sampleState(makeCandles(40), levels),
+      params: htfParamsFor("4h"),
+    });
+    assert.ok(svg.includes("limegreen"));
+    assert.ok(svg.includes("tomato"));
+    assert.ok(svg.includes("95.25"));
+    assert.ok(svg.includes("108.50"));
   });
 
   it("grows with candle count", () => {

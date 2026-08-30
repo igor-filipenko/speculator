@@ -1,4 +1,4 @@
-import type { MarketIndicators } from "../types.js";
+import type { MarketIndicators, PriceLevel } from "../types.js";
 import { adx, ema } from "./indicators.js";
 import { htfParamsFor, type HtfParams } from "./strategy-manager.js";
 
@@ -13,8 +13,21 @@ const PAD = { top: 36, right: 56, bottom: 28, left: 12 };
 const GAP = 16;
 const PRICE_RATIO = 0.68;
 
+const COLOR = {
+  support: "limegreen",
+  resistance: "tomato",
+  up: "limegreen",
+  down: "tomato",
+  emaFast: "skyblue",
+  emaSlow: "gold",
+  adx: "mediumpurple",
+  label: "silver",
+  title: "whitesmoke",
+  muted: "gray",
+} as const;
+
 /**
- * HTF MarketIndicators chart: candles + EMA50/200, ADX subplot with the flat threshold.
+ * HTF MarketIndicators chart: candles + EMA50/200, S/R levels, ADX subplot.
  */
 export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const width = input.width ?? 900;
@@ -31,6 +44,7 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const emaFast = ema(closes, params.emaFast);
   const emaSlow = ema(closes, params.emaSlow);
   const adxSeries = adx(candles, params.adxPeriod);
+  const levels = state.levels ?? [];
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom - GAP;
@@ -57,6 +71,10 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
       maxP = Math.max(maxP, v);
     }
   }
+  for (const level of levels) {
+    minP = Math.min(minP, level.price);
+    maxP = Math.max(maxP, level.price);
+  }
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
     minP = closes[0]! * 0.99;
     maxP = closes[0]! * 1.01;
@@ -78,7 +96,7 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
     const c = candles[i]!;
     const x = xAt(i);
     const up = c.close >= c.open;
-    const color = up ? "#16a34a" : "#dc2626";
+    const color = up ? COLOR.up : COLOR.down;
     const yHigh = yPrice(c.high);
     const yLow = yPrice(c.low);
     const yOpen = yPrice(c.open);
@@ -90,6 +108,8 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
       `<rect x="${x - bodyW / 2}" y="${yTop}" width="${bodyW}" height="${bodyH}" fill="${color}"/>`,
     );
   }
+
+  const levelParts = levels.map((level) => levelLine(level, yPrice, plotW, width, state));
 
   const linePath = (series: (number | null)[], yMap: (v: number) => number): string => {
     const parts: string[] = [];
@@ -113,21 +133,40 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <rect width="100%" height="100%" fill="#0f172a"/>
-  <text x="${PAD.left}" y="22" fill="#e2e8f0" font-family="ui-sans-serif,system-ui,sans-serif" font-size="14" font-weight="600">${title}</text>
-  <text x="${width - PAD.right + 4}" y="${priceTop + 12}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelHi}</text>
-  <text x="${width - PAD.right + 4}" y="${priceTop + priceH}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelLo}</text>
+  <text x="${PAD.left}" y="22" fill="${COLOR.title}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="14" font-weight="600">${title}</text>
+  <text x="${width - PAD.right + 4}" y="${priceTop + 12}" fill="${COLOR.label}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelHi}</text>
+  <text x="${width - PAD.right + 4}" y="${priceTop + priceH}" fill="${COLOR.label}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">${priceLabelLo}</text>
   <rect x="${PAD.left}" y="${priceTop}" width="${plotW}" height="${priceH}" fill="none" stroke="#1e293b"/>
   ${candleParts.join("\n  ")}
-  ${emaFastPath ? `<path d="${emaFastPath}" fill="none" stroke="#38bdf8" stroke-width="1.5"/>` : ""}
-  ${emaSlowPath ? `<path d="${emaSlowPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaFast}</text>
-  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaSlow}</text>
+  ${levelParts.join("\n  ")}
+  ${emaFastPath ? `<path d="${emaFastPath}" fill="none" stroke="${COLOR.emaFast}" stroke-width="1.5"/>` : ""}
+  ${emaSlowPath ? `<path d="${emaSlowPath}" fill="none" stroke="${COLOR.emaSlow}" stroke-width="1.5"/>` : ""}
+  <text x="${PAD.left}" y="${priceTop + 14}" fill="${COLOR.emaFast}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaFast}</text>
+  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="${COLOR.emaSlow}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${params.emaSlow}</text>
   <rect x="${PAD.left}" y="${adxTop}" width="${plotW}" height="${adxH}" fill="none" stroke="#1e293b"/>
-  <line x1="${PAD.left}" y1="${yAdx(params.adxFlatMax)}" x2="${PAD.left + plotW}" y2="${yAdx(params.adxFlatMax)}" stroke="#475569" stroke-dasharray="4 3"/>
-  ${adxPath ? `<path d="${adxPath}" fill="none" stroke="#a78bfa" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${adxTop + 14}" fill="#a78bfa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">ADX${params.adxPeriod}</text>
-  <text x="${width - PAD.right + 4}" y="${yAdx(params.adxFlatMax) + 4}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10">${params.adxFlatMax}</text>
+  <line x1="${PAD.left}" y1="${yAdx(params.adxFlatMax)}" x2="${PAD.left + plotW}" y2="${yAdx(params.adxFlatMax)}" stroke="${COLOR.muted}" stroke-dasharray="4 3"/>
+  ${adxPath ? `<path d="${adxPath}" fill="none" stroke="${COLOR.adx}" stroke-width="1.5"/>` : ""}
+  <text x="${PAD.left}" y="${adxTop + 14}" fill="${COLOR.adx}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">ADX${params.adxPeriod}</text>
+  <text x="${width - PAD.right + 4}" y="${yAdx(params.adxFlatMax) + 4}" fill="${COLOR.label}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10">${params.adxFlatMax}</text>
 </svg>`;
+}
+
+function levelLine(
+  level: PriceLevel,
+  yPrice: (p: number) => number,
+  plotW: number,
+  width: number,
+  state: MarketIndicators,
+): string {
+  const y = yPrice(level.price);
+  const color = level.kind === "support" ? COLOR.support : COLOR.resistance;
+  const nearest = level.kind === "support" ? state.support : state.resistance;
+  const thick = nearest != null && nearest === level.price;
+  const strokeWidth = thick ? 1.5 : 0.75;
+  return [
+    `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + plotW}" y2="${y}" stroke="${color}" stroke-width="${strokeWidth}" stroke-dasharray="6 4" opacity="0.85"/>`,
+    `<text x="${width - PAD.right + 4}" y="${y + 4}" fill="${color}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="9">${formatPrice(level.price)}</text>`,
+  ].join("\n  ");
 }
 
 function formatPrice(n: number): string {

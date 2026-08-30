@@ -36,8 +36,9 @@ src/
     tokens.ts           # solana.tokens (symbol, mint, decimals, pool_address)
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
-  market/htf.ts         # HTF EMA/ADX/ATR → MarketIndicators
+  market/htf.ts         # HTF EMA stack + DMI trend + S/R → MarketIndicators
   market/htf-cache.ts     # load/cache HTF MarketIndicators
+  market/levels.ts      # swing-pivot S/R clusters
   exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)
   exchange/wallet.ts           # JSON keypair load + RPC balances
@@ -48,7 +49,7 @@ src/
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
   strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy / getActiveRiskManager
-  strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX SVG
+  strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/mode/bollinger-svg.ts # Bollinger band SVG
   strategy/mode/grid-svg.ts      # ATR grid SVG

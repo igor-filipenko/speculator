@@ -110,7 +110,11 @@ describe("evaluateMarketIndicators", () => {
     assert.equal(indicators.trend, "bullish");
     assert.ok(indicators.ema200 != null && close > indicators.ema200);
     assert.ok(indicators.adx != null && indicators.adx >= params.adxFlatMax);
-    assert.ok(indicators.ema50 != null);
+    assert.ok(
+      indicators.ema50 != null && close > indicators.ema50 && indicators.ema50 > indicators.ema200,
+    );
+    assert.ok(indicators.plusDi != null && indicators.minusDi != null);
+    assert.ok(indicators.plusDi > indicators.minusDi);
     assert.ok(indicators.atr != null && indicators.atrPct != null);
     assert.ok(indicators.distEma200Pct != null && indicators.distEma200Pct > 0);
   });
@@ -143,6 +147,30 @@ describe("evaluateMarketIndicators", () => {
     assert.equal(indicators.trend, "flat");
     assert.ok(indicators.ema200 != null);
     assert.ok(indicators.adx == null || indicators.adx < params.adxFlatMax);
+  });
+
+  it("is flat when close is above EMA200 but EMA50 is still below EMA200", () => {
+    const down = series(230, 400, -1);
+    const lastTime = down[down.length - 1]!.time;
+    const interval = 4 * 60 * 60;
+    let price = down[down.length - 1]!.close;
+    const bounce: Candle[] = [];
+    for (let i = 1; i <= 12; i++) {
+      price += 12;
+      bounce.push(bar(lastTime + i * interval, price, 2));
+    }
+    const candles = [...down, ...bounce];
+    const indicators = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles,
+      price: candles[candles.length - 1]!.close,
+      at,
+      params,
+    });
+    assert.ok(indicators.ema200 != null && indicators.ema50 != null);
+    assert.ok(indicators.ema50 < indicators.ema200);
+    assert.ok(candles[candles.length - 1]!.close > indicators.ema200);
+    assert.equal(indicators.trend, "flat");
   });
 
   it("attaches pool stats when provided", () => {

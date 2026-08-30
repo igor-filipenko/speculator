@@ -132,20 +132,28 @@ export interface AdxCandle {
   close: number;
 }
 
+export interface DmiSeries {
+  adx: (number | null)[];
+  plusDi: (number | null)[];
+  minusDi: (number | null)[];
+}
+
 /**
- * Wilder ADX. Returns nulls until warm (first value at index `2 * period - 1`).
+ * Wilder DMI: +DI/−DI from index `period`, ADX from `2 * period - 1`.
  * Uses +DM/−DM and true range with Wilder smoothing, then DX → ADX.
  */
-export function adx(candles: AdxCandle[], period: number): (number | null)[] {
+export function dmi(candles: AdxCandle[], period: number): DmiSeries {
   if (period < 1) {
     throw new Error("ADX period must be >= 1");
   }
 
   const n = candles.length;
-  const out: (number | null)[] = Array.from({ length: n }, () => null);
+  const adxOut: (number | null)[] = Array.from({ length: n }, () => null);
+  const plusDi: (number | null)[] = Array.from({ length: n }, () => null);
+  const minusDi: (number | null)[] = Array.from({ length: n }, () => null);
   // Need period TR/DM bars (indices 1..period) plus period DX values → first ADX at 2*period-1.
   if (n < 2 * period) {
-    return out;
+    return { adx: adxOut, plusDi, minusDi };
   }
 
   const tr: number[] = Array.from({ length: n }, () => 0);
@@ -176,13 +184,19 @@ export function adx(candles: AdxCandle[], period: number): (number | null)[] {
   }
 
   const dx: (number | null)[] = Array.from({ length: n }, () => null);
-  dx[period] = dxFromSmooth(smoothTr, smoothPlus, smoothMinus);
+  const firstDi = diFromSmooth(smoothTr, smoothPlus, smoothMinus);
+  plusDi[period] = firstDi.plusDi;
+  minusDi[period] = firstDi.minusDi;
+  dx[period] = dxFromDi(firstDi.plusDi, firstDi.minusDi);
 
   for (let i = period + 1; i < n; i++) {
     smoothTr = smoothTr - smoothTr / period + tr[i]!;
     smoothPlus = smoothPlus - smoothPlus / period + plusDm[i]!;
     smoothMinus = smoothMinus - smoothMinus / period + minusDm[i]!;
-    dx[i] = dxFromSmooth(smoothTr, smoothPlus, smoothMinus);
+    const di = diFromSmooth(smoothTr, smoothPlus, smoothMinus);
+    plusDi[i] = di.plusDi;
+    minusDi[i] = di.minusDi;
+    dx[i] = dxFromDi(di.plusDi, di.minusDi);
   }
 
   const firstAdxIndex = 2 * period - 1;
@@ -191,22 +205,38 @@ export function adx(candles: AdxCandle[], period: number): (number | null)[] {
     adxSum += dx[i]!;
   }
   let prevAdx = adxSum / period;
-  out[firstAdxIndex] = prevAdx;
+  adxOut[firstAdxIndex] = prevAdx;
 
   for (let i = firstAdxIndex + 1; i < n; i++) {
     prevAdx = (prevAdx * (period - 1) + dx[i]!) / period;
-    out[i] = prevAdx;
+    adxOut[i] = prevAdx;
   }
 
-  return out;
+  return { adx: adxOut, plusDi, minusDi };
 }
 
-function dxFromSmooth(smoothTr: number, smoothPlus: number, smoothMinus: number): number {
+/**
+ * Wilder ADX. Returns nulls until warm (first value at index `2 * period - 1`).
+ */
+export function adx(candles: AdxCandle[], period: number): (number | null)[] {
+  return dmi(candles, period).adx;
+}
+
+function diFromSmooth(
+  smoothTr: number,
+  smoothPlus: number,
+  smoothMinus: number,
+): { plusDi: number; minusDi: number } {
   if (!(smoothTr > 0)) {
-    return 0;
+    return { plusDi: 0, minusDi: 0 };
   }
-  const plusDi = (100 * smoothPlus) / smoothTr;
-  const minusDi = (100 * smoothMinus) / smoothTr;
+  return {
+    plusDi: (100 * smoothPlus) / smoothTr,
+    minusDi: (100 * smoothMinus) / smoothTr,
+  };
+}
+
+function dxFromDi(plusDi: number, minusDi: number): number {
   const sum = plusDi + minusDi;
   if (!(sum > 0)) {
     return 0;

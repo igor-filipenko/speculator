@@ -14,7 +14,7 @@ import type {
   Trend,
 } from "../types.js";
 import { BollingerStrategy } from "./mode/bollinger.js";
-import { GridStrategy, gridBullParamsFor, gridParamsFor } from "./mode/grid.js";
+import { GridStrategy } from "./mode/grid.js";
 
 export { evaluateMarketIndicators, htfParamsFor, type HtfParams } from "../market/htf.js";
 
@@ -104,8 +104,6 @@ export function loadStrategy(mode: StrategyMode, trend: Trend = "flat"): Strateg
     case "bollinger":
       return new BollingerStrategy();
     case "grid":
-      return trend === "bullish"
-        ? new GridStrategy(gridBullParamsFor())
-        : new GridStrategy(gridParamsFor());
+      return new GridStrategy(trend);
   }
 }

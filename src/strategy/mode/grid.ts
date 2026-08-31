@@ -6,9 +6,11 @@ import type {
   Snapshot,
   Strategy,
   Timeframe,
+  Trend,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
 import { adx, atr, ema } from "../indicators.js";
+import { match } from "ts-pattern";
 
 export interface GridParams {
   timeframe: Timeframe;
@@ -27,32 +29,38 @@ export interface GridParams {
   trendEmaPeriod: number;
 }
 
-const GRID_RISK: Omit<RiskParams, "timeframe"> = {
-  atrStopMult: 2.5,
-  atrTrailMult: 4,
-  cooldownBars: 3,
-  minHoldBars: 1,
-};
-
-/** Default params for flat / bear regimes. */
-export function gridParamsFor(): GridParams {
+function gridParamsFor(trend: Trend): GridParams {
   return {
     timeframe: "15m",
     atrPeriod: 14,
     adxPeriod: 14,
-    gridMult: 2.0,
+    gridMult: trend === "bullish" ? 8.0 : 2.0,
     reanchorBars: 40,
-    adxMax: 25,
+    adxMax: trend === "bullish" ? 30 : 25,
     trendEmaPeriod: 50,
   };
 }
 
-/**
- * Bull-trend params: both entry spacing and TP target widen to 8×ATR so positions ride the trend.
- * Pair with `atrTrailMult = BULL_ATR_MULT` so the trail does not fire before the TP on the same bar.
- */
-export function gridBullParamsFor(): GridParams {
-  return { ...gridParamsFor(), gridMult: 8, adxMax: 30 };
+function riskParamsFor(trend: Trend): RiskParams {
+  const atrStopMult = match(trend)
+    .with("bullish", () => 4)
+    .with("flat", () => 4)
+    .with("bearish", () => 2.5)
+    .with("unknown", () => 2.5)
+    .exhaustive();
+  const atrTrailMult = match(trend)
+    .with("bullish", () => 8)
+    .with("flat", () => 8)
+    .with("bearish", () => 4)
+    .with("unknown", () => 4)
+    .exhaustive();
+  return {
+    timeframe: "15m",
+    atrStopMult,
+    atrTrailMult,
+    cooldownBars: 3,
+    minHoldBars: 1,  
+  };
 }
 
 export interface GridSignalInput {
@@ -173,9 +181,9 @@ export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
 
-  constructor(params?: GridParams, riskOverrides?: Partial<Omit<RiskParams, "timeframe">>) {
-    this.params = params ?? gridParamsFor();
-    this.risk = { timeframe: this.params.timeframe, ...GRID_RISK, ...riskOverrides };
+  constructor(trend: Trend) {
+    this.params = gridParamsFor(trend);
+    this.risk = riskParamsFor(trend);
   }
 
   getDisplayName(): string {

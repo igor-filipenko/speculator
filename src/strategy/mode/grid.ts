@@ -26,8 +26,8 @@ export interface GridParams {
 
 const GRID_RISK: Omit<RiskParams, "timeframe"> = {
   atrStopMult: 2.5,
-  atrTrailMult: 3,
-  cooldownBars: 1,
+  atrTrailMult: 4,
+  cooldownBars: 3,
   minHoldBars: 1,
 };
 
@@ -36,10 +36,10 @@ export function gridParamsFor(): GridParams {
     timeframe: "15m",
     atrPeriod: 14,
     adxPeriod: 14,
-    gridMult: 1.5,
-    reanchorBars: 20,
-    adxMax: 30,
-    trendEmaPeriod: 20,
+    gridMult: 2.0,
+    reanchorBars: 40,
+    adxMax: 25,
+    trendEmaPeriod: 50,
   };
 }
 
@@ -99,12 +99,17 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   if (snapshot?.position.side === "long") {
     const entryPrice = snapshot.position.entryPrice;
     const target = entryPrice + gridSpacing;
-    if (close >= target) {
+    const barHigh = lastCandle.high;
+    // Check intra-bar TP: bar high cleared the target even if close did not.
+    // This prevents the ATR trail from stealing trades the price already won.
+    const tpHit = close >= target || barHigh >= target;
+    if (tpHit) {
+      const hitIntraBar = barHigh >= target && close < target;
       return {
         pair,
         side: "SELL",
-        reason: `grid TP: close ${close.toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${gridSpacing.toFixed(4)}`,
-        price,
+        reason: `grid TP: ${hitIntraBar ? "high" : "close"} ${(hitIntraBar ? barHigh : close).toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${gridSpacing.toFixed(4)}`,
+        price: hitIntraBar ? target : price,
         at,
         meta,
       };

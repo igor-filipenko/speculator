@@ -287,7 +287,7 @@ describe("runBacktest", () => {
     assert.ok(adverse > 0);
   });
 
-  it("does not ATR-exit on HOLD after entry when price crashes", async () => {
+  it("ATR-exits on HOLD when stop level is hit after price crashes", async () => {
     const candles = series(40, 100, 0.2);
     const last = candles[candles.length - 1]!;
     candles.push({
@@ -312,7 +312,8 @@ describe("runBacktest", () => {
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
     const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
-    assert.equal(stopSell, undefined);
+    assert.ok(stopSell);
+    assert.match(stopSell.reason ?? "", /ATR stop/);
   });
 
   it("keeps flat equity when indicators never fire", async () => {

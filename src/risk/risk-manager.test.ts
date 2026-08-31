@@ -114,7 +114,9 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(90),
       [],
     );
-    assert.equal(holdThroughStop.kind, "no-command");
+    assert.equal(holdThroughStop.kind, "command");
+    assert.equal(holdThroughStop.command.side, "SELL");
+    assert.match(holdThroughStop.command.reason, /ATR/);
 
     const stopCmd = risk.check(
       {

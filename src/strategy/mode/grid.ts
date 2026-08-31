@@ -14,7 +14,11 @@ export interface GridParams {
   timeframe: Timeframe;
   atrPeriod: number;
   adxPeriod: number;
-  /** Grid spacing = ATR * gridMult. Wider = fewer trades, bigger per-RT profit. */
+  /**
+   * ATR multiplier for both grid spacing (entries) and the take-profit target.
+   * Wider = fewer trades, bigger per-RT profit.
+   * In bull-trend mode set this to {@link BULL_ATR_MULT} (e.g. 8) so positions ride the trend.
+   */
   gridMult: number;
   /** Recalculate grid anchor every N bars (0 = every bar). */
   reanchorBars: number;
@@ -31,6 +35,10 @@ const GRID_RISK: Omit<RiskParams, "timeframe"> = {
   minHoldBars: 1,
 };
 
+/** ATR multiplier used for both tpMult and atrTrailMult in bull-trend mode. */
+const BULL_ATR_MULT = 8;
+
+/** Default params for flat / bear regimes. */
 export function gridParamsFor(): GridParams {
   return {
     timeframe: "15m",
@@ -41,6 +49,14 @@ export function gridParamsFor(): GridParams {
     adxMax: 25,
     trendEmaPeriod: 50,
   };
+}
+
+/**
+ * Bull-trend params: both entry spacing and TP target widen to 8×ATR so positions ride the trend.
+ * Pair with `atrTrailMult = BULL_ATR_MULT` so the trail does not fire before the TP on the same bar.
+ */
+export function gridBullParamsFor(): GridParams {
+  return { ...gridParamsFor(), gridMult: BULL_ATR_MULT };
 }
 
 export interface GridSignalInput {
@@ -98,7 +114,8 @@ export function evaluateGrid(input: GridSignalInput): Signal {
 
   if (snapshot?.position.side === "long") {
     const entryPrice = snapshot.position.entryPrice;
-    const target = entryPrice + gridSpacing;
+    const tpSpacing = params.gridMult * currentAtr;
+    const target = entryPrice + tpSpacing;
     const barHigh = lastCandle.high;
     // Check intra-bar TP: bar high cleared the target even if close did not.
     // This prevents the ATR trail from stealing trades the price already won.
@@ -108,7 +125,7 @@ export function evaluateGrid(input: GridSignalInput): Signal {
       return {
         pair,
         side: "SELL",
-        reason: `grid TP: ${hitIntraBar ? "high" : "close"} ${(hitIntraBar ? barHigh : close).toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${gridSpacing.toFixed(4)}`,
+        reason: `grid TP: ${hitIntraBar ? "high" : "close"} ${(hitIntraBar ? barHigh : close).toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${tpSpacing.toFixed(4)}`,
         price: hitIntraBar ? target : price,
         at,
         meta,
@@ -160,9 +177,9 @@ export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
 
-  constructor(params?: GridParams) {
+  constructor(params?: GridParams, riskOverrides?: Partial<Omit<RiskParams, "timeframe">>) {
     this.params = params ?? gridParamsFor();
-    this.risk = { timeframe: this.params.timeframe, ...GRID_RISK };
+    this.risk = { timeframe: this.params.timeframe, ...GRID_RISK, ...riskOverrides };
   }
 
   getDisplayName(): string {

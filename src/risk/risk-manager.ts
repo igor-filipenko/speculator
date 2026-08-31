@@ -29,15 +29,18 @@ export class GenericRiskManager implements RiskManager {
   }
 
   check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
+    // Intentionally ignore HOLD signals; stops only apply on BUY/SELL.
+    if (signal.side === "HOLD") {
+      return noCommand();
+    }
+
     const peak = peakSinceOpen(
       snapshot,
       candles,
       signal,
       candleIntervalSeconds(this.config.timeframe),
     );
-    // HOLD may still carry barLow/atr for display; stops only apply on BUY/SELL.
-    const stopExit =
-      signal.side === "HOLD" ? null : evaluateProtectiveExit(signal, snapshot, this.config, peak);
+    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, peak);
     if (stopExit) {
       return asCommand(stopExit);
     }

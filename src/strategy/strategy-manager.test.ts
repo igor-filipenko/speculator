@@ -54,7 +54,7 @@ describe("SimpleStrategyManager defaults", () => {
 });
 
 describe("applyMarketIndicators", () => {
-  it("switches to HighRiskManager when trend is not bullish", () => {
+  it("switches to HighRiskManager when trend is bearish", () => {
     const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
     const bullish = evaluateMarketIndicators({
       pair: "SOL/USDC",
@@ -79,6 +79,23 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
     assert.equal(manager.applyMarketIndicators(bearish, bearish), false);
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
+  });
+
+  it("recreates GridStrategy with bull params (gridMult=8) when trend is bullish", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "grid", htf: "4h" });
+    const strategyBefore = manager.getActiveStrategy();
+    const bullish = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    assert.equal(bullish.trend, "bullish");
+    manager.applyMarketIndicators(bullish);
+    assert.notEqual(manager.getActiveStrategy(), strategyBefore);
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×8"));
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 });
 

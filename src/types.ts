@@ -25,7 +25,7 @@ export interface PriceLevel {
   lastTime: number;
 }
 
-/** HTF regime + Gecko pool stats. Does not pick trades (yet). */
+/** HTF regime snapshot. Does not pick trades (yet). */
 export interface MarketIndicators {
   pair: string;
   timeframe: HtfTimeframe;
@@ -44,8 +44,6 @@ export interface MarketIndicators {
   atrPct?: number;
   /** (price − EMA200) / EMA200. */
   distEma200Pct?: number;
-  marketCapUsd?: number;
-  fdvUsd?: number;
   /** Nearest support below price. */
   support?: number;
   /** Nearest resistance above price. */
@@ -54,12 +52,6 @@ export interface MarketIndicators {
   levels?: PriceLevel[];
   /** HTF OHLCV used to compute this snapshot. */
   candles: Candle[];
-}
-
-/** Optional Gecko pool overview passed into {@link StrategyManager.evaluate}. */
-export interface PoolStats {
-  marketCapUsd?: number;
-  fdvUsd?: number;
 }
 
 export interface Candle {
@@ -253,13 +245,7 @@ export interface StrategyManager {
   getActiveStrategy(): Strategy;
   getActiveRiskManager(): RiskManager;
   getRequiredCandles(): RequiredCandles;
-  evaluate(
-    pair: string,
-    candles: Candle[],
-    price: number,
-    at: Date,
-    poolStats?: PoolStats,
-  ): MarketIndicators;
+  evaluate(pair: string, candles: Candle[], price: number, at: Date): MarketIndicators;
   /** Sync risk manager to {@link MarketIndicators.trend}. Returns true when the trend changed. */
   applyMarketIndicators(
     indicators: MarketIndicators,

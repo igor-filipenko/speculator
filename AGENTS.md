@@ -29,7 +29,6 @@ src/
   db/
     db.ts               # shared DuckDB bootstrap (data/speculator.duckdb)
     candles.ts          # OHLCV table queries
-    market.ts           # market.indicators (HTF MarketIndicators cache)
     paper.ts            # paper.portfolios / paper.trades
     live.ts             # live.portfolios / live.trades
     signals.ts          # signals history
@@ -37,7 +36,7 @@ src/
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + DuckDB cache orchestration
   market/htf.ts         # HTF EMA stack + DMI trend + S/R → MarketIndicators
-  market/htf-cache.ts     # load/cache HTF MarketIndicators
+  market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
   market/levels.ts      # swing-pivot S/R clusters
   exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)

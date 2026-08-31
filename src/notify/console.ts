@@ -15,12 +15,10 @@ export function logMarket(indicators: MarketIndicators): void {
       : "";
   const support = indicators.support != null ? ` S=${fmt(indicators.support)}` : "";
   const resistance = indicators.resistance != null ? ` R=${fmt(indicators.resistance)}` : "";
-  const mcap = indicators.marketCapUsd != null ? ` mcap=${indicators.marketCapUsd.toFixed(0)}` : "";
-  const fdv = indicators.fdvUsd != null ? ` fdv=${indicators.fdvUsd.toFixed(0)}` : "";
   console.log(
     `[${ts}] ${indicators.pair} MARKET ${indicators.timeframe} trend=${indicators.trend}` +
       ` ema200=${fmt(indicators.ema200)} ema50=${fmt(indicators.ema50)} adx=${fmt(indicators.adx)}` +
-      `${di} atr=${fmt(indicators.atr)}${atrPct}${dist}${support}${resistance}${mcap}${fdv}`,
+      `${di} atr=${fmt(indicators.atr)}${atrPct}${dist}${support}${resistance}`,
   );
 }
 

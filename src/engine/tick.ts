@@ -1,6 +1,6 @@
 import type { AppConfig } from "../config.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
-import { refreshMarketIndicators } from "../market/htf-cache.js";
+import { refreshMarketIndicators } from "../market/htf-indicators.js";
 import {
   logMarket,
   logRisk,

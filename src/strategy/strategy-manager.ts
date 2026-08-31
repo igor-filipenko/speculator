@@ -5,7 +5,6 @@ import type {
   Candle,
   HtfTimeframe,
   MarketIndicators,
-  PoolStats,
   RequiredCandles,
   RiskManager,
   Strategy,
@@ -56,20 +55,13 @@ export class SimpleStrategyManager implements StrategyManager {
     return { timeframe, count: Math.max(warm, 220) };
   }
 
-  evaluate(
-    pair: string,
-    candles: Candle[],
-    price: number,
-    at: Date,
-    poolStats?: PoolStats,
-  ): MarketIndicators {
+  evaluate(pair: string, candles: Candle[], price: number, at: Date): MarketIndicators {
     return evaluateMarketIndicators({
       pair,
       candles,
       price,
       at,
       params: this.params,
-      ...(poolStats !== undefined ? { poolStats } : {}),
     });
   }
 

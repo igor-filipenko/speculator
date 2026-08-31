@@ -189,19 +189,4 @@ describe("evaluateMarketIndicators", () => {
     assert.ok(candles[candles.length - 1]!.close > indicators.ema200);
     assert.equal(indicators.trend, "flat");
   });
-
-  it("attaches pool stats when provided", () => {
-    const indicators = evaluateMarketIndicators({
-      pair: "SOL/USDC",
-      candles: [],
-      price: 100,
-      at,
-      params,
-      poolStats: { marketCapUsd: 1_000, fdvUsd: 2_000 },
-    });
-    assert.equal(indicators.marketCapUsd, 1_000);
-    assert.equal(indicators.fdvUsd, 2_000);
-    assert.equal(indicators.trend, "unknown");
-    assert.deepEqual(indicators.candles, []);
-  });
 });

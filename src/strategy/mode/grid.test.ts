@@ -4,7 +4,7 @@ import type { Candle, Snapshot } from "../../types.js";
 import { evaluateGrid, gridParamsFor, type GridParams } from "./grid.js";
 
 function params(overrides: Partial<GridParams> = {}): GridParams {
-  return { ...gridParamsFor(), ...overrides };
+  return { ...gridParamsFor("flat"), ...overrides };
 }
 
 const INTERVAL = 15 * 60;

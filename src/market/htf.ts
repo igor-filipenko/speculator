@@ -1,5 +1,5 @@
 import { atr, dmi, ema } from "../strategy/indicators.js";
-import type { Candle, HtfTimeframe, MarketIndicators, PoolStats, Trend } from "../types.js";
+import type { Candle, HtfTimeframe, MarketIndicators, Trend } from "../types.js";
 import { keyLevels } from "./levels.js";
 
 /** HTF indicator periods for {@link evaluateMarketIndicators}. */
@@ -39,7 +39,6 @@ export interface EvaluateMarketIndicatorsInput {
   price: number;
   at: Date;
   params: HtfParams;
-  poolStats?: PoolStats;
 }
 
 /**
@@ -48,7 +47,7 @@ export interface EvaluateMarketIndicatorsInput {
  * TODO: Open Interest / OI-mcap would need a derivatives vendor; GeckoTerminal does not provide it.
  */
 export function evaluateMarketIndicators(input: EvaluateMarketIndicatorsInput): MarketIndicators {
-  const { pair, candles, price, at, params, poolStats } = input;
+  const { pair, candles, price, at, params } = input;
   const base: MarketIndicators = {
     pair,
     timeframe: params.timeframe,
@@ -57,12 +56,6 @@ export function evaluateMarketIndicators(input: EvaluateMarketIndicatorsInput): 
     trend: "unknown",
     candles,
   };
-  if (poolStats?.marketCapUsd != null) {
-    base.marketCapUsd = poolStats.marketCapUsd;
-  }
-  if (poolStats?.fdvUsd != null) {
-    base.fdvUsd = poolStats.fdvUsd;
-  }
 
   if (candles.length === 0) {
     return base;

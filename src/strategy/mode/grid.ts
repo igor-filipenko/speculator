@@ -29,7 +29,7 @@ export interface GridParams {
   trendEmaPeriod: number;
 }
 
-function gridParamsFor(trend: Trend): GridParams {
+export function gridParamsFor(trend: Trend): GridParams {
   return {
     timeframe: "15m",
     atrPeriod: 14,
@@ -64,7 +64,7 @@ function riskParamsFor(trend: Trend): RiskParams {
     atrStopMult,
     atrTrailMult,
     cooldownBars: 3,
-    minHoldBars: 1,  
+    minHoldBars: 1,
   };
 }
 

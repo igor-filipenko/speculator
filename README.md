@@ -60,13 +60,13 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                            |
-| ------------ | ------------------------------------------------ |
-| `/start`     | Greeting and command list                        |
-| `/report`    | Last signal per pair (including HOLD)            |
-| `/market`    | HTF trend chart (EMA50/200, ADX, S/R) + mcap/FDV |
-| `/chart`     | OHLCV candle chart with strategy overlays        |
-| `/portfolio` | Current paper or live portfolio                  |
+| Command      | Reply                                     |
+| ------------ | ----------------------------------------- |
+| `/start`     | Greeting and command list                 |
+| `/report`    | Last signal per pair (including HOLD)     |
+| `/market`    | HTF trend chart (EMA50/200, ADX, S/R)     |
+| `/chart`     | OHLCV candle chart with strategy overlays |
+| `/portfolio` | Current paper or live portfolio           |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -357,7 +357,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. Gecko pool market cap/FDV is attached when available. The snapshot (except S/R and DI, which are recomputed from cached HTF candles) is stored in DuckDB (`market.indicators`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
+`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. HTF OHLCV is loaded via the DuckDB candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -387,10 +387,10 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, market.indicators, paper, live, signals
+  db/                      # DuckDB: candles, paper, live, signals
   market/gecko-terminal.ts
   market/htf.ts            # HTF EMA stack + DMI trend + S/R
-  market/htf-cache.ts        # HTF MarketIndicators cache + Gecko refresh
+  market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute

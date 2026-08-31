@@ -1,4 +1,4 @@
-import type { Candle, PoolStats, Timeframe } from "../types.js";
+import type { Candle, Timeframe } from "../types.js";
 
 const GECKO_BASE = "https://api.geckoterminal.com/api/v2";
 /** Gecko often stalls on very large `limit` values; page in smaller chunks. */
@@ -289,74 +289,6 @@ async function fetchOhlcvJson(url: URL, timeoutMs: number): Promise<GeckoOhlcvJs
   }
 
   return (await response.json()) as GeckoOhlcvJson;
-}
-
-export interface GeckoPoolJson {
-  data?: {
-    attributes?: {
-      market_cap_usd?: string | null;
-      fdv_usd?: string | null;
-    };
-  };
-}
-
-function parseUsdNumber(value: string | null | undefined): number | undefined {
-  if (value == null || value === "") {
-    return undefined;
-  }
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
-/** Parse Gecko pool attributes into {@link PoolStats} (missing/invalid → omitted). */
-export function parsePoolStats(json: GeckoPoolJson): PoolStats {
-  const attrs = json.data?.attributes;
-  const stats: PoolStats = {};
-  const marketCapUsd = parseUsdNumber(attrs?.market_cap_usd);
-  const fdvUsd = parseUsdNumber(attrs?.fdv_usd);
-  if (marketCapUsd !== undefined) {
-    stats.marketCapUsd = marketCapUsd;
-  }
-  if (fdvUsd !== undefined) {
-    stats.fdvUsd = fdvUsd;
-  }
-  return stats;
-}
-
-/**
- * Fetch Solana pool overview (market cap / FDV) from GeckoTerminal.
- * `GET /networks/solana/pools/{address}`
- */
-export async function fetchPoolStats(poolAddress: string): Promise<PoolStats> {
-  const url = new URL(`${GECKO_BASE}/networks/solana/pools/${poolAddress}`);
-  const json = await fetchPoolJson(url, INITIAL_TIMEOUT_MS);
-  return parsePoolStats(json);
-}
-
-async function fetchPoolJson(url: URL, timeoutMs: number): Promise<GeckoPoolJson> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    throw new Error(
-      `GeckoTerminal pool request failed: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
-  }
-
-  if (response.status === 429) {
-    throw new Error("GeckoTerminal rate limit (429)");
-  }
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`GeckoTerminal pool failed (${response.status}): ${body.slice(0, 200)}`);
-  }
-
-  return (await response.json()) as GeckoPoolJson;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -34,7 +34,12 @@ function gridParamsFor(trend: Trend): GridParams {
     timeframe: "15m",
     atrPeriod: 14,
     adxPeriod: 14,
-    gridMult: trend === "bullish" ? 8.0 : 2.0,
+    gridMult: match(trend)
+      .with("bullish", () => 8.0)
+      .with("flat", () => 3.0)
+      .with("bearish", () => 2.0)
+      .with("unknown", () => 2.0)
+      .exhaustive(),
     reanchorBars: 40,
     adxMax: trend === "bullish" ? 30 : 25,
     trendEmaPeriod: 50,

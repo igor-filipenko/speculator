@@ -196,7 +196,6 @@ function belowMinHold(snapshot: Snapshot, at: Date, config: RiskParams): boolean
   const barsHeld = Math.floor(elapsedSec / intervalSec);
   return barsHeld < config.minHoldBars;
 }
-
 /** No new longs while HTF trend is not bullish; ATR stops still fire on HOLD. */
 export class HighRiskManager implements RiskManager {
   constructor(

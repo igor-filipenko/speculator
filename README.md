@@ -155,7 +155,7 @@ OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` tabl
 | Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
 | Meme (future pairs) | 2.0%     | 0.30%    | same                        |
 
-The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
+The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
 
 Single iteration (smoke test):
 

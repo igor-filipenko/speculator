@@ -20,7 +20,12 @@ import type {
   Strategy,
   StrategyManager,
 } from "../types.js";
-import { parseBacktestArgs, parseBacktestDate, runBacktest } from "./backtest.js";
+import {
+  parseBacktestArgs,
+  parseBacktestDate,
+  runBacktest,
+  computeBuyHoldEquity,
+} from "./backtest.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
@@ -225,6 +230,21 @@ describe("parseBacktestDate", () => {
   });
 });
 
+describe("computeBuyHoldEquity", () => {
+  it("applies round-trip emulated costs on flat price", () => {
+    const hold = computeBuyHoldEquity(500, 100, 100, "SOL/USDC");
+    assert.ok(hold < 500);
+    assert.ok(hold > 490);
+  });
+
+  it("tracks price appreciation minus costs", () => {
+    const hold = computeBuyHoldEquity(1000, 100, 120, "SOL/USDC");
+    assert.ok(hold > 1000);
+    const naive = 1000 * (120 / 100);
+    assert.ok(hold < naive);
+  });
+});
+
 describe("runBacktest", () => {
   it("replays fixture candles with emulated costs and no paper-state writes", async () => {
     const candles = series(20, 100, 0.2);
@@ -319,6 +339,9 @@ describe("runBacktest", () => {
     assert.equal(result.trades.length, 0);
     assert.equal(result.metrics.endingEquity, 500);
     assert.equal(result.metrics.totalReturnPct, 0);
+    assert.ok(result.metrics.holdEquity < 500);
+    assert.ok(result.metrics.vsHoldUsdc > 0);
+    assert.ok(result.metrics.vsHoldReturnPct > 0);
   });
 
   it("evaluates HTF market state and blocks BUY when trend is not bullish", async () => {

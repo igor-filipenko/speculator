@@ -17,7 +17,6 @@ export interface GridParams {
   /**
    * ATR multiplier for both grid spacing (entries) and the take-profit target.
    * Wider = fewer trades, bigger per-RT profit.
-   * In bull-trend mode set this to {@link BULL_ATR_MULT} (e.g. 8) so positions ride the trend.
    */
   gridMult: number;
   /** Recalculate grid anchor every N bars (0 = every bar). */
@@ -34,9 +33,6 @@ const GRID_RISK: Omit<RiskParams, "timeframe"> = {
   cooldownBars: 3,
   minHoldBars: 1,
 };
-
-/** ATR multiplier used for both tpMult and atrTrailMult in bull-trend mode. */
-const BULL_ATR_MULT = 8;
 
 /** Default params for flat / bear regimes. */
 export function gridParamsFor(): GridParams {
@@ -56,7 +52,7 @@ export function gridParamsFor(): GridParams {
  * Pair with `atrTrailMult = BULL_ATR_MULT` so the trail does not fire before the TP on the same bar.
  */
 export function gridBullParamsFor(): GridParams {
-  return { ...gridParamsFor(), gridMult: BULL_ATR_MULT };
+  return { ...gridParamsFor(), gridMult: 8, adxMax: 30 };
 }
 
 export interface GridSignalInput {

@@ -1,6 +1,7 @@
 import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
+import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated-quote.js";
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
@@ -43,6 +44,13 @@ export interface BacktestMetrics {
   startingCashUsdc: number;
   endingEquity: number;
   totalReturnPct: number;
+  /** Buy at first bar close, sell at last — same emulated round-trip costs as strategy fills. */
+  holdEquity: number;
+  holdReturnPct: number;
+  /** endingEquity − holdEquity */
+  vsHoldUsdc: number;
+  /** totalReturnPct − holdReturnPct (percentage points) */
+  vsHoldReturnPct: number;
   realizedPnl: number;
   tradeCount: number;
   roundTrips: number;
@@ -260,6 +268,7 @@ async function replayPair(args: {
     }
   }
 
+  const firstClose = candles[0]!.close;
   const lastClose = candles[candles.length - 1]!.close;
   const snap = portfolio.getSnapshot(lastClose);
   const sells = snap.trades.filter((t) => t.side === "SELL");
@@ -267,6 +276,9 @@ async function replayPair(args: {
   const roundTrips = sells.length;
   const totalReturnPct =
     startingCashUsdc > 0 ? ((snap.equity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
+  const holdEquity = computeBuyHoldEquity(startingCashUsdc, firstClose, lastClose, pair.symbol);
+  const holdReturnPct =
+    startingCashUsdc > 0 ? ((holdEquity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
 
   return {
     metrics: {
@@ -275,6 +287,10 @@ async function replayPair(args: {
       startingCashUsdc,
       endingEquity: snap.equity,
       totalReturnPct,
+      holdEquity,
+      holdReturnPct,
+      vsHoldUsdc: snap.equity - holdEquity,
+      vsHoldReturnPct: totalReturnPct - holdReturnPct,
       realizedPnl: snap.realizedPnl,
       tradeCount: snap.trades.length,
       roundTrips,
@@ -324,6 +340,32 @@ function syncMarketIndicators(args: {
   );
   args.strategyManager.applyMarketIndicators(market, args.lastMarket);
   return { htfEnd, lastMarket: market };
+}
+
+/**
+ * Benchmark: deploy full starting cash at the first bar close, exit at the last.
+ * Uses the same emulated slippage/pool/priority costs as strategy fills.
+ */
+export function computeBuyHoldEquity(
+  startingCashUsdc: number,
+  firstClose: number,
+  lastClose: number,
+  symbol: string,
+): number {
+  if (!(startingCashUsdc > 0) || !(firstClose > 0) || !(lastClose > 0)) {
+    return startingCashUsdc;
+  }
+
+  const tier = liquidityTierForPair(symbol);
+  const buy = emulateFillPrice({ side: "BUY", close: firstClose, tier });
+  const spendable = startingCashUsdc - buy.priorityFeeUsdc;
+  if (spendable <= 0) {
+    return startingCashUsdc;
+  }
+
+  const size = spendable / buy.fillPrice;
+  const sell = emulateFillPrice({ side: "SELL", close: lastClose, tier });
+  return size * sell.fillPrice - sell.priorityFeeUsdc;
 }
 
 function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order): void {
@@ -542,6 +584,10 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
       `(${fmtPct(metrics.totalReturnPct)})`,
   );
   console.log(
+    `Buy & hold: ${metrics.holdEquity.toFixed(2)} USDC (${fmtPct(metrics.holdReturnPct)}) | ` +
+      `vs hold: ${fmtSignedUsdc(metrics.vsHoldUsdc)} (${fmtSignedPct(metrics.vsHoldReturnPct)} pp)`,
+  );
+  console.log(
     `Realized P&L: ${metrics.realizedPnl.toFixed(4)} USDC | Trades: ${metrics.tradeCount} ` +
       `(${metrics.roundTrips} round-trips, win rate ${fmtPct(metrics.winRate * 100)})`,
   );
@@ -574,4 +620,14 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
 function fmtPct(n: number): string {
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(2)}%`;
+}
+
+function fmtSignedPct(n: number): string {
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}%`;
+}
+
+function fmtSignedUsdc(n: number): string {
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)} USDC`;
 }

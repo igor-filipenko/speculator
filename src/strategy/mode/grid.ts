@@ -6,15 +6,20 @@ import type {
   Snapshot,
   Strategy,
   Timeframe,
+  Trend,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
 import { adx, atr, ema } from "../indicators.js";
+import { match } from "ts-pattern";
 
 export interface GridParams {
   timeframe: Timeframe;
   atrPeriod: number;
   adxPeriod: number;
-  /** Grid spacing = ATR * gridMult. Wider = fewer trades, bigger per-RT profit. */
+  /**
+   * ATR multiplier for both grid spacing (entries) and the take-profit target.
+   * Wider = fewer trades, bigger per-RT profit.
+   */
   gridMult: number;
   /** Recalculate grid anchor every N bars (0 = every bar). */
   reanchorBars: number;
@@ -24,22 +29,42 @@ export interface GridParams {
   trendEmaPeriod: number;
 }
 
-const GRID_RISK: Omit<RiskParams, "timeframe"> = {
-  atrStopMult: 2.5,
-  atrTrailMult: 3,
-  cooldownBars: 1,
-  minHoldBars: 1,
-};
-
-export function gridParamsFor(): GridParams {
+export function gridParamsFor(trend: Trend): GridParams {
   return {
     timeframe: "15m",
     atrPeriod: 14,
     adxPeriod: 14,
-    gridMult: 1.5,
-    reanchorBars: 20,
-    adxMax: 30,
-    trendEmaPeriod: 20,
+    gridMult: match(trend)
+      .with("bullish", () => 8.0)
+      .with("flat", () => 3.0)
+      .with("bearish", () => 2.0)
+      .with("unknown", () => 2.0)
+      .exhaustive(),
+    reanchorBars: 40,
+    adxMax: trend === "bullish" ? 30 : 25,
+    trendEmaPeriod: 50,
+  };
+}
+
+function riskParamsFor(trend: Trend): RiskParams {
+  const atrStopMult = match(trend)
+    .with("bullish", () => 4)
+    .with("flat", () => 4)
+    .with("bearish", () => 2.5)
+    .with("unknown", () => 2.5)
+    .exhaustive();
+  const atrTrailMult = match(trend)
+    .with("bullish", () => 8)
+    .with("flat", () => 8)
+    .with("bearish", () => 4)
+    .with("unknown", () => 4)
+    .exhaustive();
+  return {
+    timeframe: "15m",
+    atrStopMult,
+    atrTrailMult,
+    cooldownBars: 3,
+    minHoldBars: 1,
   };
 }
 
@@ -98,13 +123,19 @@ export function evaluateGrid(input: GridSignalInput): Signal {
 
   if (snapshot?.position.side === "long") {
     const entryPrice = snapshot.position.entryPrice;
-    const target = entryPrice + gridSpacing;
-    if (close >= target) {
+    const tpSpacing = params.gridMult * currentAtr;
+    const target = entryPrice + tpSpacing;
+    const barHigh = lastCandle.high;
+    // Check intra-bar TP: bar high cleared the target even if close did not.
+    // This prevents the ATR trail from stealing trades the price already won.
+    const tpHit = close >= target || barHigh >= target;
+    if (tpHit) {
+      const hitIntraBar = barHigh >= target && close < target;
       return {
         pair,
         side: "SELL",
-        reason: `grid TP: close ${close.toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${gridSpacing.toFixed(4)}`,
-        price,
+        reason: `grid TP: ${hitIntraBar ? "high" : "close"} ${(hitIntraBar ? barHigh : close).toFixed(4)} >= entry ${entryPrice.toFixed(4)} + spacing ${tpSpacing.toFixed(4)}`,
+        price: hitIntraBar ? target : price,
         at,
         meta,
       };
@@ -155,9 +186,9 @@ export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
 
-  constructor(params?: GridParams) {
-    this.params = params ?? gridParamsFor();
-    this.risk = { timeframe: this.params.timeframe, ...GRID_RISK };
+  constructor(trend: Trend) {
+    this.params = gridParamsFor(trend);
+    this.risk = riskParamsFor(trend);
   }
 
   getDisplayName(): string {

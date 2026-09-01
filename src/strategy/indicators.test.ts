@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { adx, atr, bollinger, ema, rsi } from "./indicators.js";
+import { adx, atr, bollinger, dmi, ema, rsi } from "./indicators.js";
 
 describe("atr", () => {
   it("returns nulls until warm and matches Wilder smoothing", () => {
@@ -58,6 +58,35 @@ describe("adx", () => {
 
   it("rejects invalid period", () => {
     assert.throws(() => adx([], 0), /ADX period/);
+  });
+});
+
+describe("dmi", () => {
+  it("has +DI > −DI on an uptrend and the reverse on a downtrend", () => {
+    const up: { high: number; low: number; close: number }[] = [];
+    let price = 50;
+    for (let i = 0; i < 40; i++) {
+      price += 2;
+      up.push({ high: price + 0.3, low: price - 0.2, close: price });
+    }
+    const upDmi = dmi(up, 5);
+    const lastUpPlus = upDmi.plusDi[upDmi.plusDi.length - 1];
+    const lastUpMinus = upDmi.minusDi[upDmi.minusDi.length - 1];
+    assert.ok(lastUpPlus != null && lastUpMinus != null);
+    assert.ok(lastUpPlus > lastUpMinus);
+    assert.deepEqual(adx(up, 5), upDmi.adx);
+
+    const down: { high: number; low: number; close: number }[] = [];
+    price = 120;
+    for (let i = 0; i < 40; i++) {
+      price -= 2;
+      down.push({ high: price + 0.2, low: price - 0.3, close: price });
+    }
+    const downDmi = dmi(down, 5);
+    const lastDownPlus = downDmi.plusDi[downDmi.plusDi.length - 1];
+    const lastDownMinus = downDmi.minusDi[downDmi.minusDi.length - 1];
+    assert.ok(lastDownPlus != null && lastDownMinus != null);
+    assert.ok(lastDownMinus > lastDownPlus);
   });
 });
 

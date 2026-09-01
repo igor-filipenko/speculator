@@ -54,7 +54,7 @@ describe("SimpleStrategyManager defaults", () => {
 });
 
 describe("applyMarketIndicators", () => {
-  it("switches to HighRiskManager when trend is not bullish", () => {
+  it("switches to HighRiskManager when trend is bearish", () => {
     const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
     const bullish = evaluateMarketIndicators({
       pair: "SOL/USDC",
@@ -79,6 +79,23 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
     assert.equal(manager.applyMarketIndicators(bearish, bearish), false);
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
+  });
+
+  it("recreates GridStrategy with bull params (gridMult=8) when trend is bullish", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "grid", htf: "4h" });
+    const strategyBefore = manager.getActiveStrategy();
+    const bullish = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    assert.equal(bullish.trend, "bullish");
+    manager.applyMarketIndicators(bullish);
+    assert.notEqual(manager.getActiveStrategy(), strategyBefore);
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×8"));
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 });
 
@@ -110,7 +127,11 @@ describe("evaluateMarketIndicators", () => {
     assert.equal(indicators.trend, "bullish");
     assert.ok(indicators.ema200 != null && close > indicators.ema200);
     assert.ok(indicators.adx != null && indicators.adx >= params.adxFlatMax);
-    assert.ok(indicators.ema50 != null);
+    assert.ok(
+      indicators.ema50 != null && close > indicators.ema50 && indicators.ema50 > indicators.ema200,
+    );
+    assert.ok(indicators.plusDi != null && indicators.minusDi != null);
+    assert.ok(indicators.plusDi > indicators.minusDi);
     assert.ok(indicators.atr != null && indicators.atrPct != null);
     assert.ok(indicators.distEma200Pct != null && indicators.distEma200Pct > 0);
   });
@@ -145,18 +166,27 @@ describe("evaluateMarketIndicators", () => {
     assert.ok(indicators.adx == null || indicators.adx < params.adxFlatMax);
   });
 
-  it("attaches pool stats when provided", () => {
+  it("is flat when close is above EMA200 but EMA50 is still below EMA200", () => {
+    const down = series(230, 400, -1);
+    const lastTime = down[down.length - 1]!.time;
+    const interval = 4 * 60 * 60;
+    let price = down[down.length - 1]!.close;
+    const bounce: Candle[] = [];
+    for (let i = 1; i <= 12; i++) {
+      price += 12;
+      bounce.push(bar(lastTime + i * interval, price, 2));
+    }
+    const candles = [...down, ...bounce];
     const indicators = evaluateMarketIndicators({
       pair: "SOL/USDC",
-      candles: [],
-      price: 100,
+      candles,
+      price: candles[candles.length - 1]!.close,
       at,
       params,
-      poolStats: { marketCapUsd: 1_000, fdvUsd: 2_000 },
     });
-    assert.equal(indicators.marketCapUsd, 1_000);
-    assert.equal(indicators.fdvUsd, 2_000);
-    assert.equal(indicators.trend, "unknown");
-    assert.deepEqual(indicators.candles, []);
+    assert.ok(indicators.ema200 != null && indicators.ema50 != null);
+    assert.ok(indicators.ema50 < indicators.ema200);
+    assert.ok(candles[candles.length - 1]!.close > indicators.ema200);
+    assert.equal(indicators.trend, "flat");
   });
 });

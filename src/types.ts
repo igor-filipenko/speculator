@@ -13,7 +13,19 @@ export type HtfTimeframe = "4h" | "1d";
 
 export type Trend = "bullish" | "bearish" | "flat" | "unknown";
 
-/** HTF regime + Gecko pool stats. Does not pick trades (yet). */
+/** Clustered HTF swing high/low used as support or resistance. */
+export interface PriceLevel {
+  price: number;
+  kind: "support" | "resistance";
+  /** Confirmed swing pivots in this cluster. */
+  touches: number;
+  /** Sum of volume in each pivot's confirmation window. */
+  volume: number;
+  /** Last pivot time (Unix seconds). */
+  lastTime: number;
+}
+
+/** HTF regime snapshot. Does not pick trades (yet). */
 export interface MarketIndicators {
   pair: string;
   timeframe: HtfTimeframe;
@@ -23,21 +35,23 @@ export interface MarketIndicators {
   ema200?: number;
   ema50?: number;
   adx?: number;
+  /** Wilder +DI at the last HTF bar. */
+  plusDi?: number;
+  /** Wilder −DI at the last HTF bar. */
+  minusDi?: number;
   atr?: number;
   /** ATR / price. */
   atrPct?: number;
   /** (price − EMA200) / EMA200. */
   distEma200Pct?: number;
-  marketCapUsd?: number;
-  fdvUsd?: number;
+  /** Nearest support below price. */
+  support?: number;
+  /** Nearest resistance above price. */
+  resistance?: number;
+  /** Key clustered S/R (nearest-first within each side). */
+  levels?: PriceLevel[];
   /** HTF OHLCV used to compute this snapshot. */
   candles: Candle[];
-}
-
-/** Optional Gecko pool overview passed into {@link StrategyManager.evaluate}. */
-export interface PoolStats {
-  marketCapUsd?: number;
-  fdvUsd?: number;
 }
 
 export interface Candle {
@@ -231,13 +245,7 @@ export interface StrategyManager {
   getActiveStrategy(): Strategy;
   getActiveRiskManager(): RiskManager;
   getRequiredCandles(): RequiredCandles;
-  evaluate(
-    pair: string,
-    candles: Candle[],
-    price: number,
-    at: Date,
-    poolStats?: PoolStats,
-  ): MarketIndicators;
+  evaluate(pair: string, candles: Candle[], price: number, at: Date): MarketIndicators;
   /** Sync risk manager to {@link MarketIndicators.trend}. Returns true when the trend changed. */
   applyMarketIndicators(
     indicators: MarketIndicators,

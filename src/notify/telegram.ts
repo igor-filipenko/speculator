@@ -218,7 +218,7 @@ function formatStartMessage(): string {
     "*Commands*",
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
-    `/market — ${escapeMd("HTF trend chart (EMA200, ADX)")}`,
+    `/market — ${escapeMd("HTF trend chart (EMA200, ADX, S/R)")}`,
     `/chart — ${escapeMd("OHLCV candle chart (strategy overlays)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
@@ -254,25 +254,17 @@ function pctOf(frac: number): string {
   return `${(frac * 100).toFixed(2)}%`;
 }
 
-function formatUsdCompact(n: number): string {
-  const abs = Math.abs(n);
-  if (abs >= 1e9) {
-    return `$${(n / 1e9).toFixed(2)}B`;
-  }
-  if (abs >= 1e6) {
-    return `$${(n / 1e6).toFixed(2)}M`;
-  }
-  if (abs >= 1e3) {
-    return `$${(n / 1e3).toFixed(2)}K`;
-  }
-  return `$${n.toFixed(2)}`;
+function formatLevelPrice(n: number): string {
+  if (n >= 1000) return n.toFixed(1);
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
 }
 
 export function formatMarketIndicatorsMessage(indicators: MarketIndicators): string {
   const trendIcon = match(indicators.trend)
-    .with("bullish", () => "🟢")
-    .with("bearish", () => "🔴")
-    .with("flat", () => "⚪")
+    .with("bullish", () => "🐂")
+    .with("bearish", () => "🐻")
+    .with("flat", () => "↕️")
     .with("unknown", () => "❔")
     .exhaustive();
 
@@ -295,6 +287,11 @@ export function formatMarketIndicatorsMessage(indicators: MarketIndicators): str
   if (indicators.adx != null) {
     adxAtr.push(`ADX ${code(indicators.adx.toFixed(2))}`);
   }
+  if (indicators.plusDi != null && indicators.minusDi != null) {
+    adxAtr.push(
+      `${escapeMd("+DI")} ${code(indicators.plusDi.toFixed(1))} / ${escapeMd("-DI")} ${code(indicators.minusDi.toFixed(1))}`,
+    );
+  }
   if (indicators.atr != null) {
     const atrPct = indicators.atrPct != null ? ` (${pctOf(indicators.atrPct)})` : "";
     adxAtr.push(`ATR ${code(indicators.atr.toFixed(4))}${escapeMd(atrPct)}`);
@@ -303,12 +300,17 @@ export function formatMarketIndicatorsMessage(indicators: MarketIndicators): str
     lines.push(adxAtr.join(" · "));
   }
 
-  if (indicators.marketCapUsd != null) {
-    lines.push(`MCap ${code(formatUsdCompact(indicators.marketCapUsd))}`);
+  const supports = (indicators.levels ?? [])
+    .filter((l) => l.kind === "support")
+    .map((l) => code(formatLevelPrice(l.price)));
+  const resistances = (indicators.levels ?? [])
+    .filter((l) => l.kind === "resistance")
+    .map((l) => code(formatLevelPrice(l.price)));
+  if (supports.length > 0) {
+    lines.push(`Support ${supports.join(" · ")}`);
   }
-  if (indicators.fdvUsd != null) {
-    const label = indicators.marketCapUsd == null ? "FDV \\(mcap n/a\\)" : "FDV";
-    lines.push(`${label} ${code(formatUsdCompact(indicators.fdvUsd))}`);
+  if (resistances.length > 0) {
+    lines.push(`Resistance ${resistances.join(" · ")}`);
   }
 
   lines.push(`_${escapeMd(indicators.at.toISOString())}_`);

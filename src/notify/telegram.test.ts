@@ -12,11 +12,18 @@ const sample: MarketIndicators = {
   ema200: 120,
   ema50: 122,
   adx: 28.4,
+  plusDi: 32.1,
+  minusDi: 18.4,
   atr: 4.12,
   atrPct: 0.033,
   distEma200Pct: 0.0288,
-  marketCapUsd: 12_300_000_000,
-  fdvUsd: 14_100_000_000,
+  support: 118.5,
+  resistance: 130.4,
+  levels: [
+    { price: 118.5, kind: "support", touches: 3, lastTime: 1_700_000_000, volume: 10 },
+    { price: 115.2, kind: "support", touches: 2, lastTime: 1_699_000_000, volume: 8 },
+    { price: 130.4, kind: "resistance", touches: 2, lastTime: 1_700_100_000, volume: 9 },
+  ],
   candles: [],
 };
 
@@ -34,7 +41,10 @@ describe("formatMarketIndicatorsListMessage", () => {
     assert.match(text, /EMA200/);
     assert.match(text, /ADX/);
     assert.match(text, /ATR/);
-    assert.match(text, /MCap/);
+    assert.match(text, /Support/);
+    assert.match(text, /118\.50/);
+    assert.match(text, /Resistance/);
+    assert.match(text, /130\.40/);
     assert.doesNotMatch(text, /bollinger/);
     assert.doesNotMatch(text, /env/);
     assert.doesNotMatch(text, /Risk /);

@@ -64,7 +64,7 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [gra
 | ------------ | ----------------------------------------- |
 | `/start`     | Greeting and command list                 |
 | `/report`    | Last signal per pair (including HOLD)     |
-| `/market`    | HTF trend chart (EMA200 / ADX) + mcap/FDV |
+| `/market`    | HTF trend chart (EMA50/200, ADX, S/R)     |
 | `/chart`     | OHLCV candle chart with strategy overlays |
 | `/portfolio` | Current paper or live portfolio           |
 
@@ -155,7 +155,7 @@ OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` tabl
 | Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
 | Meme (future pairs) | 2.0%     | 0.30%    | same                        |
 
-The report prints equity, return, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
+The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
 
 Single iteration (smoke test):
 
@@ -357,7 +357,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, ATR, trend (`bullish` / `bearish` / `flat` / `unknown`), plus Gecko pool market cap/FDV. The snapshot is stored in DuckDB (`market.indicators`); later polls reuse it until the HTF bar closes so Gecko is not hit every tick. Telegram `/market` shows this as a candle chart (EMA50/200 + ADX). The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` → `GenericRiskManager`, otherwise `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
+`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. HTF OHLCV is loaded via the DuckDB candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -387,19 +387,21 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, market.indicators, paper, live, signals
+  db/                      # DuckDB: candles, paper, live, signals
   market/gecko-terminal.ts
-  market/htf-cache.ts        # HTF MarketIndicators cache + Gecko refresh
+  market/htf.ts            # HTF EMA stack + DMI trend + S/R
+  market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
+  market/levels.ts         # swing-pivot S/R clusters
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute
   exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/Bollinger
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
   strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy/RiskManager
-  strategy/market-state-svg.ts # HTF candles + EMA50/200 + ADX for /market
+  strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
   strategy/mode/grid-svg.ts      # grid SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)

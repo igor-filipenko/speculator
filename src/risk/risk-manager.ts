@@ -35,9 +35,7 @@ export class GenericRiskManager implements RiskManager {
       signal,
       candleIntervalSeconds(this.config.timeframe),
     );
-    // HOLD may still carry barLow/atr for display; stops only apply on BUY/SELL.
-    const stopExit =
-      signal.side === "HOLD" ? null : evaluateProtectiveExit(signal, snapshot, this.config, peak);
+    const stopExit = evaluateProtectiveExit(signal, snapshot, this.config, peak);
     if (stopExit) {
       return asCommand(stopExit);
     }
@@ -196,7 +194,6 @@ function belowMinHold(snapshot: Snapshot, at: Date, config: RiskParams): boolean
   const barsHeld = Math.floor(elapsedSec / intervalSec);
   return barsHeld < config.minHoldBars;
 }
-
 /** No new longs while HTF trend is not bullish; ATR stops still fire on HOLD. */
 export class HighRiskManager implements RiskManager {
   constructor(

@@ -1,9 +1,5 @@
 -- migrate:up transaction:false
 
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-COMMENT ON EXTENSION timescaledb IS
-  'Time-series extension; market.candles is a hypertable partitioned on time';
-
 CREATE SCHEMA IF NOT EXISTS solana;
 COMMENT ON SCHEMA solana IS 'Solana mints and GeckoTerminal pools used to resolve WATCHLIST pairs';
 

@@ -1,7 +1,5 @@
 import postgres, { type Sql } from "postgres";
 
-const MIGRATE_LOCK_KEY = 738_201_946;
-
 let sql: Sql | undefined;
 let pinnedBotId: string | undefined;
 
@@ -46,11 +44,6 @@ export async function closeSql(): Promise<void> {
   const pending = sql;
   sql = undefined;
   await pending.end({ timeout: 5 });
-}
-
-/** Advisory lock key used by `pnpm migrate`. */
-export function migrateLockKey(): number {
-  return MIGRATE_LOCK_KEY;
 }
 
 /** Reset pool + bot id (tests). */

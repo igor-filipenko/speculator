@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { getSql, resetSpeculatorDbCache } from "./db.js";
-import { loadMigrationFiles, runMigrations } from "./migrate.js";
-import { useTestDb } from "./test-db.js";
+import { listMigrationFiles, readMigrationUpSql } from "./migrate.js";
+import { runMigrations, useTestDb } from "./test-db.js";
 
 describe("migrations", () => {
   before(async () => {
@@ -13,15 +13,16 @@ describe("migrations", () => {
     await resetSpeculatorDbCache();
   });
 
-  it("records V1 in schema_migrations and creates a candles hypertable", async () => {
-    const files = await loadMigrationFiles();
-    assert.ok(files.some((f) => f.version === 1));
+  it("records init in schema_migrations and creates a candles hypertable", async () => {
+    const files = await listMigrationFiles();
+    const init = files.find((name) => name.endsWith("_init.sql"));
+    assert.ok(init);
 
     const sql = getSql();
-    const applied = await sql<{ version: number; description: string }[]>`
-      SELECT version, description FROM public.schema_migrations ORDER BY version
+    const applied = await sql<{ version: string }[]>`
+      SELECT version FROM schema_migrations ORDER BY version
     `;
-    assert.equal(Number(applied[0]?.version), 1);
+    assert.equal(applied[0]?.version, init.slice(0, init.indexOf("_")));
 
     const hypertables = await sql<{ hypertable_name: string }[]>`
       SELECT hypertable_name
@@ -60,24 +61,25 @@ describe("migrations", () => {
 
   it("is a no-op on a second runMigrations", async () => {
     const sql = getSql();
-    const before = await sql<{ version: number; checksum: string }[]>`
-      SELECT version, checksum FROM public.schema_migrations ORDER BY version
+    const before = await sql<{ version: string }[]>`
+      SELECT version FROM schema_migrations ORDER BY version
     `;
     assert.equal(before.length, 1);
 
-    await runMigrations();
+    await runMigrations(process.env["DATABASE_URL"] ?? "");
 
-    const after = await sql<{ version: number; checksum: string }[]>`
-      SELECT version, checksum FROM public.schema_migrations ORDER BY version
+    const after = await sql<{ version: string }[]>`
+      SELECT version FROM schema_migrations ORDER BY version
     `;
     assert.deepEqual(after, before);
   });
 
-  it("can re-apply V1 SQL without error", async () => {
-    const files = await loadMigrationFiles();
-    const v1 = files.find((f) => f.version === 1);
-    assert.ok(v1);
+  it("can re-apply init SQL without error", async () => {
+    const files = await listMigrationFiles();
+    const init = files.find((name) => name.endsWith("_init.sql"));
+    assert.ok(init);
+    const upSql = await readMigrationUpSql(init);
     const sql = getSql();
-    await sql.unsafe(v1.sql).simple();
+    await sql.unsafe(upSql).simple();
   });
 });

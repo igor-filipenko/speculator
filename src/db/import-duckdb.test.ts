@@ -7,7 +7,7 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { candleCount } from "./candles.js";
 import { getSql, resetSpeculatorDbCache } from "./db.js";
 import { importDuckdb } from "./import-duckdb.js";
-import { migrationsDir } from "./migrate.js";
+import { repoRoot } from "./migrate.js";
 import { useTestDb } from "./test-db.js";
 import { listTokens } from "./tokens.js";
 
@@ -27,7 +27,7 @@ async function runSql(conn: DuckDBConnection, sql: string): Promise<void> {
 }
 
 async function writeFixture(path: string): Promise<void> {
-  const schema = await readFile(join(migrationsDir(), "legacy_duckdb.sql"), "utf8");
+  const schema = await readFile(join(repoRoot(), "testdata", "legacy_duckdb.sql"), "utf8");
   const instance = await DuckDBInstance.create(path);
   const conn = await instance.connect();
   try {

@@ -16,19 +16,19 @@ Build/run: [README.md](./README.md).
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
 - Comments and user-facing docs in this repo are **English**.
 - Format with **Prettier** (`pnpm format`); `pnpm check` includes `format:check`. Prefer the Prettier VS Code/Cursor extension (format on save is enabled in `.vscode/settings.json`).
-- Keep the dependency surface small: prefer `fetch` + zod + tsx + `postgres`; `grammy` is allowed for optional Telegram notify/commands; `@solana/web3.js` is allowed for live keypair signing and RPC balances; `@duckdb/node-api` is allowed only for `pnpm import-duckdb`. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
+- Keep the dependency surface small: prefer `fetch` + zod + tsx + `postgres`; `dbmate` is allowed for SQL migrations; `grammy` is allowed for optional Telegram notify/commands; `@solana/web3.js` is allowed for live keypair signing and RPC balances; `@duckdb/node-api` is allowed only for `pnpm import-duckdb`. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`.
 - Never commit secrets (`.env`, private keys, keypair JSON). Use `.env.example` only.
 
 ## Layout
 
 ```
 src/
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest | migrate | import-duckdb
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest | import-duckdb
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/
     db.ts               # postgres.js pool (DATABASE_URL) + BOT_ID
-    migrate.ts          # Flyway-style SQL migrations
+    migrate.ts          # assert dbmate migrations are applied
     import-duckdb.ts    # one-shot DuckDB → Timescale copy
     candles.ts          # market.candles (pool_address + timeframe)
     bot.ts              # bot.portfolios / bot.trades

@@ -181,7 +181,7 @@ pnpm import-duckdb          # optional: copy data/speculator.duckdb (needs BOT_I
 pnpm paper
 ```
 
-Apply schema with `pnpm migrate` (advisory-locked; a second run skips versions already in `schema_migrations`). `pnpm import-duckdb` upserts tokens/pools/candles, inserts this `BOT_ID`'s signals (skipping duplicates), and replaces paper/live ledgers, so re-running does not duplicate rows. Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
+Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). `pnpm import-duckdb` upserts tokens/pools/candles, inserts this `BOT_ID`'s signals (skipping duplicates), and replaces paper/live ledgers, so re-running does not duplicate rows. Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
 
 ## Deploy (Ubuntu VPS + systemd)
 

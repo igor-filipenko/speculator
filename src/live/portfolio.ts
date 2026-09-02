@@ -13,12 +13,11 @@ const DUST = 1e-9;
 
 export interface LivePortfolioOptions {
   solReserve: number;
-  dataDir?: string;
 }
 
 /**
  * Long-only live portfolio. Cash and size come from on-chain balances;
- * entry price, opened-at, and realized P&L are the DuckDB ledger.
+ * entry price, opened-at, and realized P&L are the Timescale ledger.
  */
 export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private cashUsdc = 0;
@@ -28,15 +27,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private readonly pairConfig: PairConfig;
   private readonly balances: BalanceSource;
   private readonly solReserve: number;
-  private readonly dataDir?: string;
 
   constructor(pair: PairConfig, balances: BalanceSource, options: LivePortfolioOptions) {
     this.pairConfig = pair;
     this.balances = balances;
     this.solReserve = options.solReserve;
-    if (options.dataDir !== undefined) {
-      this.dataDir = options.dataDir;
-    }
     this.position = {
       pair: pair.symbol,
       side: "flat",
@@ -51,7 +46,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     options: LivePortfolioOptions,
   ): Promise<Map<string, Portfolio>> {
     const portfolios = new Map<string, Portfolio>();
-    const saved = await loadLiveState(options.dataDir);
+    const saved = await loadLiveState();
     for (const pair of pairs) {
       const persisted = saved?.portfolios[pair.symbol];
       const portfolio = persisted
@@ -165,7 +160,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     const before = snapshotKey(this);
     await this.overlayChain(markPrice);
     if (snapshotKey(this) !== before) {
-      await upsertLivePortfolio(this.toPersisted(), this.dataDir);
+      await upsertLivePortfolio(this.toPersisted());
     }
   }
 
@@ -191,10 +186,10 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       };
     }
     const persisted = this.toPersisted();
-    await upsertLivePortfolio(persisted, this.dataDir);
+    await upsertLivePortfolio(persisted);
     const last = persisted.trades.at(-1);
     if (last != null) {
-      await insertLiveTrade(last, this.dataDir);
+      await insertLiveTrade(last);
     }
     return nextTrade;
   }

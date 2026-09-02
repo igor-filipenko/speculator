@@ -1,22 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { resetSpeculatorDbCache } from "../db/db.js";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
+import { resetSpeculatorDbCache, setBotId } from "../db/db.js";
+import { randomUUID } from "node:crypto";
+import { useTestDb } from "../db/test-db.js";
 
-describe("paper store (DuckDB)", () => {
-  let dataDir: string;
-
+describe("paper store", () => {
   before(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "speculator-paper-"));
+    await useTestDb();
   });
 
   after(async () => {
-    resetSpeculatorDbCache();
-    await rm(dataDir, { recursive: true, force: true });
+    await resetSpeculatorDbCache();
   });
 
   it("saves and loads a portfolio round-trip", async () => {
@@ -34,9 +30,9 @@ describe("paper store (DuckDB)", () => {
     assert.ok(trade);
 
     const portfolios = new Map([["SOL/USDC", portfolio]]);
-    await savePaperState(portfolios, dataDir);
+    await savePaperState(portfolios);
 
-    const loaded = await loadPaperState(dataDir);
+    const loaded = await loadPaperState();
     assert.ok(loaded);
     assert.equal(loaded.version, 1);
     assert.ok(loaded.updatedAt.length > 0);
@@ -60,7 +56,7 @@ describe("paper store (DuckDB)", () => {
       simulated: true,
       priorityFeeUsdc: 0,
     });
-    await savePaperState(new Map([["SOL/USDC", sol]]), dataDir);
+    await savePaperState(new Map([["SOL/USDC", sol]]));
 
     const other = new PaperPortfolio("BONK/USDC", 500);
     other.applyOrderSync({
@@ -73,9 +69,9 @@ describe("paper store (DuckDB)", () => {
       simulated: true,
       priorityFeeUsdc: 0,
     });
-    await savePaperState(new Map([["BONK/USDC", other]]), dataDir);
+    await savePaperState(new Map([["BONK/USDC", other]]));
 
-    const loaded = await loadPaperState(dataDir);
+    const loaded = await loadPaperState();
     assert.ok(loaded);
     assert.ok(loaded.portfolios["SOL/USDC"]);
     assert.ok(loaded.portfolios["BONK/USDC"]);
@@ -83,15 +79,11 @@ describe("paper store (DuckDB)", () => {
     assert.equal(loaded.portfolios["BONK/USDC"]?.cashUsdc, 0);
   });
 
-  it("returns null when DuckDB has no paper rows", async () => {
-    const emptyDir = await mkdtemp(join(tmpdir(), "speculator-paper-empty-"));
-    try {
-      resetSpeculatorDbCache();
-      const loaded = await loadPaperState(emptyDir);
-      assert.equal(loaded, null);
-    } finally {
-      resetSpeculatorDbCache();
-      await rm(emptyDir, { recursive: true, force: true });
-    }
+  it("returns null when there are no paper rows for this bot", async () => {
+    const otherBot = `empty-${randomUUID()}`;
+    setBotId(otherBot);
+    process.env["BOT_ID"] = otherBot;
+    const loaded = await loadPaperState();
+    assert.equal(loaded, null);
   });
 });

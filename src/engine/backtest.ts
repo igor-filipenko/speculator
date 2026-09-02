@@ -82,8 +82,6 @@ export interface RunBacktestOptions {
   forceRefresh?: boolean;
   /** Skip HTF evaluate/apply/log (strategy risk params stay as constructed). */
   ignoreTrend?: boolean;
-  /** Override data directory (tests). */
-  dataDir?: string;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
@@ -101,7 +99,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   const timeframe = strategy.getRequiredCandles().timeframe;
   const cacheOpts = {
     forceRefresh: options.forceRefresh ?? false,
-    ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
   };
 
   const results: BacktestResult[] = [];
@@ -161,7 +158,7 @@ async function loadHtfCandles(args: {
   toTime: number;
   injected: Candle[] | undefined;
   skipFetch: boolean;
-  cacheOpts: { forceRefresh: boolean; dataDir?: string };
+  cacheOpts: { forceRefresh: boolean };
 }): Promise<Candle[]> {
   if (args.injected !== undefined) {
     return args.injected;

@@ -1,0 +1,14 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.29.2-pg18
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: speculator
+      POSTGRES_PASSWORD: speculator
+      POSTGRES_DB: speculator
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+
+volumes:
+  timescale-data:

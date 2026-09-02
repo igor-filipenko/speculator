@@ -51,6 +51,10 @@ scp -r dist "$HOST:$REMOTE_PATH/dist.new"
 ssh "$HOST" "rm -rf $(printf '%q' "$REMOTE_PATH/dist") && mv $(printf '%q' "$REMOTE_PATH/dist.new") $(printf '%q' "$REMOTE_PATH/dist")"
 
 scp package.json pnpm-lock.yaml .env.example "$HOST:$REMOTE_PATH/"
+if [[ -d migrations ]]; then
+  ssh "$HOST" "rm -rf $(printf '%q' "$REMOTE_PATH/migrations")"
+  scp -r migrations "$HOST:$REMOTE_PATH/migrations"
+fi
 
 echo "Installing production dependencies on host…"
 ssh "$HOST" bash -s -- "$REMOTE_PATH" <<'REMOTE'

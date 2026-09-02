@@ -1,42 +1,35 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { getConnection, resetSpeculatorDbCache } from "./db.js";
+import { getSql, resetSpeculatorDbCache } from "./db.js";
 import { insertSignal } from "./signals.js";
+import { useTestDb } from "./test-db.js";
 
-describe("signals (DuckDB)", () => {
-  let dataDir: string;
-
+describe("market.signals", () => {
   before(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "speculator-signals-"));
+    await useTestDb();
   });
 
   after(async () => {
-    resetSpeculatorDbCache();
-    await rm(dataDir, { recursive: true, force: true });
+    await resetSpeculatorDbCache();
   });
 
   it("inserts a signal with optional meta", async () => {
-    await insertSignal(
-      {
-        pair: "SOL/USDC",
-        side: "BUY",
-        reason: "test",
-        price: 150.5,
-        at: new Date("2026-07-31T10:00:00.000Z"),
-        meta: { emaFast: 149, emaSlow: 148, rsi: 55, trendEma: 150, atr: 2.5, adx: 22 },
-      },
-      dataDir,
-    );
+    await insertSignal({
+      pair: "SOL/USDC",
+      side: "BUY",
+      reason: "test",
+      price: 150.5,
+      at: new Date("2026-07-31T10:00:00.000Z"),
+      meta: { emaFast: 149, emaSlow: 148, rsi: 55, trendEma: 150, atr: 2.5, adx: 22 },
+    });
 
-    const conn = await getConnection(dataDir);
-    const reader = await conn.runAndReadAll(
-      `SELECT pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx FROM signals`,
-    );
-    await reader.readAll();
-    const rows = reader.getRowObjectsJS();
+    const botId = process.env["BOT_ID"];
+    const sql = getSql();
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx
+      FROM market.signals
+      WHERE bot_id = ${botId ?? ""}
+    `;
     assert.equal(rows.length, 1);
     const row = rows[0];
     assert.ok(row);

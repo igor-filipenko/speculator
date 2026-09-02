@@ -1,6 +1,5 @@
-import type { DuckDBConnection } from "@duckdb/node-api";
 import type { Candle, Timeframe } from "../types.js";
-import { getConnection } from "./db.js";
+import { getSql } from "./db.js";
 
 export interface CandleRangeBounds {
   minTime?: number;
@@ -8,166 +7,130 @@ export interface CandleRangeBounds {
   count: number;
 }
 
-const UPSERT_SQL = `
-  INSERT INTO candles (symbol, timeframe, time, open, high, low, close, volume)
-  VALUES ($symbol, $timeframe, $time, $open, $high, $low, $close, $volume)
-  ON CONFLICT (symbol, timeframe, time) DO UPDATE SET
-    open = excluded.open,
-    high = excluded.high,
-    low = excluded.low,
-    close = excluded.close,
-    volume = excluded.volume,
-    fetched_at = now()
-`;
+interface CandleRow {
+  time: string | number | bigint;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+function asUnix(value: string | number | bigint): number {
+  return Number(value);
+}
 
 export async function readCandles(
-  symbol: string,
+  poolAddress: string,
   timeframe: Timeframe,
   fromTime: number,
   toTime: number,
-  dataDir?: string,
 ): Promise<Candle[]> {
-  const conn = await getConnection(dataDir);
-  const reader = await conn.runAndReadAll(
-    `
-    SELECT time, open, high, low, close, volume
-    FROM candles
-    WHERE symbol = $symbol
-      AND timeframe = $timeframe
-      AND time >= $fromTime
-      AND time < $toTime
+  const sql = getSql();
+  const rows = await sql<CandleRow[]>`
+    SELECT
+      EXTRACT(EPOCH FROM time)::BIGINT AS time,
+      open, high, low, close, volume
+    FROM market.candles
+    WHERE pool_address = ${poolAddress}
+      AND timeframe = ${timeframe}
+      AND time >= to_timestamp(${fromTime})
+      AND time < to_timestamp(${toTime})
     ORDER BY time
-    `,
-    {
-      symbol,
-      timeframe,
-      fromTime,
-      toTime,
-    },
-  );
-  await reader.readAll();
-
-  return reader.getRowObjectsJS().map((row) => ({
-    time: Number(row["time"]),
-    open: Number(row["open"]),
-    high: Number(row["high"]),
-    low: Number(row["low"]),
-    close: Number(row["close"]),
-    volume: Number(row["volume"]),
+  `;
+  return rows.map((row) => ({
+    time: asUnix(row.time),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume),
   }));
 }
 
 export async function readRangeBounds(
-  symbol: string,
+  poolAddress: string,
   timeframe: Timeframe,
   fromTime: number,
   toTime: number,
-  dataDir?: string,
 ): Promise<CandleRangeBounds> {
-  const conn = await getConnection(dataDir);
-  const reader = await conn.runAndReadAll(
-    `
-    SELECT
-      min(time) AS min_time,
-      max(time) AS max_time,
-      count(*)::BIGINT AS cnt
-    FROM candles
-    WHERE symbol = $symbol
-      AND timeframe = $timeframe
-      AND time >= $fromTime
-      AND time < $toTime
-    `,
+  const sql = getSql();
+  const rows = await sql<
     {
-      symbol,
-      timeframe,
-      fromTime,
-      toTime,
-    },
-  );
-  await reader.readAll();
-  const row = reader.getRowObjectsJS()[0];
-  if (!row || Number(row["cnt"]) === 0) {
+      min_time: string | number | bigint | null;
+      max_time: string | number | bigint | null;
+      cnt: string | number | bigint;
+    }[]
+  >`
+    SELECT
+      EXTRACT(EPOCH FROM min(time))::BIGINT AS min_time,
+      EXTRACT(EPOCH FROM max(time))::BIGINT AS max_time,
+      count(*)::BIGINT AS cnt
+    FROM market.candles
+    WHERE pool_address = ${poolAddress}
+      AND timeframe = ${timeframe}
+      AND time >= to_timestamp(${fromTime})
+      AND time < to_timestamp(${toTime})
+  `;
+  const row = rows[0];
+  if (!row || Number(row.cnt) === 0) {
     return { count: 0 };
   }
-
-  const bounds: CandleRangeBounds = { count: Number(row["cnt"]) };
-  if (row["min_time"] != null) {
-    bounds.minTime = Number(row["min_time"]);
+  const bounds: CandleRangeBounds = { count: Number(row.cnt) };
+  if (row.min_time != null) {
+    bounds.minTime = asUnix(row.min_time);
   }
-  if (row["max_time"] != null) {
-    bounds.maxTime = Number(row["max_time"]);
+  if (row.max_time != null) {
+    bounds.maxTime = asUnix(row.max_time);
   }
   return bounds;
 }
 
 export async function upsertCandles(
-  symbol: string,
+  poolAddress: string,
   timeframe: Timeframe,
   candles: Candle[],
-  dataDir?: string,
 ): Promise<void> {
   if (candles.length === 0) {
     return;
   }
-
-  const conn = await getConnection(dataDir);
-  await conn.run("BEGIN TRANSACTION");
-  try {
-    for (const c of candles) {
-      await conn.run(UPSERT_SQL, {
-        symbol,
-        timeframe,
-        time: c.time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume,
-      });
-    }
-    await conn.run("COMMIT");
-  } catch (err) {
-    await conn.run("ROLLBACK");
-    throw err;
-  }
-}
-
-export async function deleteCandles(
-  symbol: string,
-  timeframe: Timeframe,
-  dataDir?: string,
-): Promise<void> {
-  const conn = await getConnection(dataDir);
-  await conn.run(`DELETE FROM candles WHERE symbol = $symbol AND timeframe = $timeframe`, {
-    symbol,
+  const sql = getSql();
+  const rows = candles.map((c) => ({
+    pool_address: poolAddress,
     timeframe,
-  });
+    time: new Date(c.time * 1000),
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+    volume: c.volume,
+  }));
+  await sql`
+    INSERT INTO market.candles ${sql(rows)}
+    ON CONFLICT (pool_address, timeframe, time) DO UPDATE SET
+      open = EXCLUDED.open,
+      high = EXCLUDED.high,
+      low = EXCLUDED.low,
+      close = EXCLUDED.close,
+      volume = EXCLUDED.volume,
+      fetched_at = now()
+  `;
 }
 
-export async function candleCount(
-  symbol: string,
-  timeframe: Timeframe,
-  dataDir?: string,
-): Promise<number> {
-  const conn = await getConnection(dataDir);
-  const reader = await conn.runAndReadAll(
-    `
+export async function deleteCandles(poolAddress: string, timeframe: Timeframe): Promise<void> {
+  const sql = getSql();
+  await sql`
+    DELETE FROM market.candles
+    WHERE pool_address = ${poolAddress} AND timeframe = ${timeframe}
+  `;
+}
+
+export async function candleCount(poolAddress: string, timeframe: Timeframe): Promise<number> {
+  const sql = getSql();
+  const rows = await sql<{ cnt: string | number | bigint }[]>`
     SELECT count(*)::BIGINT AS cnt
-    FROM candles
-    WHERE symbol = $symbol AND timeframe = $timeframe
-    `,
-    { symbol, timeframe },
-  );
-  await reader.readAll();
-  const row = reader.getRowObjectsJS()[0];
-  return row ? Number(row["cnt"]) : 0;
-}
-
-/** @internal Test helper — direct connection access. */
-export async function withConnection<T>(
-  dataDir: string | undefined,
-  fn: (conn: DuckDBConnection) => Promise<T>,
-): Promise<T> {
-  const conn = await getConnection(dataDir);
-  return fn(conn);
+    FROM market.candles
+    WHERE pool_address = ${poolAddress} AND timeframe = ${timeframe}
+  `;
+  return rows[0] ? Number(rows[0].cnt) : 0;
 }

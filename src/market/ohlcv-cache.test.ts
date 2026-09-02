@@ -63,4 +63,17 @@ describe("ohlcv cache", () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.close, 55);
   });
+
+  it("upserts more rows than postgres.js can bind in one statement", async () => {
+    const timeframe = "1d" as const;
+    const fromTime = 1_600_000_000;
+    const interval = 86_400;
+    // 8 columns × 8192 rows > 65534 bind parameters (postgres.js cap).
+    const count = 8_192;
+    const candles = Array.from({ length: count }, (_, i) => candle(fromTime + i * interval, 100));
+
+    await upsertCandles(SOL_POOL, timeframe, candles);
+
+    assert.equal(await candleCount(SOL_POOL, timeframe), count);
+  });
 });

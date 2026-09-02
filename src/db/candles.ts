@@ -86,6 +86,11 @@ export async function readRangeBounds(
   return bounds;
 }
 
+/** postgres.js rejects a statement with more than 65534 bind parameters. */
+const MAX_BIND_PARAMS = 65_534;
+const CANDLE_UPSERT_COLUMNS = 8;
+const UPSERT_BATCH_SIZE = Math.floor(MAX_BIND_PARAMS / CANDLE_UPSERT_COLUMNS);
+
 export async function upsertCandles(
   poolAddress: string,
   timeframe: Timeframe,
@@ -95,26 +100,29 @@ export async function upsertCandles(
     return;
   }
   const sql = getSql();
-  const rows = candles.map((c) => ({
-    pool_address: poolAddress,
-    timeframe,
-    time: new Date(c.time * 1000),
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-    volume: c.volume,
-  }));
-  await sql`
-    INSERT INTO market.candles ${sql(rows)}
-    ON CONFLICT (pool_address, timeframe, time) DO UPDATE SET
-      open = EXCLUDED.open,
-      high = EXCLUDED.high,
-      low = EXCLUDED.low,
-      close = EXCLUDED.close,
-      volume = EXCLUDED.volume,
-      fetched_at = now()
-  `;
+  for (let i = 0; i < candles.length; i += UPSERT_BATCH_SIZE) {
+    const batch = candles.slice(i, i + UPSERT_BATCH_SIZE);
+    const rows = batch.map((c) => ({
+      pool_address: poolAddress,
+      timeframe,
+      time: new Date(c.time * 1000),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    }));
+    await sql`
+      INSERT INTO market.candles ${sql(rows)}
+      ON CONFLICT (pool_address, timeframe, time) DO UPDATE SET
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        volume = EXCLUDED.volume,
+        fetched_at = now()
+    `;
+  }
 }
 
 export async function deleteCandles(poolAddress: string, timeframe: Timeframe): Promise<void> {

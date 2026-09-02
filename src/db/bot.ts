@@ -1,3 +1,4 @@
+import type postgres from "postgres";
 import type { PersistedLivePortfolio, PersistedLiveTrade } from "../live/store.js";
 import type { PersistedPortfolio, PersistedTrade } from "../paper/store.js";
 import { getBotId, getSql } from "./db.js";
@@ -166,52 +167,61 @@ export async function insertTrade(
   `;
 }
 
+async function writePortfolio(
+  tx: postgres.TransactionSql,
+  botId: string,
+  mode: BotMode,
+  portfolio: PersistedLivePortfolio,
+): Promise<void> {
+  const pair = portfolio.position.pair;
+  const openedAt = portfolio.position.openedAt ?? null;
+  await tx`
+    INSERT INTO bot.portfolios (
+      bot_id, mode, pair, cash_usdc, realized_pnl,
+      position_side, position_size, entry_price, opened_at, updated_at
+    )
+    VALUES (
+      ${botId}, ${mode}, ${pair},
+      ${portfolio.cashUsdc}, ${portfolio.realizedPnl},
+      ${portfolio.position.side}, ${portfolio.position.size},
+      ${portfolio.position.entryPrice}, ${openedAt}::timestamptz, now()
+    )
+    ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
+      cash_usdc = EXCLUDED.cash_usdc,
+      realized_pnl = EXCLUDED.realized_pnl,
+      position_side = EXCLUDED.position_side,
+      position_size = EXCLUDED.position_size,
+      entry_price = EXCLUDED.entry_price,
+      opened_at = EXCLUDED.opened_at,
+      updated_at = now()
+  `;
+  await tx`
+    DELETE FROM bot.trades
+    WHERE bot_id = ${botId} AND mode = ${mode} AND pair = ${pair}
+  `;
+  for (const trade of portfolio.trades) {
+    const realizedPnl = trade.realizedPnl ?? null;
+    const txSignature = trade.txSignature ?? null;
+    await tx`
+      INSERT INTO bot.trades (
+        bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
+      )
+      VALUES (
+        ${botId}, ${mode}, ${trade.pair}, ${trade.side}, ${trade.price}, ${trade.size},
+        ${realizedPnl}, ${trade.at}::timestamptz, ${trade.simulated}, ${txSignature}
+      )
+    `;
+  }
+}
+
 export async function syncPortfolio(
   botId: string,
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
 ): Promise<void> {
   const sql = getSql();
-  const pair = portfolio.position.pair;
   await sql.begin(async (tx) => {
-    const openedAt = portfolio.position.openedAt ?? null;
-    await tx`
-      INSERT INTO bot.portfolios (
-        bot_id, mode, pair, cash_usdc, realized_pnl,
-        position_side, position_size, entry_price, opened_at, updated_at
-      )
-      VALUES (
-        ${botId}, ${mode}, ${pair},
-        ${portfolio.cashUsdc}, ${portfolio.realizedPnl},
-        ${portfolio.position.side}, ${portfolio.position.size},
-        ${portfolio.position.entryPrice}, ${openedAt}::timestamptz, now()
-      )
-      ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
-        cash_usdc = EXCLUDED.cash_usdc,
-        realized_pnl = EXCLUDED.realized_pnl,
-        position_side = EXCLUDED.position_side,
-        position_size = EXCLUDED.position_size,
-        entry_price = EXCLUDED.entry_price,
-        opened_at = EXCLUDED.opened_at,
-        updated_at = now()
-    `;
-    await tx`
-      DELETE FROM bot.trades
-      WHERE bot_id = ${botId} AND mode = ${mode} AND pair = ${pair}
-    `;
-    for (const trade of portfolio.trades) {
-      const realizedPnl = trade.realizedPnl ?? null;
-      const txSignature = trade.txSignature ?? null;
-      await tx`
-        INSERT INTO bot.trades (
-          bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
-        )
-        VALUES (
-          ${botId}, ${mode}, ${trade.pair}, ${trade.side}, ${trade.price}, ${trade.size},
-          ${realizedPnl}, ${trade.at}::timestamptz, ${trade.simulated}, ${txSignature}
-        )
-      `;
-    }
+    await writePortfolio(tx, botId, mode, portfolio);
   });
 }
 
@@ -224,10 +234,10 @@ export async function replaceBotLedgers(
   await sql.begin(async (tx) => {
     await tx`DELETE FROM bot.trades WHERE bot_id = ${botId} AND mode = ${mode}`;
     await tx`DELETE FROM bot.portfolios WHERE bot_id = ${botId} AND mode = ${mode}`;
+    for (const portfolio of portfolios) {
+      await writePortfolio(tx, botId, mode, portfolio);
+    }
   });
-  for (const portfolio of portfolios) {
-    await syncPortfolio(botId, mode, portfolio);
-  }
 }
 
 /** Paper helpers bound to env BOT_ID. */

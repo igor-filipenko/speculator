@@ -12,6 +12,7 @@ async function startContainer(): Promise<StartedPostgreSqlContainer> {
   try {
     return await new PostgreSqlContainer(TIMESCALEDB_IMAGE)
       .withDatabase("speculator")
+      .withEnvironment({ SPECULATOR_SCHEMA: "v1-signals-uidx" })
       .withReuse()
       .start();
   } catch (err) {

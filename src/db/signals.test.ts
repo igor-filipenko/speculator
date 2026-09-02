@@ -44,4 +44,28 @@ describe("market.signals", () => {
     assert.equal(Number(row["atr"]), 2.5);
     assert.equal(Number(row["adx"]), 22);
   });
+
+  it("skips a duplicate bot/pair/at on insert", async () => {
+    const at = new Date("2026-07-31T11:00:00.000Z");
+    const signal = {
+      pair: "SOL/USDC" as const,
+      side: "BUY" as const,
+      reason: "first",
+      price: 151,
+      at,
+    };
+    await insertSignal(signal);
+    await insertSignal({ ...signal, reason: "second", price: 152 });
+
+    const botId = process.env["BOT_ID"];
+    const sql = getSql();
+    const rows = await sql<{ reason: string; price: number }[]>`
+      SELECT reason, price
+      FROM market.signals
+      WHERE bot_id = ${botId ?? ""} AND pair = 'SOL/USDC' AND "at" = ${at.toISOString()}::timestamptz
+    `;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.reason, "first");
+    assert.equal(Number(rows[0]?.price), 151);
+  });
 });

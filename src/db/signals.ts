@@ -19,10 +19,42 @@ export async function insertSignal(signal: Signal): Promise<void> {
       ${botId}, ${signal.at.toISOString()}::timestamptz, ${signal.pair}, ${signal.side},
       ${signal.price}, ${signal.reason}, ${emaFast}, ${emaSlow}, ${rsi}, ${trendEma}, ${atr}, ${adx}
     )
+    ON CONFLICT (bot_id, pair, "at") DO NOTHING
   `;
 }
 
-export async function deleteSignalsForBot(botId: string): Promise<void> {
+export interface SignalRow {
+  at: string;
+  pair: string;
+  side: string;
+  price: number;
+  reason: string;
+  emaFast: number | null;
+  emaSlow: number | null;
+  rsi: number | null;
+  trendEma: number | null;
+  atr: number | null;
+  adx: number | null;
+}
+
+/** Insert signals for a bot, skipping rows that already exist (DuckDB import). */
+export async function insertSignalsForBot(botId: string, rows: SignalRow[]): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
   const sql = getSql();
-  await sql`DELETE FROM market.signals WHERE bot_id = ${botId}`;
+  await sql.begin(async (tx) => {
+    for (const row of rows) {
+      await tx`
+        INSERT INTO market.signals (
+          bot_id, "at", pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx
+        )
+        VALUES (
+          ${botId}, ${row.at}::timestamptz, ${row.pair}, ${row.side}, ${row.price}, ${row.reason},
+          ${row.emaFast}, ${row.emaSlow}, ${row.rsi}, ${row.trendEma}, ${row.atr}, ${row.adx}
+        )
+        ON CONFLICT (bot_id, pair, "at") DO NOTHING
+      `;
+    }
+  });
 }

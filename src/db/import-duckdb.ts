@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { replaceBotLedgers, type BotMode } from "./bot.js";
 import { upsertCandles } from "./candles.js";
-import { getBotId, getSql } from "./db.js";
+import { getBotId } from "./db.js";
 import { upsertPool } from "./pools.js";
-import { deleteSignalsForBot } from "./signals.js";
+import { insertSignalsForBot } from "./signals.js";
 import { upsertToken } from "./tokens.js";
 import type { Candle, Timeframe } from "../types.js";
 import type { PersistedLivePortfolio, PersistedLiveTrade } from "../live/store.js";
@@ -139,10 +139,47 @@ export async function importDuckdb(path = DEFAULT_DUCKDB): Promise<void> {
   const instance = await DuckDBInstance.fromCache(path);
   const conn = await instance.connect();
 
-  const tokenRows = await readRows(
-    conn,
-    `SELECT symbol, mint, decimals, pool_address FROM solana.tokens`,
-  );
+  let tokenRows: Record<string, unknown>[];
+  let candleRows: Record<string, unknown>[];
+  let signalRows: Record<string, unknown>[];
+  let paperPortfolioRows: Record<string, unknown>[];
+  let paperTradeRows: Record<string, unknown>[];
+  let livePortfolioRows: Record<string, unknown>[];
+  let liveTradeRows: Record<string, unknown>[];
+  try {
+    tokenRows = await readRows(
+      conn,
+      `SELECT symbol, mint, decimals, pool_address FROM solana.tokens`,
+    );
+    candleRows = await readRows(
+      conn,
+      `SELECT symbol, timeframe, time, open, high, low, close, volume FROM candles`,
+    );
+    signalRows = await readRows(
+      conn,
+      `SELECT "at", pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx FROM signals`,
+    );
+    paperPortfolioRows = await readRows(
+      conn,
+      `SELECT pair, cash_usdc, realized_pnl, position_side, position_size, entry_price, opened_at FROM paper.portfolios`,
+    );
+    paperTradeRows = await readRows(
+      conn,
+      `SELECT pair, side, price, size, realized_pnl, "at", simulated FROM paper.trades`,
+    );
+    livePortfolioRows = await readRows(
+      conn,
+      `SELECT pair, cash_usdc, realized_pnl, position_side, position_size, entry_price, opened_at FROM live.portfolios`,
+    );
+    liveTradeRows = await readRows(
+      conn,
+      `SELECT pair, side, price, size, realized_pnl, "at", simulated, tx_signature FROM live.trades`,
+    );
+  } finally {
+    conn.closeSync();
+    instance.closeSync();
+  }
+
   const tokens: DuckToken[] = tokenRows.map((row) => {
     const token: DuckToken = {
       symbol: asString(row["symbol"], "symbol"),
@@ -155,10 +192,6 @@ export async function importDuckdb(path = DEFAULT_DUCKDB): Promise<void> {
     return token;
   });
 
-  const candleRows = await readRows(
-    conn,
-    `SELECT symbol, timeframe, time, open, high, low, close, volume FROM candles`,
-  );
   const candles: DuckCandleRow[] = candleRows.map((row) => ({
     symbol: asString(row["symbol"], "symbol"),
     timeframe: asString(row["timeframe"], "timeframe"),
@@ -239,64 +272,39 @@ export async function importDuckdb(path = DEFAULT_DUCKDB): Promise<void> {
     candleCount += list.length;
   }
 
-  await deleteSignalsForBot(botId);
-  const signalRows = await readRows(
-    conn,
-    `SELECT "at", pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx FROM signals`,
-  );
-  const sql = getSql();
-  for (const row of signalRows) {
+  const signals = signalRows.flatMap((row) => {
     const at = timestampToIso(row["at"]);
     if (at === undefined) {
-      continue;
+      return [];
     }
-    await sql`
-      INSERT INTO market.signals (
-        bot_id, "at", pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx
-      )
-      VALUES (
-        ${botId}, ${at}::timestamptz, ${asString(row["pair"], "pair")},
-        ${asString(row["side"], "side")}, ${Number(row["price"])}, ${asString(row["reason"], "reason")},
-        ${row["ema_fast"] != null ? Number(row["ema_fast"]) : null},
-        ${row["ema_slow"] != null ? Number(row["ema_slow"]) : null},
-        ${row["rsi"] != null ? Number(row["rsi"]) : null},
-        ${row["trend_ema"] != null ? Number(row["trend_ema"]) : null},
-        ${row["atr"] != null ? Number(row["atr"]) : null},
-        ${row["adx"] != null ? Number(row["adx"]) : null}
-      )
-    `;
-  }
+    return [
+      {
+        at,
+        pair: asString(row["pair"], "pair"),
+        side: asString(row["side"], "side"),
+        price: Number(row["price"]),
+        reason: asString(row["reason"], "reason"),
+        emaFast: row["ema_fast"] != null ? Number(row["ema_fast"]) : null,
+        emaSlow: row["ema_slow"] != null ? Number(row["ema_slow"]) : null,
+        rsi: row["rsi"] != null ? Number(row["rsi"]) : null,
+        trendEma: row["trend_ema"] != null ? Number(row["trend_ema"]) : null,
+        atr: row["atr"] != null ? Number(row["atr"]) : null,
+        adx: row["adx"] != null ? Number(row["adx"]) : null,
+      },
+    ];
+  });
+  await insertSignalsForBot(botId, signals);
 
-  const paperPortfolios = portfoliosFromRows(
-    await readRows(
-      conn,
-      `SELECT pair, cash_usdc, realized_pnl, position_side, position_size, entry_price, opened_at FROM paper.portfolios`,
-    ),
-    await readRows(
-      conn,
-      `SELECT pair, side, price, size, realized_pnl, "at", simulated FROM paper.trades`,
-    ),
-    true,
-  );
+  const paperPortfolios = portfoliosFromRows(paperPortfolioRows, paperTradeRows, true);
   await replaceBotLedgers(botId, "paper" satisfies BotMode, paperPortfolios);
 
-  const livePortfolios = portfoliosFromRows(
-    await readRows(
-      conn,
-      `SELECT pair, cash_usdc, realized_pnl, position_side, position_size, entry_price, opened_at FROM live.portfolios`,
-    ),
-    await readRows(
-      conn,
-      `SELECT pair, side, price, size, realized_pnl, "at", simulated, tx_signature FROM live.trades`,
-    ),
-    false,
-  );
+  const livePortfolios = portfoliosFromRows(livePortfolioRows, liveTradeRows, false);
   await replaceBotLedgers(botId, "live", livePortfolios);
 
   console.log(
     `Imported tokens=${tokens.length} pools=${pools} candles=${candleCount}` +
       (skippedCandles > 0 ? ` (skipped ${skippedCandles})` : "") +
-      ` signals=${signalRows.length} paper.portfolios=${paperPortfolios.length}` +
+      ` signals=${signals.length} paper.portfolios=${paperPortfolios.length}` +
       ` live.portfolios=${livePortfolios.length}`,
   );
 }

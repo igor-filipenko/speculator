@@ -223,7 +223,6 @@ async function runImportDuckdbCommand(argv: string[]): Promise<void> {
   await assertMigrationsApplied();
   const path = argv[0] && !argv[0].startsWith("-") ? argv[0] : defaultDuckdbPath();
   await importDuckdb(path);
-  await closeSql();
 }
 
 const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];
@@ -262,11 +261,20 @@ function validateStrategyFlag(value: string): StrategyMode {
   throw new Error(`Invalid --strategy "${value}". Valid options: ${VALID_STRATEGIES.join(", ")}`);
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(message);
-  process.exit(1);
-});
+void (async () => {
+  try {
+    await main();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(message);
+    process.exitCode = 1;
+  } finally {
+    await closeSql();
+  }
+  // One-shot commands return from main(); HTTP keep-alive (postgres.js, Solana RPC)
+  // would otherwise pin the event loop. Long-running watch/paper/trade never return.
+  process.exit(process.exitCode ?? 0);
+})();
 
 /**
  * Notify Telegram on SIGINT/SIGTERM and uncaught crashes, then exit.
@@ -294,6 +302,8 @@ function installLifecycleNotifiers(telegram: Telegram): ShutdownCb {
       code: exitCode,
       reason,
     });
+
+    await closeSql();
 
     // Allow a clean exit after --once without forcing process.exit (lets main resolve).
     if (reason === "once complete") {

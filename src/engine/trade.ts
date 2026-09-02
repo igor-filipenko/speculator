@@ -34,7 +34,11 @@ export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime>
     );
   }
 
-  const connection = new Connection(config.solanaRpcUrl, "confirmed");
+  const connection = new Connection(config.solanaRpcUrl, {
+    commitment: "confirmed",
+    // Disable the default keep-alive Agent so one-shot `pnpm wallet` can exit.
+    httpAgent: false,
+  });
   const balances = new WalletBalances(connection, keypair.publicKey);
   const portfolios = await LivePortfolio.load(config.pairs, balances, {
     solReserve: config.liveSolReserveSol,

@@ -50,8 +50,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 
   const ok = await telegram.notify({ type: "start" });
   if (!ok) {
-    console.error("Failed to send start message to Telegram");
-    process.exit(1);
+    throw new Error("Failed to send start message to Telegram");
   }
 
   const tick = async (): Promise<void> => {

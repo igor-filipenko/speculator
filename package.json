@@ -39,7 +39,7 @@
     "dbmate": "2.35.1",
     "dotenv": "^16.6.1",
     "grammy": "^1.45.1",
-    "postgres": "3.4.9",
+    "pg": "8.23.0",
     "ts-pattern": "5.9.0",
     "zod": "^4.0.5"
   },
@@ -47,6 +47,7 @@
     "@eslint/js": "^10.0.1",
     "@testcontainers/postgresql": "12.1.0",
     "@types/node": "^24.0.15",
+    "@types/pg": "8.23.1",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "^17.8.0",

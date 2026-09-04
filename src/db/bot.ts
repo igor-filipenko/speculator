@@ -1,7 +1,7 @@
-import type postgres from "postgres";
+import type { PoolClient } from "pg";
 import type { PersistedLivePortfolio, PersistedLiveTrade } from "../live/store.js";
 import type { PersistedPortfolio, PersistedTrade } from "../paper/store.js";
-import { getBotId, getSql } from "./db.js";
+import { getBotId, query, queryWith, withTransaction } from "./db.js";
 
 export type BotMode = "paper" | "live";
 
@@ -65,12 +65,14 @@ function rowToPosition(row: Record<string, unknown>): PersistedLivePortfolio["po
 }
 
 export async function portfolioCount(botId: string, mode: BotMode): Promise<number> {
-  const sql = getSql();
-  const rows = await sql<{ cnt: string | number | bigint }[]>`
+  const rows = await query<{ cnt: string | number | bigint }>(
+    `
     SELECT count(*)::BIGINT AS cnt
     FROM bot.portfolios
-    WHERE bot_id = ${botId} AND mode = ${mode}
-  `;
+    WHERE bot_id = $1 AND mode = $2
+    `,
+    [botId, mode],
+  );
   return rows[0] ? Number(rows[0].cnt) : 0;
 }
 
@@ -78,25 +80,30 @@ export async function loadAllPortfolios(
   botId: string,
   mode: BotMode,
 ): Promise<Record<string, PersistedLivePortfolio>> {
-  const sql = getSql();
-  const portfolioRows = await sql<Record<string, unknown>[]>`
+  const portfolioRows = await query<Record<string, unknown>>(
+    `
     SELECT
       pair, cash_usdc, realized_pnl,
       position_side, position_size, entry_price, opened_at, updated_at
     FROM bot.portfolios
-    WHERE bot_id = ${botId} AND mode = ${mode}
+    WHERE bot_id = $1 AND mode = $2
     ORDER BY pair
-  `;
+    `,
+    [botId, mode],
+  );
   if (portfolioRows.length === 0) {
     return {};
   }
 
-  const tradeRows = await sql<Record<string, unknown>[]>`
+  const tradeRows = await query<Record<string, unknown>>(
+    `
     SELECT pair, side, price, size, realized_pnl, "at", simulated, tx_signature
     FROM bot.trades
-    WHERE bot_id = ${botId} AND mode = ${mode}
+    WHERE bot_id = $1 AND mode = $2
     ORDER BY "at", id
-  `;
+    `,
+    [botId, mode],
+  );
 
   const tradesByPair = new Map<string, PersistedLiveTrade[]>();
   for (const row of tradeRows) {
@@ -119,33 +126,68 @@ export async function loadAllPortfolios(
   return portfolios;
 }
 
+const UPSERT_PORTFOLIO_SQL = `
+  INSERT INTO bot.portfolios (
+    bot_id, mode, pair, cash_usdc, realized_pnl,
+    position_side, position_size, entry_price, opened_at, updated_at
+  )
+  VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, now()
+  )
+  ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
+    cash_usdc = EXCLUDED.cash_usdc,
+    realized_pnl = EXCLUDED.realized_pnl,
+    position_side = EXCLUDED.position_side,
+    position_size = EXCLUDED.position_size,
+    entry_price = EXCLUDED.entry_price,
+    opened_at = EXCLUDED.opened_at,
+    updated_at = now()
+`;
+
+const INSERT_TRADE_SQL = `
+  INSERT INTO bot.trades (
+    bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
+  )
+  VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10
+  )
+`;
+
+function portfolioValues(botId: string, mode: BotMode, portfolio: PersistedLivePortfolio) {
+  return [
+    botId,
+    mode,
+    portfolio.position.pair,
+    portfolio.cashUsdc,
+    portfolio.realizedPnl,
+    portfolio.position.side,
+    portfolio.position.size,
+    portfolio.position.entryPrice,
+    portfolio.position.openedAt ?? null,
+  ] as const;
+}
+
+function tradeValues(botId: string, mode: BotMode, trade: PersistedLiveTrade) {
+  return [
+    botId,
+    mode,
+    trade.pair,
+    trade.side,
+    trade.price,
+    trade.size,
+    trade.realizedPnl ?? null,
+    trade.at,
+    trade.simulated,
+    trade.txSignature ?? null,
+  ] as const;
+}
+
 export async function upsertPortfolio(
   botId: string,
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
 ): Promise<void> {
-  const sql = getSql();
-  const openedAt = portfolio.position.openedAt ?? null;
-  await sql`
-    INSERT INTO bot.portfolios (
-      bot_id, mode, pair, cash_usdc, realized_pnl,
-      position_side, position_size, entry_price, opened_at, updated_at
-    )
-    VALUES (
-      ${botId}, ${mode}, ${portfolio.position.pair},
-      ${portfolio.cashUsdc}, ${portfolio.realizedPnl},
-      ${portfolio.position.side}, ${portfolio.position.size},
-      ${portfolio.position.entryPrice}, ${openedAt}::timestamptz, now()
-    )
-    ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
-      cash_usdc = EXCLUDED.cash_usdc,
-      realized_pnl = EXCLUDED.realized_pnl,
-      position_side = EXCLUDED.position_side,
-      position_size = EXCLUDED.position_size,
-      entry_price = EXCLUDED.entry_price,
-      opened_at = EXCLUDED.opened_at,
-      updated_at = now()
-  `;
+  await query(UPSERT_PORTFOLIO_SQL, [...portfolioValues(botId, mode, portfolio)]);
 }
 
 export async function insertTrade(
@@ -153,64 +195,24 @@ export async function insertTrade(
   mode: BotMode,
   trade: PersistedLiveTrade,
 ): Promise<void> {
-  const sql = getSql();
-  const realizedPnl = trade.realizedPnl ?? null;
-  const txSignature = trade.txSignature ?? null;
-  await sql`
-    INSERT INTO bot.trades (
-      bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
-    )
-    VALUES (
-      ${botId}, ${mode}, ${trade.pair}, ${trade.side}, ${trade.price}, ${trade.size},
-      ${realizedPnl}, ${trade.at}::timestamptz, ${trade.simulated}, ${txSignature}
-    )
-  `;
+  await query(INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade)]);
 }
 
 async function writePortfolio(
-  tx: postgres.TransactionSql,
+  client: PoolClient,
   botId: string,
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
 ): Promise<void> {
   const pair = portfolio.position.pair;
-  const openedAt = portfolio.position.openedAt ?? null;
-  await tx`
-    INSERT INTO bot.portfolios (
-      bot_id, mode, pair, cash_usdc, realized_pnl,
-      position_side, position_size, entry_price, opened_at, updated_at
-    )
-    VALUES (
-      ${botId}, ${mode}, ${pair},
-      ${portfolio.cashUsdc}, ${portfolio.realizedPnl},
-      ${portfolio.position.side}, ${portfolio.position.size},
-      ${portfolio.position.entryPrice}, ${openedAt}::timestamptz, now()
-    )
-    ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
-      cash_usdc = EXCLUDED.cash_usdc,
-      realized_pnl = EXCLUDED.realized_pnl,
-      position_side = EXCLUDED.position_side,
-      position_size = EXCLUDED.position_size,
-      entry_price = EXCLUDED.entry_price,
-      opened_at = EXCLUDED.opened_at,
-      updated_at = now()
-  `;
-  await tx`
-    DELETE FROM bot.trades
-    WHERE bot_id = ${botId} AND mode = ${mode} AND pair = ${pair}
-  `;
+  await queryWith(client, UPSERT_PORTFOLIO_SQL, [...portfolioValues(botId, mode, portfolio)]);
+  await queryWith(client, `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2 AND pair = $3`, [
+    botId,
+    mode,
+    pair,
+  ]);
   for (const trade of portfolio.trades) {
-    const realizedPnl = trade.realizedPnl ?? null;
-    const txSignature = trade.txSignature ?? null;
-    await tx`
-      INSERT INTO bot.trades (
-        bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
-      )
-      VALUES (
-        ${botId}, ${mode}, ${trade.pair}, ${trade.side}, ${trade.price}, ${trade.size},
-        ${realizedPnl}, ${trade.at}::timestamptz, ${trade.simulated}, ${txSignature}
-      )
-    `;
+    await queryWith(client, INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade)]);
   }
 }
 
@@ -219,9 +221,8 @@ export async function syncPortfolio(
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
 ): Promise<void> {
-  const sql = getSql();
-  await sql.begin(async (tx) => {
-    await writePortfolio(tx, botId, mode, portfolio);
+  await withTransaction(async (client) => {
+    await writePortfolio(client, botId, mode, portfolio);
   });
 }
 
@@ -230,12 +231,17 @@ export async function replaceBotLedgers(
   mode: BotMode,
   portfolios: PersistedLivePortfolio[],
 ): Promise<void> {
-  const sql = getSql();
-  await sql.begin(async (tx) => {
-    await tx`DELETE FROM bot.trades WHERE bot_id = ${botId} AND mode = ${mode}`;
-    await tx`DELETE FROM bot.portfolios WHERE bot_id = ${botId} AND mode = ${mode}`;
+  await withTransaction(async (client) => {
+    await queryWith(client, `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2`, [
+      botId,
+      mode,
+    ]);
+    await queryWith(client, `DELETE FROM bot.portfolios WHERE bot_id = $1 AND mode = $2`, [
+      botId,
+      mode,
+    ]);
     for (const portfolio of portfolios) {
-      await writePortfolio(tx, botId, mode, portfolio);
+      await writePortfolio(client, botId, mode, portfolio);
     }
   });
 }

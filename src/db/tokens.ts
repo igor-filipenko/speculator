@@ -1,4 +1,4 @@
-import { getSql } from "./db.js";
+import { query } from "./db.js";
 
 /** One row from `solana.tokens`. */
 export interface SolanaToken {
@@ -27,35 +27,40 @@ function rowToToken(row: Record<string, unknown>): SolanaToken {
 
 /** Load one token by symbol (e.g. SOL, USDC). */
 export async function getToken(symbol: string): Promise<SolanaToken | null> {
-  const sql = getSql();
-  const rows = await sql<Record<string, unknown>[]>`
+  const rows = await query<Record<string, unknown>>(
+    `
     SELECT symbol, mint, decimals
     FROM solana.tokens
-    WHERE symbol = ${symbol.trim().toUpperCase()}
-  `;
+    WHERE symbol = $1
+    `,
+    [symbol.trim().toUpperCase()],
+  );
   const row = rows[0];
   return row ? rowToToken(row) : null;
 }
 
 /** Load all known Solana tokens. */
 export async function listTokens(): Promise<SolanaToken[]> {
-  const sql = getSql();
-  const rows = await sql<Record<string, unknown>[]>`
+  const rows = await query<Record<string, unknown>>(
+    `
     SELECT symbol, mint, decimals
     FROM solana.tokens
     ORDER BY symbol
-  `;
+    `,
+  );
   return rows.map(rowToToken);
 }
 
 /** Upsert a token (import / tests). */
 export async function upsertToken(token: SolanaToken): Promise<void> {
-  const sql = getSql();
-  await sql`
+  await query(
+    `
     INSERT INTO solana.tokens (mint, symbol, decimals)
-    VALUES (${token.mint}, ${token.symbol}, ${token.decimals})
+    VALUES ($1, $2, $3)
     ON CONFLICT (mint) DO UPDATE SET
       symbol = EXCLUDED.symbol,
       decimals = EXCLUDED.decimals
-  `;
+    `,
+    [token.mint, token.symbol, token.decimals],
+  );
 }

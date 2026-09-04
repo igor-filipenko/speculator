@@ -1,4 +1,4 @@
-import { getSql } from "./db.js";
+import { query } from "./db.js";
 
 /** One row from `solana.pools`. */
 export interface SolanaPool {
@@ -35,8 +35,8 @@ function rowToPool(row: Record<string, unknown>): SolanaPool {
 
 /** Load the unique pool for BASE/QUOTE symbols. */
 export async function getPool(baseSymbol: string, quoteSymbol: string): Promise<SolanaPool | null> {
-  const sql = getSql();
-  const rows = await sql<Record<string, unknown>[]>`
+  const rows = await query<Record<string, unknown>>(
+    `
     SELECT
       p.address,
       p.base_mint,
@@ -48,9 +48,11 @@ export async function getPool(baseSymbol: string, quoteSymbol: string): Promise<
     FROM solana.pools p
     JOIN solana.tokens b ON b.mint = p.base_mint
     JOIN solana.tokens q ON q.mint = p.quote_mint
-    WHERE b.symbol = ${baseSymbol.trim().toUpperCase()}
-      AND q.symbol = ${quoteSymbol.trim().toUpperCase()}
-  `;
+    WHERE b.symbol = $1
+      AND q.symbol = $2
+    `,
+    [baseSymbol.trim().toUpperCase(), quoteSymbol.trim().toUpperCase()],
+  );
   const row = rows[0];
   return row ? rowToPool(row) : null;
 }
@@ -61,12 +63,14 @@ export async function upsertPool(pool: {
   baseMint: string;
   quoteMint: string;
 }): Promise<void> {
-  const sql = getSql();
-  await sql`
+  await query(
+    `
     INSERT INTO solana.pools (address, base_mint, quote_mint)
-    VALUES (${pool.address}, ${pool.baseMint}, ${pool.quoteMint})
+    VALUES ($1, $2, $3)
     ON CONFLICT (address) DO UPDATE SET
       base_mint = EXCLUDED.base_mint,
       quote_mint = EXCLUDED.quote_mint
-  `;
+    `,
+    [pool.address, pool.baseMint, pool.quoteMint],
+  );
 }

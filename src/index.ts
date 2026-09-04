@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { closeSql } from "./db/db.js";
+import { closeDbPool } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -256,9 +256,9 @@ void (async () => {
     console.error(message);
     process.exitCode = 1;
   } finally {
-    await closeSql();
+    await closeDbPool();
   }
-  // One-shot commands return from main(); HTTP keep-alive (postgres.js, Solana RPC)
+  // One-shot commands return from main(); open sockets (pg.Pool, Solana RPC)
   // would otherwise pin the event loop. Long-running watch/paper/trade never return.
   process.exit(process.exitCode ?? 0);
 })();
@@ -290,7 +290,7 @@ function installLifecycleNotifiers(telegram: Telegram): ShutdownCb {
       reason,
     });
 
-    await closeSql();
+    await closeDbPool();
 
     // Allow a clean exit after --once without forcing process.exit (lets main resolve).
     if (reason === "once complete") {

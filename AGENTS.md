@@ -27,7 +27,7 @@ src/
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/
-    db.ts               # pg.Pool (DATABASE_URL) + BOT_ID
+    db.ts               # pg.Pool (DATABASE_URL, DATABASE_POOL_*) + BOT_ID
     migrate.ts          # assert dbmate migrations are applied
     candles.ts          # market.candles (pool_address + timeframe)
     bot.ts              # bot.portfolios / bot.trades

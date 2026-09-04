@@ -31,23 +31,27 @@ pnpm migrate
 
 Edit `.env`:
 
-| Variable               | Meaning                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`             | `bollinger` (default) or `grid`                                                       |
-| `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                          |
-| `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
-| `BOT_ID`               | Unique id for this process (isolates paper/live ledgers and signals)                  |
-| `DATABASE_URL`         | TimescaleDB connection URI (required)                                                 |
-| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
-| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
-| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                       |
-| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when this `BOT_ID` has no paper rows)           |
-| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
-| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
-| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                                  |
-| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                                |
-| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
-| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                              |
+| Variable                              | Meaning                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `STRATEGY`                            | `bollinger` (default) or `grid`                                                       |
+| `HTF`                                 | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                          |
+| `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
+| `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
+| `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
+| `DATABASE_POOL_MAX`                   | pg.Pool max clients (default `2`)                                                     |
+| `DATABASE_POOL_MIN`                   | pg.Pool min clients (default `0`)                                                     |
+| `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `1000`)                                |
+| `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `5000`)                                      |
+| `JUPITER_API_KEY`                     | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
+| `WATCHLIST`                           | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
+| `POLL_INTERVAL_MS`                    | Poll interval (default `60000`)                                                       |
+| `PAPER_CASH_USDC`                     | Starting virtual USDC for paper mode (when this `BOT_ID` has no paper rows)           |
+| `WALLET_KEYPAIR_PATH`                 | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
+| `SOLANA_RPC_URL`                      | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
+| `SLIPPAGE_BPS`                        | Jupiter swap slippage (default `50`)                                                  |
+| `LIVE_SOL_RESERVE_SOL`                | Native SOL to keep for fees; not sold (default `0.05`)                                |
+| `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
+| `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                              |
 
 Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 

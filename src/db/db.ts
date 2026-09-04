@@ -25,29 +25,72 @@ export function readDatabaseUrl(): string {
   return url;
 }
 
+/** Low CLI defaults (pg-pool itself uses max 10, idle 10s, no connect timeout). */
+export const DEFAULT_POOL_MAX = 2;
+export const DEFAULT_POOL_MIN = 0;
+export const DEFAULT_POOL_IDLE_TIMEOUT_MS = 1_000;
+export const DEFAULT_POOL_CONNECTION_TIMEOUT_MS = 5_000;
+
+export interface DbPoolLimits {
+  max: number;
+  min: number;
+  idleTimeoutMillis: number;
+  connectionTimeoutMillis: number;
+}
+
+function envInt(name: string, fallback: number, min: number): number {
+  const raw = (process.env[name] ?? "").trim();
+  if (raw === "") {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be an integer >= ${min}`);
+  }
+  return value;
+}
+
+/** Pool size and timeouts from env, with low defaults. */
+export function readPoolLimits(): DbPoolLimits {
+  const max = envInt("DATABASE_POOL_MAX", DEFAULT_POOL_MAX, 1);
+  const min = envInt("DATABASE_POOL_MIN", DEFAULT_POOL_MIN, 0);
+  if (min > max) {
+    throw new Error(`DATABASE_POOL_MIN (${min}) must be <= DATABASE_POOL_MAX (${max})`);
+  }
+  return {
+    max,
+    min,
+    idleTimeoutMillis: envInt("DATABASE_POOL_IDLE_TIMEOUT_MS", DEFAULT_POOL_IDLE_TIMEOUT_MS, 0),
+    connectionTimeoutMillis: envInt(
+      "DATABASE_POOL_CONNECTION_TIMEOUT_MS",
+      DEFAULT_POOL_CONNECTION_TIMEOUT_MS,
+      0,
+    ),
+  };
+}
+
 /**
  * pg 8 does not retry without TLS when `sslmode=prefer` (unlike libpq).
  * Strip those modes from the URL and disable SSL so local Docker and Testcontainers work.
  * `require` / `verify-*` stay on the connection string so hosted TLS is unchanged.
  */
 function poolOptions(): PoolConfig {
+  const limits = readPoolLimits();
   const raw = readDatabaseUrl();
   const url = new URL(raw);
   const sslmode = (url.searchParams.get("sslmode") ?? "").toLowerCase();
-  if (sslmode === "disable" || sslmode === "allow" || sslmode === "prefer") {
-    url.searchParams.delete("sslmode");
-    return {
-      connectionString: url.toString(),
-      ssl: false,
-      max: 10,
-      allowExitOnIdle: true,
-    };
-  }
-  return {
-    connectionString: raw,
-    max: 10,
+  const sized: PoolConfig = {
+    max: limits.max,
+    min: limits.min,
+    idleTimeoutMillis: limits.idleTimeoutMillis,
+    connectionTimeoutMillis: limits.connectionTimeoutMillis,
     allowExitOnIdle: true,
   };
+  if (sslmode === "disable" || sslmode === "allow" || sslmode === "prefer") {
+    url.searchParams.delete("sslmode");
+    return { ...sized, connectionString: url.toString(), ssl: false };
+  }
+  return { ...sized, connectionString: raw };
 }
 
 /** Shared `pg.Pool` (singleton). */

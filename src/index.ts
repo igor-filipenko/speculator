@@ -1,7 +1,5 @@
 import { loadConfig } from "./config.js";
 import { closeSql } from "./db/db.js";
-import { defaultDuckdbPath, importDuckdb } from "./db/import-duckdb.js";
-import { assertMigrationsApplied } from "./db/migrate.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -29,11 +27,9 @@ function usage(): never {
   pnpm wallet         # sync live portfolio from chain and print balances
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
   pnpm migrate        # dbmate up (TimescaleDB)
-  pnpm import-duckdb  # Copy data/speculator.duckdb into TimescaleDB
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
-  tsx src/index.ts import-duckdb [path]
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend]
 
 Options:
@@ -49,7 +45,7 @@ Options:
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest", "import-duckdb"] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest"] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -98,9 +94,6 @@ async function main(): Promise<void> {
       return;
     case "wallet":
       await runWalletCommand();
-      return;
-    case "import-duckdb":
-      await runImportDuckdbCommand(rest);
       return;
   }
 }
@@ -217,12 +210,6 @@ async function runTradeCommand(argv: string[]): Promise<void> {
 async function runWalletCommand(): Promise<void> {
   const config = await loadConfig();
   await runWallet(config);
-}
-
-async function runImportDuckdbCommand(argv: string[]): Promise<void> {
-  await assertMigrationsApplied();
-  const path = argv[0] && !argv[0].startsWith("-") ? argv[0] : defaultDuckdbPath();
-  await importDuckdb(path);
 }
 
 const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];

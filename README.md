@@ -27,8 +27,6 @@ pnpm install
 cp .env.example .env
 docker compose up -d
 pnpm migrate
-# optional: copy an existing data/speculator.duckdb into Timescale
-# pnpm import-duckdb
 ```
 
 Edit `.env`:
@@ -177,11 +175,10 @@ All engines share one remote TimescaleDB. Give each process a distinct `BOT_ID` 
 ```bash
 docker compose up -d
 pnpm migrate
-pnpm import-duckdb          # optional: copy data/speculator.duckdb (needs BOT_ID)
 pnpm paper
 ```
 
-Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). `pnpm import-duckdb` upserts tokens/pools/candles, inserts this `BOT_ID`'s signals (skipping duplicates), and replaces paper/live ledgers, so re-running does not duplicate rows. Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
+Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
 
 ## Deploy (Ubuntu VPS + systemd)
 
@@ -246,7 +243,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-Both methods copy `dist/`, `migrations/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. After deploy, run `pnpm migrate` (and `pnpm import-duckdb` once if you still have a DuckDB file) against the shared database.
+Both methods copy `dist/`, `migrations/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. After deploy, run `pnpm migrate` against the shared database.
 
 #### A. From the VPS (git clone + `install-runtime`)
 

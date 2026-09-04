@@ -15,7 +15,6 @@
     "wallet": "tsx src/index.ts wallet",
     "backtest": "tsx src/index.ts backtest",
     "migrate": "dbmate --no-dump-schema --migrations-dir ./migrations up",
-    "import-duckdb": "tsx src/index.ts import-duckdb",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
@@ -29,13 +28,11 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "@duckdb/node-api",
       "canvas",
       "esbuild"
     ]
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.5-r.4",
     "@neabyte/candlestick-cli": "1.1.2",
     "@resvg/resvg-js": "2.6.2",
     "@solana/web3.js": "1.98.4",

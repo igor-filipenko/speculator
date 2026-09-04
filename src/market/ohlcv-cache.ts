@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import {
   deleteCandles,
   readCandles,
@@ -6,46 +5,39 @@ import {
   upsertCandles,
   type CandleRangeBounds,
 } from "../db/candles.js";
-import { defaultDataDir } from "../db/db.js";
 import type { Candle, Timeframe } from "../types.js";
 import { candleIntervalSeconds, fetchCandlesRange } from "./gecko-terminal.js";
 
 export interface LoadCachedCandlesOptions {
-  /** Pair symbol used as the DuckDB cache key (e.g. SOL/USDC). */
+  /** Pair symbol used in log lines (e.g. SOL/USDC). */
   symbol: string;
-  /** GeckoTerminal pool address used for live OHLCV fetches. */
+  /** GeckoTerminal pool address used as the cache key and for live OHLCV fetches. */
   poolAddress: string;
   timeframe: Timeframe;
   /** Inclusive lower bound (Unix seconds) for the series returned to the caller. */
   fromTime: number;
   /** Exclusive upper bound (Unix seconds). Defaults to now. */
   toTime?: number;
-  /** Directory containing `speculator.duckdb` (default: `data/` under cwd). */
-  dataDir?: string;
-  /** @deprecated Use `dataDir`. */
-  cacheDir?: string;
-  /** Ignore disk cache and refetch the full window. */
+  /** Ignore cache and refetch the full window. */
   forceRefresh?: boolean;
 }
 
 /**
- * Load OHLCV from DuckDB, fetch any missing range from GeckoTerminal, upsert incrementally,
+ * Load OHLCV from Timescale, fetch any missing range from GeckoTerminal, upsert incrementally,
  * and return candles in `[fromTime, toTime)`.
  */
 export async function loadCachedCandles(options: LoadCachedCandlesOptions): Promise<Candle[]> {
-  const dataDir = resolveDataDir(options);
   const toTime = options.toTime ?? Math.floor(Date.now() / 1000);
   const { symbol, poolAddress, timeframe } = options;
 
   if (options.forceRefresh) {
-    await deleteCandles(symbol, timeframe, dataDir);
+    await deleteCandles(poolAddress, timeframe);
   }
 
   const interval = candleIntervalSeconds(timeframe);
 
-  // Recompute gaps after each full pass. Stop when covered, or when Gecko has no more history.
   for (;;) {
-    const bounds = await readRangeBounds(symbol, timeframe, options.fromTime, toTime, dataDir);
+    const bounds = await readRangeBounds(poolAddress, timeframe, options.fromTime, toTime);
     const fetchWindows = missingWindows(bounds, options.fromTime, toTime, interval);
     if (fetchWindows.length === 0) {
       break;
@@ -66,12 +58,12 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
         fromTime: window.from,
         toTime: window.to,
         onPage: async (pageCandles) => {
-          await upsertCandles(symbol, timeframe, pageCandles, dataDir);
+          await upsertCandles(poolAddress, timeframe, pageCandles);
         },
       });
     }
 
-    const nextBounds = await readRangeBounds(symbol, timeframe, options.fromTime, toTime, dataDir);
+    const nextBounds = await readRangeBounds(poolAddress, timeframe, options.fromTime, toTime);
     const nextWindows = missingWindows(nextBounds, options.fromTime, toTime, interval);
     if (nextWindows.length === 0) {
       break;
@@ -91,23 +83,13 @@ export async function loadCachedCandles(options: LoadCachedCandlesOptions): Prom
     }
   }
 
-  const result = await readCandles(symbol, timeframe, options.fromTime, toTime, dataDir);
+  const result = await readCandles(poolAddress, timeframe, options.fromTime, toTime);
   if (result.length === 0) {
     throw new Error(
       `No OHLCV candles available for ${symbol} (${timeframe}) in the requested window`,
     );
   }
   return result;
-}
-
-function resolveDataDir(options: LoadCachedCandlesOptions): string {
-  if (options.dataDir !== undefined) {
-    return options.dataDir;
-  }
-  if (options.cacheDir !== undefined) {
-    return join(options.cacheDir, "..");
-  }
-  return defaultDataDir();
 }
 
 interface TimeWindow {

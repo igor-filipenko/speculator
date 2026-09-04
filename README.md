@@ -13,6 +13,7 @@ See [AGENTS.md](./AGENTS.md) for contributor/agent conventions.
 
 - **Node.js ≥24** (24 Active LTS recommended)
 - **pnpm** 10+ (Corepack recommended)
+- **Docker** (local Timescale via Compose; `pnpm test` database tests use Testcontainers)
 
 ```bash
 corepack enable
@@ -24,31 +25,33 @@ corepack prepare pnpm@10.14.0 --activate
 ```bash
 pnpm install
 cp .env.example .env
+docker compose up -d
+pnpm migrate
+# optional: copy an existing data/speculator.duckdb into Timescale
+# pnpm import-duckdb
 ```
 
 Edit `.env`:
 
-| Variable               | Meaning                                                                                |
-| ---------------------- | -------------------------------------------------------------------------------------- |
-| `STRATEGY`             | `bollinger` (default) or `grid`                                                        |
-| `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                           |
-| `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` \| `database` (default `paper`) |
-| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                             |
-| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` (default `SOL/USDC`)                   |
-| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                        |
-| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when no paper rows in DuckDB)                    |
-| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo         |
-| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)               |
-| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                                   |
-| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                                 |
-| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                           |
-| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                               |
-| `DUCKDB_MODE`          | `standalone` (default), `server`, or `client` — see DuckDB Modes                       |
-| `DUCKDB_URL`           | Quack URI for server (bind) or client (connect), e.g. `quack:localhost`                |
-| `DUCKDB_SECRET`        | Quack auth token — required when `DUCKDB_MODE` is `server` or `client`                 |
-| `DUCKDB_SSL`           | TLS for Quack client (`true`/`false`, default `false` = `disable_ssl`)                 |
+| Variable               | Meaning                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| `STRATEGY`             | `bollinger` (default) or `grid`                                                       |
+| `HTF`                  | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                          |
+| `MODE`                 | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
+| `BOT_ID`               | Unique id for this process (isolates paper/live ledgers and signals)                  |
+| `DATABASE_URL`         | TimescaleDB connection URI (required)                                                 |
+| `JUPITER_API_KEY`      | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
+| `WATCHLIST`            | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
+| `POLL_INTERVAL_MS`     | Poll interval (default `60000`)                                                       |
+| `PAPER_CASH_USDC`      | Starting virtual USDC for paper mode (when this `BOT_ID` has no paper rows)           |
+| `WALLET_KEYPAIR_PATH`  | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
+| `SOLANA_RPC_URL`       | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
+| `SLIPPAGE_BPS`         | Jupiter swap slippage (default `50`)                                                  |
+| `LIVE_SOL_RESERVE_SOL` | Native SOL to keep for fees; not sold (default `0.05`)                                |
+| `TELEGRAM_BOT_TOKEN`   | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
+| `TELEGRAM_CHAT_ID`     | Optional chat id for alerts and commands                                              |
 
-Set `MODE` in `.env` (`watch` | `paper` | `trade` | `database`), then:
+Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 
 ```bash
 pnpm start
@@ -58,7 +61,7 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 ### Telegram (optional)
 
-Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/DuckDB only), plus inbound commands from the configured chat:
+Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/Timescale only), plus inbound commands from the configured chat:
 
 | Command      | Reply                                     |
 | ------------ | ----------------------------------------- |
@@ -121,7 +124,7 @@ Live trading (on-chain Jupiter swaps; spends real tokens):
 pnpm trade
 ```
 
-Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `live.portfolios` / `live.trades` with the transaction signature.
+Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature.
 
 Print on-chain live portfolio (sync + snapshot, no swaps):
 
@@ -148,14 +151,14 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 
 Use either `--days` or `--from`/`--to`, not both.
 
-OHLCV candles are stored in **`data/speculator.duckdb`** (DuckDB, `candles` table) and reused on later runs. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
 | Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
 | Meme (future pairs) | 2.0%     | 0.30%    | same                        |
 
-The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state to DuckDB.
+The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
 
 Single iteration (smoke test):
 
@@ -165,48 +168,24 @@ pnpm exec tsx src/index.ts paper --once
 pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in the `signals` table in **`data/speculator.duckdb`**. Paper mode also persists cash, position, P&L, and trades there (`paper.portfolios` / `paper.trades`; restored on restart). Live mode persists the same shape in `live.portfolios` / `live.trades` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete those rows (or the DuckDB file). Mint/pool/decimals metadata for watchlist pairs comes from `solana.tokens` (seeded with SOL/USDC on first open). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/market`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in `market.signals`. Paper mode persists cash, position, P&L, and trades in `bot.portfolios` / `bot.trades` (`mode=paper`, scoped by `BOT_ID`; restored on restart). Live mode uses the same tables with `mode=live` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete that bot's paper rows. Mint/decimals come from `solana.tokens`; Gecko pool addresses from `solana.pools` (seeded with SOL/USDC on `pnpm migrate`). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/market`, `/chart`, and `/portfolio` from that chat.
 
-## DuckDB Modes
+## TimescaleDB
 
-By default (`DUCKDB_MODE=standalone`) every command opens `data/speculator.duckdb` directly. Two additional modes let you share a single database across multiple processes:
-
-| Mode         | What it does                                                                                                                                                                                                                                         |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `standalone` | Local file only — default, no network (existing behaviour).                                                                                                                                                                                          |
-| `server`     | Opens the local file **and** starts a [Quack](https://duckdb.org/docs/current/quack/overview.html) HTTP server. Any `paper`/`watch`/`backtest` command can serve simultaneously, or use the dedicated `pnpm database` command for a DB-only process. |
-| `client`     | Connects to a remote Quack server via `DUCKDB_URL`; no local file is opened. All SQL is forwarded transparently — no code changes needed.                                                                                                            |
-
-### Server process
+All engines share one remote TimescaleDB. Give each process a distinct `BOT_ID` so paper/live ledgers and signals do not overwrite each other. OHLCV in `market.candles` is global (not per bot).
 
 ```bash
-# .env
-DUCKDB_MODE=server
-DUCKDB_URL=quack:localhost          # or quack:0.0.0.0:9494 for remote access
-DUCKDB_SECRET=change-me-strong-token
+docker compose up -d
+pnpm migrate
+pnpm import-duckdb          # optional: copy data/speculator.duckdb (needs BOT_ID)
+pnpm paper
 ```
 
-```bash
-pnpm database          # DB-only server (no trading engine)
-# or
-pnpm paper             # paper bot AND quack server in one process
-```
-
-### Client process
-
-```bash
-# .env on the client machine
-DUCKDB_MODE=client
-DUCKDB_URL=quack:db-host:9494
-DUCKDB_SECRET=change-me-strong-token
-DUCKDB_SSL=false                    # default; set true to require TLS
-```
-
-All `paper`/`watch`/`backtest` commands work unchanged. Quack is a [DuckDB core extension](https://duckdb.org/docs/current/core_extensions/quack.html) (beta in v1.5.3; stable scheduled for v2.0.0, Sept 2026) and is auto-installed on first use.
+Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). `pnpm import-duckdb` upserts tokens/pools/candles, inserts this `BOT_ID`'s signals (skipping duplicates), and replaces paper/live ledgers, so re-running does not duplicate rows. Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
 
 ## Deploy (Ubuntu VPS + systemd)
 
-Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history and paper portfolio state live in `data/speculator.duckdb` under the app directory.
+Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history and paper portfolio state live in TimescaleDB (`DATABASE_URL`).
 
 ### 1. Install runtime on the VPS
 
@@ -267,7 +246,7 @@ sudo nano /opt/speculator/.env
 sudo chmod 600 /opt/speculator/.env
 ```
 
-Both methods copy `dist/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. `install-runtime` also preserves `data/speculator.duckdb`. `./deploy/deploy.sh` **stops** the service, then overwrites remote `data/speculator.duckdb` with the local file (and `.wal` if present).
+Both methods copy `dist/`, `migrations/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. After deploy, run `pnpm migrate` (and `pnpm import-duckdb` once if you still have a DuckDB file) against the shared database.
 
 #### A. From the VPS (git clone + `install-runtime`)
 
@@ -302,12 +281,11 @@ Runtime layout:
 ```text
 /opt/speculator/
   dist/
+  migrations/
   node_modules/
   package.json
   pnpm-lock.yaml
   .env
-  data/
-    speculator.duckdb
 ```
 
 ### 4. Monitor logs
@@ -319,16 +297,11 @@ journalctl -u speculator -f
 # Recent history
 journalctl -u speculator --since "1 hour ago"
 
-# DuckDB state (WorkingDirectory)
-ls -la /opt/speculator/data/speculator.duckdb
-
 # Inspect paper / tokens / signals (example)
-duckdb /opt/speculator/data/speculator.duckdb \
-  "SELECT pair, cash_usdc, position_side FROM paper.portfolios;"
-duckdb /opt/speculator/data/speculator.duckdb \
-  "SELECT symbol, mint, decimals, pool_address FROM solana.tokens;"
-duckdb /opt/speculator/data/speculator.duckdb \
-  "SELECT \"at\", pair, side, price FROM signals ORDER BY \"at\" DESC LIMIT 20;"
+psql "$DATABASE_URL" -c "SELECT pair, cash_usdc, position_side FROM bot.portfolios WHERE mode = 'paper';"
+psql "$DATABASE_URL" -c "SELECT symbol, mint, decimals FROM solana.tokens;"
+psql "$DATABASE_URL" -c "SELECT address, base_mint, quote_mint FROM solana.pools;"
+psql "$DATABASE_URL" -c "SELECT at, pair, side, price FROM market.signals ORDER BY at DESC LIMIT 20;"
 ```
 
 ### 5. Redeploy
@@ -347,7 +320,7 @@ git pull && pnpm install && pnpm build && \
 ./deploy/deploy.sh user@vps.example.com /opt/speculator
 ```
 
-The script stops `speculator`, copies runtime files and local `data/speculator.duckdb`, then starts the service again.
+The script stops `speculator`, copies runtime files (including `migrations/`), then starts the service again.
 
 Change `/opt/speculator` if you use another runtime path.
 
@@ -357,7 +330,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. HTF OHLCV is loaded via the DuckDB candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
+`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. HTF OHLCV is loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -387,7 +360,7 @@ src/
   index.ts                 # CLI
   config.ts                # zod + env
   types.ts
-  db/                      # DuckDB: candles, paper, live, signals
+  db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
   market/gecko-terminal.ts
   market/htf.ts            # HTF EMA stack + DMI trend + S/R
   market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
@@ -406,7 +379,7 @@ src/
   strategy/mode/grid-svg.ts      # grid SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
-  paper/store.ts           # paper load/save (DuckDB)
+  paper/store.ts           # paper load/save (Timescale bot.* mode=paper)
   live/portfolio.ts        # on-chain cash/size + ledger
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio

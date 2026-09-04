@@ -1,5 +1,7 @@
 import { loadConfig } from "./config.js";
-import { defaultDataDir, getConnection } from "./db/db.js";
+import { closeSql } from "./db/db.js";
+import { defaultDuckdbPath, importDuckdb } from "./db/import-duckdb.js";
+import { assertMigrationsApplied } from "./db/migrate.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -20,16 +22,18 @@ import type {
 
 function usage(): never {
   console.log(`Usage:
-  pnpm start      # engine from MODE in .env (watch | paper | trade | database)
-  pnpm watch      # signal recommendations only
-  pnpm paper      # recommendations + virtual portfolio
-  pnpm trade      # recommendations + live Jupiter swaps
-  pnpm wallet     # sync live portfolio from chain and print balances
-  pnpm backtest   # Replay OHLCV with emulated Jupiter fills
-  pnpm database   # Start DuckDB Quack server (requires DUCKDB_MODE=server in .env)
+  pnpm start          # engine from MODE in .env (watch | paper | trade)
+  pnpm watch          # signal recommendations only
+  pnpm paper          # recommendations + virtual portfolio
+  pnpm trade          # recommendations + live Jupiter swaps
+  pnpm wallet         # sync live portfolio from chain and print balances
+  pnpm backtest       # Replay OHLCV with emulated Jupiter fills
+  pnpm migrate        # dbmate up (TimescaleDB)
+  pnpm import-duckdb  # Copy data/speculator.duckdb into TimescaleDB
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
+  tsx src/index.ts import-duckdb [path]
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend]
 
 Options:
@@ -38,14 +42,14 @@ Options:
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (bollinger | grid; default: env STRATEGY)
-  --force-refresh   Ignore OHLCV disk cache and refetch from GeckoTerminal
+  --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
   --ignore-trend    Skip HTF market state (do not apply or log trend)
 `);
   process.exit(1);
 }
 
-const ENGINE_MODES = ["watch", "paper", "trade", "database"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest"] as const;
+const ENGINE_MODES = ["watch", "paper", "trade"] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest", "import-duckdb"] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -69,7 +73,7 @@ function resolveCommand(argv: string[]): { command: CliCommand; rest: string[] }
 
   const mode = (process.env["MODE"] ?? "paper").trim();
   if (!isEngineMode(mode)) {
-    console.error(`Invalid MODE "${mode}". Expected watch | paper | trade | database.`);
+    console.error(`Invalid MODE "${mode}". Expected watch | paper | trade.`);
     usage();
   }
   return { command: mode, rest: argv };
@@ -95,8 +99,8 @@ async function main(): Promise<void> {
     case "wallet":
       await runWalletCommand();
       return;
-    case "database":
-      await runDatabaseCommand();
+    case "import-duckdb":
+      await runImportDuckdbCommand(rest);
       return;
   }
 }
@@ -215,38 +219,10 @@ async function runWalletCommand(): Promise<void> {
   await runWallet(config);
 }
 
-async function runDatabaseCommand(): Promise<void> {
-  const mode = process.env["DUCKDB_MODE"];
-  if (mode !== "server") {
-    console.error(
-      `pnpm database requires DUCKDB_MODE=server (current: ${mode ?? "standalone (default)"}). Set it in .env and restart.`,
-    );
-    process.exit(1);
-  }
-
-  const url = process.env["DUCKDB_URL"] ?? "quack:localhost";
-  const conn = await getConnection(defaultDataDir());
-
-  let stopping = false;
-  const keepalive = setInterval(() => {
-    // keeps Node.js event loop alive while quack serves requests
-  }, 2_147_483_647);
-
-  const stop = async (reason: string, code: number): Promise<void> => {
-    if (stopping) return;
-    stopping = true;
-    clearInterval(keepalive);
-    try {
-      await conn.run(`CALL quack_stop('${url}')`);
-    } catch {
-      // ignore: quack may already be stopped
-    }
-    console.log(`[database] Stopped (${reason})`);
-    process.exit(code);
-  };
-
-  process.once("SIGINT", () => void stop("SIGINT", 130));
-  process.once("SIGTERM", () => void stop("SIGTERM", 0));
+async function runImportDuckdbCommand(argv: string[]): Promise<void> {
+  await assertMigrationsApplied();
+  const path = argv[0] && !argv[0].startsWith("-") ? argv[0] : defaultDuckdbPath();
+  await importDuckdb(path);
 }
 
 const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];
@@ -285,11 +261,20 @@ function validateStrategyFlag(value: string): StrategyMode {
   throw new Error(`Invalid --strategy "${value}". Valid options: ${VALID_STRATEGIES.join(", ")}`);
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(message);
-  process.exit(1);
-});
+void (async () => {
+  try {
+    await main();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(message);
+    process.exitCode = 1;
+  } finally {
+    await closeSql();
+  }
+  // One-shot commands return from main(); HTTP keep-alive (postgres.js, Solana RPC)
+  // would otherwise pin the event loop. Long-running watch/paper/trade never return.
+  process.exit(process.exitCode ?? 0);
+})();
 
 /**
  * Notify Telegram on SIGINT/SIGTERM and uncaught crashes, then exit.
@@ -317,6 +302,8 @@ function installLifecycleNotifiers(telegram: Telegram): ShutdownCb {
       code: exitCode,
       reason,
     });
+
+    await closeSql();
 
     // Allow a clean exit after --once without forcing process.exit (lets main resolve).
     if (reason === "once complete") {

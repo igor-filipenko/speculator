@@ -1,12 +1,10 @@
-import { getConnection } from "./db.js";
+import { getSql } from "./db.js";
 
 /** One row from `solana.tokens`. */
 export interface SolanaToken {
   symbol: string;
   mint: string;
   decimals: number;
-  /** GeckoTerminal pool address (set on base tokens used for OHLCV). */
-  poolAddress?: string;
 }
 
 function asString(value: unknown, field: string): string {
@@ -20,41 +18,44 @@ function asString(value: unknown, field: string): string {
 }
 
 function rowToToken(row: Record<string, unknown>): SolanaToken {
-  const token: SolanaToken = {
+  return {
     symbol: asString(row["symbol"], "symbol"),
     mint: asString(row["mint"], "mint"),
     decimals: Number(row["decimals"]),
   };
-  if (row["pool_address"] != null && row["pool_address"] !== "") {
-    token.poolAddress = asString(row["pool_address"], "pool_address");
-  }
-  return token;
 }
 
 /** Load one token by symbol (e.g. SOL, USDC). */
-export async function getToken(symbol: string, dataDir?: string): Promise<SolanaToken | null> {
-  const conn = await getConnection(dataDir);
-  const reader = await conn.runAndReadAll(
-    `
-    SELECT symbol, mint, decimals, pool_address
+export async function getToken(symbol: string): Promise<SolanaToken | null> {
+  const sql = getSql();
+  const rows = await sql<Record<string, unknown>[]>`
+    SELECT symbol, mint, decimals
     FROM solana.tokens
-    WHERE symbol = $symbol
-    `,
-    { symbol: symbol.trim().toUpperCase() },
-  );
-  await reader.readAll();
-  const row = reader.getRowObjectsJS()[0];
+    WHERE symbol = ${symbol.trim().toUpperCase()}
+  `;
+  const row = rows[0];
   return row ? rowToToken(row) : null;
 }
 
 /** Load all known Solana tokens. */
-export async function listTokens(dataDir?: string): Promise<SolanaToken[]> {
-  const conn = await getConnection(dataDir);
-  const reader = await conn.runAndReadAll(`
-    SELECT symbol, mint, decimals, pool_address
+export async function listTokens(): Promise<SolanaToken[]> {
+  const sql = getSql();
+  const rows = await sql<Record<string, unknown>[]>`
+    SELECT symbol, mint, decimals
     FROM solana.tokens
     ORDER BY symbol
-  `);
-  await reader.readAll();
-  return reader.getRowObjectsJS().map(rowToToken);
+  `;
+  return rows.map(rowToToken);
+}
+
+/** Upsert a token (import / tests). */
+export async function upsertToken(token: SolanaToken): Promise<void> {
+  const sql = getSql();
+  await sql`
+    INSERT INTO solana.tokens (mint, symbol, decimals)
+    VALUES (${token.mint}, ${token.symbol}, ${token.decimals})
+    ON CONFLICT (mint) DO UPDATE SET
+      symbol = EXCLUDED.symbol,
+      decimals = EXCLUDED.decimals
+  `;
 }

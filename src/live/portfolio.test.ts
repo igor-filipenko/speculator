@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { resetSpeculatorDbCache } from "../db/db.js";
 import { loadAllLivePortfolios } from "../db/live.js";
+import { useTestDb } from "../db/test-db.js";
 import { WSOL_MINT } from "../exchange/amounts.js";
 import type { BalanceSource } from "../exchange/wallet.js";
 import type { Order, PairConfig } from "../types.js";
@@ -60,17 +58,15 @@ function buyOrder(overrides: Partial<Order> = {}): Order {
 }
 
 describe("LivePortfolio", () => {
-  let dataDir: string;
   let balances: FakeBalances;
 
   before(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "speculator-live-"));
+    await useTestDb();
     balances = new FakeBalances();
   });
 
   after(async () => {
-    resetSpeculatorDbCache();
-    await rm(dataDir, { recursive: true, force: true });
+    await resetSpeculatorDbCache();
   });
 
   it("opens a long from a live fill and persists simulated=false + signature", async () => {
@@ -78,7 +74,7 @@ describe("LivePortfolio", () => {
     balances.tokens.set(USDC, 0);
     balances.tokens.set(WSOL_MINT, 0);
 
-    const portfolio = new LivePortfolio(PAIR, balances, { solReserve: 0.05, dataDir });
+    const portfolio = new LivePortfolio(PAIR, balances, { solReserve: 0.05 });
     const trade = await portfolio.applyOrder(buyOrder());
     assert.ok(trade);
     assert.equal(trade.simulated, false);
@@ -90,7 +86,7 @@ describe("LivePortfolio", () => {
     assert.equal(snap.position.entryPrice, 100);
     assert.ok(snap.position.size > 0);
 
-    const loaded = await loadAllLivePortfolios(dataDir);
+    const loaded = await loadAllLivePortfolios();
     const persisted = loaded["SOL/USDC"];
     assert.ok(persisted);
     assert.equal(persisted.trades.length, 1);
@@ -102,7 +98,7 @@ describe("LivePortfolio", () => {
     const extra = new FakeBalances();
     extra.native = 1.05;
     extra.tokens.set(USDC, 0);
-    const portfolio = new LivePortfolio(PAIR, extra, { solReserve: 0.05, dataDir });
+    const portfolio = new LivePortfolio(PAIR, extra, { solReserve: 0.05 });
     await portfolio.syncFromChain(200);
     const snap = portfolio.getSnapshot(200);
     assert.equal(snap.position.side, "long");
@@ -114,7 +110,7 @@ describe("LivePortfolio", () => {
     const reserved = new FakeBalances();
     reserved.native = 0.05;
     reserved.tokens.set(USDC, 50);
-    const portfolio = new LivePortfolio(PAIR, reserved, { solReserve: 0.05, dataDir });
+    const portfolio = new LivePortfolio(PAIR, reserved, { solReserve: 0.05 });
     await portfolio.syncFromChain(150);
     const snap = portfolio.getSnapshot(150);
     assert.equal(snap.position.side, "flat");

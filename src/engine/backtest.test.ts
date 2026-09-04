@@ -37,6 +37,7 @@ function makeConfig(cash = 1000): AppConfig {
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
     paperCashUsdc: cash,
+    botId: "test",
     solanaRpcUrl: "https://api.mainnet-beta.solana.com",
     slippageBps: 50,
     liveSolReserveSol: 0.05,

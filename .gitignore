@@ -12,6 +12,10 @@ dist-test/
 data/speculator.duckdb
 data/speculator.duckdb.wal
 
+# dbmate schema dump (we pass --no-dump-schema)
+db/schema.sql
+schema.sql
+
 # OS / editor
 .DS_Store
 .idea/

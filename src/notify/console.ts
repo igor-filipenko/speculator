@@ -80,7 +80,7 @@ export function logPortfolio(pair: string, snapshot: Snapshot): void {
   console.log(snapshot.simulated ? "simulated" : "live");
 }
 
-/** Persist one signal to DuckDB for later analysis. */
+/** Persist one signal to Timescale for later analysis. */
 export async function persistSignal(signal: Signal): Promise<void> {
   await insertSignal(signal);
 }

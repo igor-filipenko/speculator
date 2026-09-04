@@ -6,8 +6,8 @@
  *   node scripts/install-runtime.mjs /opt/speculator
  *   pnpm install-runtime /opt/speculator
  *
- * Copies dist/, package.json, pnpm-lock.yaml, .env.example.
- * Preserves existing .env and data/speculator.duckdb.
+ * Copies dist/, migrations/, package.json, pnpm-lock.yaml, .env.example.
+ * Preserves existing .env.
  * Runs `pnpm install --prod` in the target.
  */
 import { spawnSync } from "node:child_process";
@@ -25,6 +25,7 @@ const distSrc = join(repoRoot, "dist");
 const pkgSrc = join(repoRoot, "package.json");
 const lockSrc = join(repoRoot, "pnpm-lock.yaml");
 const envExampleSrc = join(repoRoot, ".env.example");
+const migrationsSrc = join(repoRoot, "migrations");
 
 if (!existsSync(distSrc)) {
   console.error("Missing dist/. Run `pnpm build` first.");
@@ -42,6 +43,12 @@ rmSync(distDest, { recursive: true, force: true });
 cpSync(distSrc, distDest, { recursive: true });
 copyFileSync(pkgSrc, join(target, "package.json"));
 copyFileSync(lockSrc, join(target, "pnpm-lock.yaml"));
+
+if (existsSync(migrationsSrc)) {
+  const migrationsDest = join(target, "migrations");
+  rmSync(migrationsDest, { recursive: true, force: true });
+  cpSync(migrationsSrc, migrationsDest, { recursive: true });
+}
 
 if (existsSync(envExampleSrc)) {
   copyFileSync(envExampleSrc, join(target, ".env.example"));

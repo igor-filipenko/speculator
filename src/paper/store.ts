@@ -41,16 +41,16 @@ export interface PersistablePortfolio {
 }
 
 /**
- * Load paper state from DuckDB (`paper.portfolios` / `paper.trades`).
+ * Load paper state from `bot.portfolios` / `bot.trades` (mode=paper).
  * Empty tables → null.
  */
-export async function loadPaperState(dataDir?: string): Promise<PersistedPaperState | null> {
-  const count = await paperPortfolioCount(dataDir);
+export async function loadPaperState(): Promise<PersistedPaperState | null> {
+  const count = await paperPortfolioCount();
   if (count === 0) {
     return null;
   }
 
-  const portfolios = await loadAllPaperPortfolios(dataDir);
+  const portfolios = await loadAllPaperPortfolios();
   if (Object.keys(portfolios).length === 0) {
     return null;
   }
@@ -63,14 +63,11 @@ export async function loadPaperState(dataDir?: string): Promise<PersistedPaperSt
 }
 
 /**
- * Persist paper portfolios into DuckDB (per-pair upsert + trade sync).
+ * Persist paper portfolios (per-pair upsert + trade sync).
  * Only pairs present in the map are written; other pairs are left untouched.
  */
-export async function savePaperState(
-  portfolios: Map<string, PersistablePortfolio>,
-  dataDir?: string,
-): Promise<void> {
+export async function savePaperState(portfolios: Map<string, PersistablePortfolio>): Promise<void> {
   for (const portfolio of portfolios.values()) {
-    await syncPaperPortfolio(portfolio.toPersisted(), dataDir);
+    await syncPaperPortfolio(portfolio.toPersisted());
   }
 }

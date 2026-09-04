@@ -1,42 +1,28 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
+import { assertMigrationsApplied } from "./db/migrate.js";
+import { getPool } from "./db/pools.js";
 import { getToken } from "./db/tokens.js";
 import type { HtfTimeframe, PairConfig, StrategyMode } from "./types.js";
 
 loadDotenv();
 
-const envSchema = z
-  .object({
-    STRATEGY: z.enum(["bollinger", "grid"]).default("bollinger"),
-    HTF: z.enum(["4h", "1d"]).default("4h"),
-    JUPITER_API_KEY: z.string().optional().default(""),
-    WATCHLIST: z.string().default("SOL/USDC"),
-    POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
-    PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
-    WALLET_KEYPAIR_PATH: z.string().optional().default(""),
-    SOLANA_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
-    SLIPPAGE_BPS: z.coerce.number().int().min(1).max(10_000).default(50),
-    LIVE_SOL_RESERVE_SOL: z.coerce.number().nonnegative().default(0.05),
-    TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
-    TELEGRAM_CHAT_ID: z.string().optional().default(""),
-    DUCKDB_MODE: z.enum(["standalone", "server", "client"]).default("standalone"),
-    DUCKDB_URL: z.string().default("quack:localhost"),
-    DUCKDB_SECRET: z.string().default(""),
-    DUCKDB_SSL: z.preprocess(
-      (v) => {
-        if (v === undefined || v === null || v === "") return "false";
-        if (typeof v !== "string") return "false";
-        return v.trim().toLowerCase();
-      },
-      z.enum(["true", "false", "1", "0"]),
-    ),
-  })
-  .refine(
-    (data) =>
-      (data.DUCKDB_MODE !== "server" && data.DUCKDB_MODE !== "client") ||
-      data.DUCKDB_SECRET.length > 0,
-    { message: "DUCKDB_SECRET is required when DUCKDB_MODE is server or client" },
-  );
+const envSchema = z.object({
+  STRATEGY: z.enum(["bollinger", "grid"]).default("bollinger"),
+  HTF: z.enum(["4h", "1d"]).default("4h"),
+  JUPITER_API_KEY: z.string().optional().default(""),
+  WATCHLIST: z.string().default("SOL/USDC"),
+  POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
+  WALLET_KEYPAIR_PATH: z.string().optional().default(""),
+  SOLANA_RPC_URL: z.string().default("https://api.mainnet-beta.solana.com"),
+  SLIPPAGE_BPS: z.coerce.number().int().min(1).max(10_000).default(50),
+  LIVE_SOL_RESERVE_SOL: z.coerce.number().nonnegative().default(0.05),
+  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+  TELEGRAM_CHAT_ID: z.string().optional().default(""),
+  DATABASE_URL: z.string().min(1),
+  BOT_ID: z.string().min(1),
+});
 
 export interface TelegramConfig {
   botToken: string;
@@ -52,6 +38,7 @@ export interface AppConfig {
   pollIntervalMs: number;
   paperCashUsdc: number;
   pairs: PairConfig[];
+  botId: string;
   /** Solana CLI JSON keypair path — required for trade mode only. */
   walletKeypairPath?: string;
   solanaRpcUrl: string;
@@ -78,7 +65,7 @@ export function isPublicSolanaRpc(url: string): boolean {
   return url === DEFAULT_SOLANA_RPC;
 }
 
-async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig> {
+async function resolvePair(symbol: string): Promise<PairConfig> {
   const normalized = symbol.trim().toUpperCase();
   const parts = normalized.split("/");
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -86,18 +73,19 @@ async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig
   }
   const [baseSymbol, quoteSymbol] = parts;
 
-  const base = await getToken(baseSymbol, dataDir);
+  const base = await getToken(baseSymbol);
   if (!base) {
     throw new Error(`Unknown base token "${baseSymbol}" (not in solana.tokens).`);
   }
-  const quote = await getToken(quoteSymbol, dataDir);
+  const quote = await getToken(quoteSymbol);
   if (!quote) {
     throw new Error(`Unknown quote token "${quoteSymbol}" (not in solana.tokens).`);
   }
 
-  if (!base.poolAddress) {
+  const pool = await getPool(baseSymbol, quoteSymbol);
+  if (!pool) {
     throw new Error(
-      `No GeckoTerminal pool for ${normalized}: set pool_address on solana.tokens.${baseSymbol}.`,
+      `No GeckoTerminal pool for ${normalized}: add a solana.pools row for ${baseSymbol}/${quoteSymbol}.`,
     );
   }
 
@@ -107,16 +95,18 @@ async function resolvePair(symbol: string, dataDir?: string): Promise<PairConfig
     quoteMint: quote.mint,
     baseDecimals: base.decimals,
     quoteDecimals: quote.decimals,
-    geckoPoolAddress: base.poolAddress,
+    geckoPoolAddress: pool.address,
   };
 }
 
-export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppConfig> {
+export async function loadConfig(): Promise<AppConfig> {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Invalid configuration: ${details}`);
   }
+
+  await assertMigrationsApplied();
 
   const env = parsed.data;
   const watchlist = env.WATCHLIST.split(",")
@@ -127,9 +117,7 @@ export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppC
     throw new Error("WATCHLIST must contain at least one pair");
   }
 
-  const pairs = await Promise.all(
-    watchlist.map((symbol) => resolvePair(symbol, overrides?.dataDir)),
-  );
+  const pairs = await Promise.all(watchlist.map((symbol) => resolvePair(symbol)));
 
   const botToken = env.TELEGRAM_BOT_TOKEN.trim();
   const chatId = env.TELEGRAM_CHAT_ID.trim();
@@ -144,6 +132,7 @@ export async function loadConfig(overrides?: { dataDir?: string }): Promise<AppC
     pollIntervalMs: env.POLL_INTERVAL_MS,
     paperCashUsdc: env.PAPER_CASH_USDC,
     pairs,
+    botId: env.BOT_ID.trim(),
     solanaRpcUrl: env.SOLANA_RPC_URL.trim() || DEFAULT_SOLANA_RPC,
     slippageBps: env.SLIPPAGE_BPS,
     liveSolReserveSol: env.LIVE_SOL_RESERVE_SOL,

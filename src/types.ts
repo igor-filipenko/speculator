@@ -6,12 +6,17 @@ export type PositionSide = "flat" | "long";
 
 export type StrategyMode = "bollinger" | "grid";
 
-export type Timeframe = "15m" | "4h" | "1d";
+export type Timeframe = "15m" | "1h" | "4h" | "1d";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";
 
+/** 1h bars used for {@link MarketIndicators} volatility (not the HTF trend). */
+export type MtfTimeframe = "1h";
+
 export type Trend = "bullish" | "bearish" | "flat" | "unknown";
+
+export type Volatility = "high" | "low" | "squeeze" | "unknown";
 
 /** Clustered HTF swing high/low used as support or resistance. */
 export interface PriceLevel {
@@ -25,13 +30,9 @@ export interface PriceLevel {
   lastTime: number;
 }
 
-/** HTF regime snapshot. Does not pick trades (yet). */
-export interface MarketIndicators {
-  pair: string;
+/** HTF trend / S/R diagnostics (chart candles live here). */
+export interface HtfSnapshot {
   timeframe: HtfTimeframe;
-  at: Date;
-  price: number;
-  trend: Trend;
   ema200?: number;
   ema50?: number;
   adx?: number;
@@ -52,6 +53,31 @@ export interface MarketIndicators {
   levels?: PriceLevel[];
   /** HTF OHLCV used to compute this snapshot. */
   candles: Candle[];
+}
+
+/** 1h volatility diagnostics (no candle dump). */
+export interface MtfSnapshot {
+  timeframe: MtfTimeframe;
+  atr?: number;
+  /** ATR / price on 1h. */
+  atrPct?: number;
+  bbMid?: number;
+  bbUpper?: number;
+  bbLower?: number;
+  kcMid?: number;
+  kcUpper?: number;
+  kcLower?: number;
+}
+
+/** HTF trend + S/R snapshot; 1h volatility is in {@link MarketIndicators.volatility}. */
+export interface MarketIndicators {
+  pair: string;
+  price: number;
+  trend: Trend;
+  volatility: Volatility;
+  htf?: HtfSnapshot;
+  /** 1h volatility diagnostics. */
+  mtf?: MtfSnapshot;
 }
 
 export interface Candle {
@@ -239,14 +265,25 @@ export interface RiskManager {
 
 /**
  * HTF market indicators plus the active strategy / risk (trend picks the risk manager).
- * Does not fetch candles — callers use {@link getRequiredCandles} then {@link evaluate}.
+ * Does not fetch candles — callers use {@link getRequiredHtfCandles} /
+ * {@link getRequiredMtfCandles} then {@link evaluate}.
  */
 export interface StrategyManager {
   getActiveStrategy(): Strategy;
   getActiveRiskManager(): RiskManager;
-  getRequiredCandles(): RequiredCandles;
-  evaluate(pair: string, candles: Candle[], price: number, at: Date): MarketIndicators;
-  /** Sync risk manager to {@link MarketIndicators.trend}. Returns true when the trend changed. */
+  getRequiredHtfCandles(): RequiredCandles;
+  getRequiredMtfCandles(): RequiredCandles;
+  evaluate(
+    pair: string,
+    htfCandles: Candle[],
+    mtfCandles: Candle[],
+    price: number,
+    at: Date,
+  ): MarketIndicators;
+  /**
+   * Sync risk manager to {@link MarketIndicators.trend}.
+   * Returns true when trend or volatility changed.
+   */
   applyMarketIndicators(
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,

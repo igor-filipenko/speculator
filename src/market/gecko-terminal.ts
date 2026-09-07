@@ -28,6 +28,8 @@ function geckoTimeframe(timeframe: Timeframe): {
       return { path: "day", aggregate: 1 };
     case "4h":
       return { path: "hour", aggregate: 4 };
+    case "1h":
+      return { path: "hour", aggregate: 1 };
     case "15m":
       return { path: "minute", aggregate: 15 };
   }
@@ -40,6 +42,8 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
       return 24 * 60 * 60;
     case "4h":
       return 4 * 60 * 60;
+    case "1h":
+      return 60 * 60;
     case "15m":
       return 15 * 60;
   }
@@ -105,8 +109,8 @@ export interface FetchCandlesRangeOptions {
   toTime?: number;
   /** Max API pages to pull (each up to {@link PAGE_LIMIT} candles). */
   maxPages?: number;
-  /** Called after each successful page with the merged series so far (oldest→newest). */
-  onPage?: (candlesSoFar: Candle[]) => void | Promise<void>;
+  /** Called after each successful page with that page's candles (oldest→newest). */
+  onPage?: (pageCandles: Candle[]) => void | Promise<void>;
 }
 
 /**
@@ -167,9 +171,8 @@ export async function fetchCandlesRange(options: FetchCandlesRangeOptions): Prom
         `total=${byTime.size}`,
     );
 
-    const soFar = [...byTime.values()].sort((a, b) => a.time - b.time);
     if (onPage) {
-      await onPage(soFar);
+      await onPage(batch);
     }
 
     // No new bars (API returned an overlapping/identical page) — stop to avoid a loop.

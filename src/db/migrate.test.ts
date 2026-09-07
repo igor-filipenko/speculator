@@ -59,13 +59,21 @@ describe("migrations", () => {
     assert.equal(byCol.get("candles.timeframe"), "market.timeframe");
     assert.equal(byCol.get("portfolios.mode"), "bot.mode");
     assert.equal(byCol.get("trades.mode"), "bot.mode");
+
+    const labels = await query<{ label: string }>(
+      `SELECT unnest(enum_range(NULL::market.timeframe))::text AS label ORDER BY 1`,
+    );
+    assert.deepEqual(
+      labels.map((r) => r.label),
+      ["15m", "1h", "4h", "1d"].sort(),
+    );
   });
 
   it("is a no-op on a second runMigrations", async () => {
     const before = await query<{ version: string }>(
       `SELECT version FROM schema_migrations ORDER BY version`,
     );
-    assert.equal(before.length, 1);
+    assert.equal(before.length, 2);
 
     await runMigrations(process.env["DATABASE_URL"] ?? "");
 

@@ -5,26 +5,39 @@ import { formatMarketIndicatorsListMessage, formatMarketMessage } from "./telegr
 
 const sample: MarketIndicators = {
   pair: "SOL/USDC",
-  timeframe: "4h",
-  at: new Date("2026-01-01T00:00:00.000Z"),
   price: 123.456789,
   trend: "bullish",
-  ema200: 120,
-  ema50: 122,
-  adx: 28.4,
-  plusDi: 32.1,
-  minusDi: 18.4,
-  atr: 4.12,
-  atrPct: 0.033,
-  distEma200Pct: 0.0288,
-  support: 118.5,
-  resistance: 130.4,
-  levels: [
-    { price: 118.5, kind: "support", touches: 3, lastTime: 1_700_000_000, volume: 10 },
-    { price: 115.2, kind: "support", touches: 2, lastTime: 1_699_000_000, volume: 8 },
-    { price: 130.4, kind: "resistance", touches: 2, lastTime: 1_700_100_000, volume: 9 },
-  ],
-  candles: [],
+  volatility: "low",
+  htf: {
+    timeframe: "4h",
+    ema200: 120,
+    ema50: 122,
+    adx: 28.4,
+    plusDi: 32.1,
+    minusDi: 18.4,
+    atr: 4.12,
+    atrPct: 0.033,
+    distEma200Pct: 0.0288,
+    support: 118.5,
+    resistance: 130.4,
+    levels: [
+      { price: 118.5, kind: "support", touches: 3, lastTime: 1_700_000_000, volume: 10 },
+      { price: 115.2, kind: "support", touches: 2, lastTime: 1_699_000_000, volume: 8 },
+      { price: 130.4, kind: "resistance", touches: 2, lastTime: 1_700_100_000, volume: 9 },
+    ],
+    candles: [],
+  },
+  mtf: {
+    timeframe: "1h",
+    atr: 1.2,
+    atrPct: 0.01,
+    bbMid: 123,
+    bbUpper: 125.4,
+    bbLower: 120.6,
+    kcMid: 123,
+    kcUpper: 124.5,
+    kcLower: 121.5,
+  },
 };
 
 describe("formatMarketIndicatorsListMessage", () => {
@@ -38,9 +51,18 @@ describe("formatMarketIndicatorsListMessage", () => {
     assert.match(text, /SOL\/USDC/);
     assert.match(text, /4h/);
     assert.match(text, /bullish/);
+    assert.match(text, /HTF/);
+    assert.match(text, /MTF 1h/);
+    assert.match(text, /Vol/);
+    assert.match(text, /low/);
     assert.match(text, /EMA200/);
+    assert.match(text, /EMA50/);
     assert.match(text, /ADX/);
+    assert.match(text, /32\.1/);
+    assert.match(text, /18\.4/);
     assert.match(text, /ATR/);
+    assert.match(text, /BB/);
+    assert.match(text, /KC/);
     assert.match(text, /Support/);
     assert.match(text, /118\.50/);
     assert.match(text, /Resistance/);

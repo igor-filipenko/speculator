@@ -1,5 +1,11 @@
 import { match } from "ts-pattern";
-import { evaluateMarketIndicators, htfParamsFor, type HtfParams } from "../market/htf.js";
+import {
+  evaluateMarketIndicators,
+  htfParamsFor,
+  mtfParamsFor,
+  type HtfParams,
+  type MtfParams,
+} from "../market/htf.js";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type {
   Candle,
@@ -11,11 +17,18 @@ import type {
   StrategyManager,
   StrategyMode,
   Trend,
+  Volatility,
 } from "../types.js";
 import { BollingerStrategy } from "./mode/bollinger.js";
 import { GridStrategy } from "./mode/grid.js";
 
-export { evaluateMarketIndicators, htfParamsFor, type HtfParams } from "../market/htf.js";
+export {
+  evaluateMarketIndicators,
+  htfParamsFor,
+  mtfParamsFor,
+  type HtfParams,
+  type MtfParams,
+} from "../market/htf.js";
 
 export interface SimpleStrategyManagerOptions {
   strategyMode: StrategyMode;
@@ -23,22 +36,22 @@ export interface SimpleStrategyManagerOptions {
 }
 
 /**
- * Active strategy is env/CLI. Both strategy AND risk manager are recreated on trend change:
- * - Grid: bull trend → {@link gridBullParamsFor} (wide TP + trail) + {@link GenericRiskManager}
- * - Grid: flat/bear/unknown → {@link gridParamsFor} (standard params) + appropriate manager
- * - Bollinger: same params for all trends; only risk manager switches
+ * Active strategy is env/CLI. Grid params follow HTF trend × 1h volatility;
+ * the risk manager still follows trend only.
  */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;
+  private readonly mtfParams: MtfParams;
   private readonly strategyMode: StrategyMode;
   private strategy: Strategy;
   private riskManager: RiskManager;
 
   constructor(options: SimpleStrategyManagerOptions) {
     this.strategyMode = options.strategyMode;
-    this.strategy = loadStrategy(options.strategyMode);
+    this.strategy = loadStrategy(options.strategyMode, "flat", "low");
     this.riskManager = new GenericRiskManager(this.strategy.getRiskParams());
     this.params = htfParamsFor(options.htf);
+    this.mtfParams = mtfParamsFor();
   }
 
   getActiveStrategy(): Strategy {
@@ -49,19 +62,33 @@ export class SimpleStrategyManager implements StrategyManager {
     return this.riskManager;
   }
 
-  getRequiredCandles(): RequiredCandles {
+  getRequiredHtfCandles(): RequiredCandles {
     const { timeframe, emaSlow, atrPeriod, adxPeriod } = this.params;
     const warm = Math.max(emaSlow, atrPeriod, adxPeriod * 2) + 20;
     return { timeframe, count: Math.max(warm, 220) };
   }
 
-  evaluate(pair: string, candles: Candle[], price: number, at: Date): MarketIndicators {
+  getRequiredMtfCandles(): RequiredCandles {
+    const { timeframe, atrPctLookback, kcPeriod, bbPeriod } = this.mtfParams;
+    const warm = Math.max(atrPctLookback + kcPeriod, bbPeriod) + 20;
+    return { timeframe, count: Math.max(warm, 120) };
+  }
+
+  evaluate(
+    pair: string,
+    htfCandles: Candle[],
+    mtfCandles: Candle[],
+    price: number,
+    at: Date,
+  ): MarketIndicators {
     return evaluateMarketIndicators({
       pair,
-      candles,
+      candles: htfCandles,
+      mtfCandles,
       price,
       at,
       params: this.params,
+      mtfParams: this.mtfParams,
     });
   }
 
@@ -69,11 +96,14 @@ export class SimpleStrategyManager implements StrategyManager {
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,
   ): boolean {
-    // Recreate strategy with trend-appropriate params (e.g. wider TP in bull mode for Grid).
-    // Bollinger returns the same params for every trend.
-    this.strategy = loadStrategy(this.strategyMode, indicators.trend);
+    // Recreate strategy from HTF trend × 1h volatility (Grid spacing / ATR stops).
+    // Bollinger ignores both; risk manager still follows trend.
+    this.strategy = loadStrategy(this.strategyMode, indicators.trend, indicators.volatility);
     this.riskManager = createRiskManager(indicators.trend, this.strategy);
-    return lastMarketIndicators?.trend !== indicators.trend;
+    return (
+      lastMarketIndicators?.trend !== indicators.trend ||
+      lastMarketIndicators?.volatility !== indicators.volatility
+    );
   }
 }
 
@@ -87,15 +117,14 @@ export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager
 }
 
 /**
- * Create a strategy for `mode` tuned for `trend`.
- * Grid uses bull-optimised params (wide TP + trail) when `trend === "bullish"`.
- * Bollinger and all other modes return the same strategy regardless of trend.
+ * Create a strategy for `mode` tuned for HTF `trend` and 1h `volatility`.
+ * Grid spacing / ATR stops scale with both; Bollinger ignores them.
  */
-export function loadStrategy(mode: StrategyMode, trend: Trend = "flat"): Strategy {
+export function loadStrategy(mode: StrategyMode, trend: Trend, volatility: Volatility): Strategy {
   switch (mode) {
     case "bollinger":
       return new BollingerStrategy();
     case "grid":
-      return new GridStrategy(trend);
+      return new GridStrategy(trend, volatility);
   }
 }

@@ -7,6 +7,7 @@ import type {
   Strategy,
   Timeframe,
   Trend,
+  Volatility,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
 import { adx, atr, ema } from "../indicators.js";
@@ -29,7 +30,7 @@ export interface GridParams {
   trendEmaPeriod: number;
 }
 
-export function gridParamsFor(trend: Trend): GridParams {
+export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams {
   return {
     timeframe: "15m",
     atrPeriod: 14,
@@ -46,7 +47,7 @@ export function gridParamsFor(trend: Trend): GridParams {
   };
 }
 
-function riskParamsFor(trend: Trend): RiskParams {
+function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
   const atrStopMult = match(trend)
     .with("bullish", () => 4)
     .with("flat", () => 4)
@@ -186,9 +187,9 @@ export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
 
-  constructor(trend: Trend) {
-    this.params = gridParamsFor(trend);
-    this.risk = riskParamsFor(trend);
+  constructor(trend: Trend, volatility: Volatility) {
+    this.params = gridParamsFor(trend, volatility);
+    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {

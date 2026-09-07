@@ -5,7 +5,9 @@ import {
   DEFAULT_POOL_IDLE_TIMEOUT_MS,
   DEFAULT_POOL_MAX,
   DEFAULT_POOL_MIN,
+  isRetryableDbError,
   readPoolLimits,
+  withDbRetry,
 } from "./db.js";
 
 const POOL_ENV = [
@@ -63,5 +65,69 @@ describe("readPoolLimits", () => {
     process.env["DATABASE_POOL_MAX"] = "1";
     process.env["DATABASE_POOL_MIN"] = "2";
     assert.throws(() => readPoolLimits(), /DATABASE_POOL_MIN/);
+  });
+});
+
+class CodedError extends Error {
+  readonly code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+describe("isRetryableDbError", () => {
+  it("matches pg connect-timeout and connection-loss messages", () => {
+    assert.equal(
+      isRetryableDbError(new Error("Connection terminated due to connection timeout")),
+      true,
+    );
+    assert.equal(isRetryableDbError(new Error("timeout exceeded when trying to connect")), true);
+    assert.equal(isRetryableDbError(new Error("Connection terminated unexpectedly")), true);
+  });
+
+  it("matches Postgres and Node connection codes", () => {
+    assert.equal(isRetryableDbError(new CodedError("boom", "08006")), true);
+    assert.equal(isRetryableDbError(new CodedError("reset", "ECONNRESET")), true);
+  });
+
+  it("does not retry syntax or constraint errors", () => {
+    assert.equal(isRetryableDbError(new CodedError("syntax", "42601")), false);
+    assert.equal(isRetryableDbError(new CodedError("unique", "23505")), false);
+    assert.equal(isRetryableDbError(new Error("column does not exist")), false);
+    assert.equal(isRetryableDbError("not-an-error"), false);
+  });
+});
+
+describe("withDbRetry", () => {
+  it("retries retryable errors then returns", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const result = await withDbRetry(
+      "test",
+      () => {
+        attempts += 1;
+        if (attempts < 3) {
+          return Promise.reject(new Error("Connection terminated due to connection timeout"));
+        }
+        return Promise.resolve(42);
+      },
+      {
+        sleepFn: (ms) => {
+          delays.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+    assert.equal(result, 42);
+    assert.equal(attempts, 3);
+    assert.deepEqual(delays, [3_000, 6_000]);
+  });
+
+  it("does not retry permanent errors", async () => {
+    await assert.rejects(
+      () => withDbRetry("test", () => Promise.reject(new CodedError("syntax error", "42601"))),
+      /syntax error/,
+    );
   });
 });

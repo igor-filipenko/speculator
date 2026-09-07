@@ -33,8 +33,8 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const width = input.width ?? 900;
   const height = input.height ?? 520;
   const { state } = input;
-  const candles = state.candles;
-  const params = input.params ?? htfParamsFor(state.timeframe);
+  const candles = state.htf?.candles ?? [];
+  const params = input.params ?? htfParamsFor(state.htf?.timeframe ?? "4h");
 
   if (candles.length === 0) {
     throw new Error("Cannot chart empty candle series");
@@ -44,7 +44,7 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const emaFast = ema(closes, params.emaFast);
   const emaSlow = ema(closes, params.emaSlow);
   const adxSeries = adx(candles, params.adxPeriod);
-  const levels = state.levels ?? [];
+  const levels = state.htf?.levels ?? [];
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom - GAP;
@@ -126,7 +126,7 @@ export function buildMarketStateSvg(input: MarketStateChartInput): string {
   const emaSlowPath = linePath(emaSlow, yPrice);
   const adxPath = linePath(adxSeries, yAdx);
 
-  const title = `${escapeXml(state.pair)} · ${escapeXml(state.timeframe)} · ${escapeXml(state.trend)} · EMA${params.emaFast}/${params.emaSlow}`;
+  const title = `${escapeXml(state.pair)} · ${escapeXml(state.htf?.timeframe ?? "")} · ${escapeXml(state.trend)} · 1h ${escapeXml(state.volatility)} · EMA${params.emaFast}/${params.emaSlow}`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
 
@@ -160,7 +160,7 @@ function levelLine(
 ): string {
   const y = yPrice(level.price);
   const color = level.kind === "support" ? COLOR.support : COLOR.resistance;
-  const nearest = level.kind === "support" ? state.support : state.resistance;
+  const nearest = level.kind === "support" ? state.htf?.support : state.htf?.resistance;
   const thick = nearest != null && nearest === level.price;
   const strokeWidth = thick ? 1.5 : 0.75;
   return [

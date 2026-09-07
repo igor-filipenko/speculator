@@ -2,23 +2,26 @@ import { insertSignal } from "../db/signals.js";
 import type { MarketIndicators, Risk, Signal, Snapshot, Trade } from "../types.js";
 
 export function logMarket(indicators: MarketIndicators): void {
-  const ts = indicators.at.toISOString();
+  const last = indicators.htf?.candles[indicators.htf.candles.length - 1];
+  const ts = last !== undefined ? new Date(last.time * 1000).toISOString() : "";
+  const htf = indicators.htf;
   const dist =
-    indicators.distEma200Pct != null
-      ? ` distEma200=${(indicators.distEma200Pct * 100).toFixed(2)}%`
-      : "";
-  const atrPct =
-    indicators.atrPct != null ? ` atrPct=${(indicators.atrPct * 100).toFixed(2)}%` : "";
+    htf?.distEma200Pct != null ? ` distEma200=${(htf.distEma200Pct * 100).toFixed(2)}%` : "";
+  const atrPct = htf?.atrPct != null ? ` atrPct=${(htf.atrPct * 100).toFixed(2)}%` : "";
   const di =
-    indicators.plusDi != null && indicators.minusDi != null
-      ? ` +DI=${fmt(indicators.plusDi)} -DI=${fmt(indicators.minusDi)}`
+    htf?.plusDi != null && htf.minusDi != null
+      ? ` +DI=${fmt(htf.plusDi)} -DI=${fmt(htf.minusDi)}`
       : "";
-  const support = indicators.support != null ? ` S=${fmt(indicators.support)}` : "";
-  const resistance = indicators.resistance != null ? ` R=${fmt(indicators.resistance)}` : "";
+  const support = htf?.support != null ? ` S=${fmt(htf.support)}` : "";
+  const resistance = htf?.resistance != null ? ` R=${fmt(htf.resistance)}` : "";
+  const mtf = indicators.mtf;
+  const mtfAtrPct = mtf?.atrPct != null ? ` mtfAtrPct=${(mtf.atrPct * 100).toFixed(2)}%` : "";
+  const tf = htf?.timeframe ?? "";
   console.log(
-    `[${ts}] ${indicators.pair} MARKET ${indicators.timeframe} trend=${indicators.trend}` +
-      ` ema200=${fmt(indicators.ema200)} ema50=${fmt(indicators.ema50)} adx=${fmt(indicators.adx)}` +
-      `${di} atr=${fmt(indicators.atr)}${atrPct}${dist}${support}${resistance}`,
+    `[${ts}] ${indicators.pair} MARKET ${tf} trend=${indicators.trend}` +
+      ` vol=${indicators.volatility}` +
+      ` ema200=${fmt(htf?.ema200)} ema50=${fmt(htf?.ema50)} adx=${fmt(htf?.adx)}` +
+      `${di} atr=${fmt(htf?.atr)}${atrPct}${dist}${support}${resistance}${mtfAtrPct}`,
   );
 }
 

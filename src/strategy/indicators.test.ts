@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { adx, atr, bollinger, dmi, ema, rsi } from "./indicators.js";
+import { adx, atr, bollinger, dmi, ema, keltner, percentile, rsi } from "./indicators.js";
 
 describe("atr", () => {
   it("returns nulls until warm and matches Wilder smoothing", () => {
@@ -110,6 +110,56 @@ describe("bollinger", () => {
   it("rejects invalid period or stdDev", () => {
     assert.throws(() => bollinger([], 0, 2), /Bollinger period/);
     assert.throws(() => bollinger([1, 2, 3], 2, 0), /Bollinger stdDev/);
+  });
+});
+
+describe("keltner", () => {
+  it("is null until ATR is warm then matches EMA ± atrMult × ATR", () => {
+    const candles = [
+      { high: 10, low: 8, close: 9 },
+      { high: 11, low: 9, close: 10 },
+      { high: 12, low: 10, close: 11 },
+      { high: 13, low: 9, close: 10 },
+      { high: 12, low: 10, close: 11 },
+    ];
+    const period = 3;
+    const atrMult = 1.5;
+    const { mid, upper, lower } = keltner(candles, period, atrMult);
+    const emaMid = ema(
+      candles.map((c) => c.close),
+      period,
+    );
+    const atrs = atr(candles, period);
+    assert.equal(mid[0], null);
+    assert.equal(mid[1], null);
+    assert.equal(mid[2], null);
+    assert.ok(mid[3] != null && emaMid[3] != null && atrs[3] != null);
+    assert.equal(mid[3], emaMid[3]);
+    assert.ok(upper[3] != null && lower[3] != null);
+    assert.ok(Math.abs(upper[3] - (emaMid[3] + atrMult * atrs[3])) < 1e-12);
+    assert.ok(Math.abs(lower[3] - (emaMid[3] - atrMult * atrs[3])) < 1e-12);
+  });
+
+  it("rejects invalid period or atrMult", () => {
+    assert.throws(() => keltner([], 0, 1.5), /Keltner period/);
+    assert.throws(() => keltner([{ high: 1, low: 0, close: 1 }], 1, 0), /Keltner atrMult/);
+  });
+});
+
+describe("percentile", () => {
+  it("returns undefined for empty input and interpolates", () => {
+    assert.equal(percentile([], 0.5), undefined);
+    assert.equal(percentile([10], 0.7), 10);
+    assert.equal(percentile([1, 2, 3, 4], 0), 1);
+    assert.equal(percentile([1, 2, 3, 4], 1), 4);
+    const mid = percentile([1, 2, 3, 4], 0.5);
+    assert.ok(mid != null);
+    assert.ok(Math.abs(mid - 2.5) < 1e-12);
+  });
+
+  it("rejects p outside [0, 1]", () => {
+    assert.throws(() => percentile([1], -0.1), /percentile p/);
+    assert.throws(() => percentile([1], 1.1), /percentile p/);
   });
 });
 

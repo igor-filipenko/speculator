@@ -34,14 +34,14 @@ Edit `.env`:
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `STRATEGY`                            | `bollinger` (default) or `grid`                                                       |
-| `HTF`                                 | Higher-timeframe for StrategyManager: `4h` (default) or `1d`                          |
+| `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
 | `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
 | `DATABASE_POOL_MAX`                   | pg.Pool max clients (default `2`)                                                     |
 | `DATABASE_POOL_MIN`                   | pg.Pool min clients (default `0`)                                                     |
-| `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `1000`)                                |
-| `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `5000`)                                      |
+| `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `15000`)                               |
+| `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `30000`)                                     |
 | `JUPITER_API_KEY`                     | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
 | `WATCHLIST`                           | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
 | `POLL_INTERVAL_MS`                    | Poll interval (default `60000`)                                                       |
@@ -65,13 +65,13 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/Timescale only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                     |
-| ------------ | ----------------------------------------- |
-| `/start`     | Greeting and command list                 |
-| `/report`    | Last signal per pair (including HOLD)     |
-| `/market`    | HTF trend chart (EMA50/200, ADX, S/R)     |
-| `/chart`     | OHLCV candle chart with strategy overlays |
-| `/portfolio` | Current paper or live portfolio           |
+| Command      | Reply                                                    |
+| ------------ | -------------------------------------------------------- |
+| `/start`     | Greeting and command list                                |
+| `/report`    | Last signal per pair (including HOLD)                    |
+| `/market`    | HTF trend chart (EMA50/200, ADX, S/R) plus 1h volatility |
+| `/chart`     | OHLCV candle chart with strategy overlays                |
+| `/portfolio` | Current paper or live portfolio                          |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -153,7 +153,7 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 
 Use either `--days` or `--from`/`--to`, not both.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -331,7 +331,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from HTF candles (`HTF`, default 4h): 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, and clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price). Trend is `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. HTF OHLCV is loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows this as a candle chart (EMA50/200, S/R, ADX) and lists key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend changes.
+`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the 70th percentile of the last 100 ATR% values, else `low` (`unknown` until warm). HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend or volatility changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -363,18 +363,18 @@ src/
   types.ts
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
   market/gecko-terminal.ts
-  market/htf.ts            # HTF EMA stack + DMI trend + S/R
-  market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
+  market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
+  market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters
   exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts # live Swap API V2 order + execute
   exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
-  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy/RiskManager
+  strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
   strategy/mode/grid-svg.ts      # grid SVG for /chart

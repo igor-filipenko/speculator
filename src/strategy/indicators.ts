@@ -289,3 +289,66 @@ export function bollinger(values: number[], period: number, stdDev: number): Bol
 
   return { mid, upper, lower };
 }
+
+export interface KeltnerSeries {
+  mid: (number | null)[];
+  upper: (number | null)[];
+  lower: (number | null)[];
+}
+
+/**
+ * Keltner Channels: EMA(close, period) ± atrMult × Wilder ATR(period).
+ * First value at index `period` (ATR warmup); earlier bars are null.
+ */
+export function keltner(candles: AtrCandle[], period: number, atrMult: number): KeltnerSeries {
+  if (period < 1) {
+    throw new Error("Keltner period must be >= 1");
+  }
+  if (!(atrMult > 0)) {
+    throw new Error("Keltner atrMult must be > 0");
+  }
+
+  const n = candles.length;
+  const mid: (number | null)[] = Array.from({ length: n }, () => null);
+  const upper: (number | null)[] = Array.from({ length: n }, () => null);
+  const lower: (number | null)[] = Array.from({ length: n }, () => null);
+  const closes = candles.map((c) => c.close);
+  const emaMid = ema(closes, period);
+  const atrs = atr(candles, period);
+
+  for (let i = 0; i < n; i++) {
+    const m = emaMid[i];
+    const a = atrs[i];
+    if (m == null || a == null) {
+      continue;
+    }
+    mid[i] = m;
+    upper[i] = m + atrMult * a;
+    lower[i] = m - atrMult * a;
+  }
+
+  return { mid, upper, lower };
+}
+
+/**
+ * Linear-interpolated percentile. `p` is in [0, 1] (e.g. 0.7 = 70th).
+ * Returns undefined when `values` is empty.
+ */
+export function percentile(values: number[], p: number): number | undefined {
+  if (!(p >= 0 && p <= 1)) {
+    throw new Error("percentile p must be in [0, 1]");
+  }
+  if (values.length === 0) {
+    return undefined;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = p * (sorted.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  const loVal = sorted[lo]!;
+  if (lo === hi) {
+    return loVal;
+  }
+  const w = idx - lo;
+  return loVal * (1 - w) + sorted[hi]! * w;
+}

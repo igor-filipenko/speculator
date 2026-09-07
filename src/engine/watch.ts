@@ -109,18 +109,22 @@ async function processPair(args: {
     const previous = lastMarketIndicators.get(pair.symbol);
     const market = await refreshMarketIndicators({
       pair,
-      required: strategyManager.getRequiredCandles(),
+      required: strategyManager.getRequiredHtfCandles(),
+      mtfRequired: strategyManager.getRequiredMtfCandles(),
       price,
       at: new Date(),
     });
     logMarket(market);
-    const trendChanged =
+    const marketChanged =
       previous !== undefined
         ? strategyManager.applyMarketIndicators(market, previous)
         : strategyManager.applyMarketIndicators(market);
     lastMarketIndicators.set(pair.symbol, market);
-    if (trendChanged) {
-      console.log(`[${pair.symbol}] trend changed from ${previous?.trend} to ${market.trend}`);
+    if (marketChanged) {
+      console.log(
+        `[${pair.symbol}] market changed trend=${previous?.trend}→${market.trend}` +
+          ` vol=${previous?.volatility}→${market.volatility}`,
+      );
       await telegram.notify({
         type: "market",
         market,

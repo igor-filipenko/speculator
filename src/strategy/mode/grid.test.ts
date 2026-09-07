@@ -4,7 +4,7 @@ import type { Candle, Snapshot } from "../../types.js";
 import { evaluateGrid, gridParamsFor, type GridParams } from "./grid.js";
 
 function params(overrides: Partial<GridParams> = {}): GridParams {
-  return { ...gridParamsFor("flat"), ...overrides };
+  return { ...gridParamsFor("flat", "low"), ...overrides };
 }
 
 const INTERVAL = 15 * 60;
@@ -202,5 +202,16 @@ describe("evaluateGrid", () => {
 
     assert.equal(signal.side, "HOLD");
     assert.match(signal.reason, /trend EMA/);
+  });
+});
+
+describe("gridParamsFor", () => {
+  it("widens the grid for bullish + high vol and tightens for bearish", () => {
+    assert.equal(gridParamsFor("bullish", "high").gridMult, 8);
+    assert.equal(gridParamsFor("bullish", "high").adxMax, 30);
+    assert.equal(gridParamsFor("bullish", "low").gridMult, 5);
+    assert.equal(gridParamsFor("flat", "low").gridMult, 3);
+    assert.equal(gridParamsFor("bearish", "high").gridMult, 2);
+    assert.equal(gridParamsFor("unknown", "squeeze").gridMult, 2);
   });
 });

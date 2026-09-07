@@ -3,7 +3,9 @@ import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
 import { renderMarketPng, renderOhlcvPng } from "../chart/render-png.js";
 import type {
+  HtfSnapshot,
   MarketIndicators,
+  MtfSnapshot,
   Portfolio,
   ProgramState,
   Risk,
@@ -218,7 +220,7 @@ function formatStartMessage(): string {
     "*Commands*",
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
-    `/market — ${escapeMd("HTF trend chart (EMA200, ADX, S/R)")}`,
+    `/market — ${escapeMd("HTF trend chart (EMA200, ADX, S/R) plus 1h volatility")}`,
     `/chart — ${escapeMd("OHLCV candle chart (strategy overlays)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
@@ -268,53 +270,111 @@ export function formatMarketIndicatorsMessage(indicators: MarketIndicators): str
     .with("unknown", () => "❔")
     .exhaustive();
 
+  const htfTf = indicators.htf?.timeframe ?? "";
+  const last = indicators.htf?.candles[indicators.htf.candles.length - 1];
+  const atIso = last !== undefined ? new Date(last.time * 1000).toISOString() : undefined;
   const lines = [
-    `${trendIcon} *${escapeMd(indicators.pair)}*  *${escapeMd(indicators.timeframe)}*`,
-    `Trend ${code(indicators.trend)}`,
+    `${trendIcon} *${escapeMd(indicators.pair)}*`,
     `Price ${code(indicators.price.toFixed(6))}`,
+    "",
+    `*HTF ${escapeMd(htfTf)}*  Trend ${code(indicators.trend)}`,
+    ...formatHtfIndicatorLines(indicators.htf),
+    "",
+    `*MTF 1h*  Vol ${code(indicators.volatility)}`,
+    ...formatMtfIndicatorLines(indicators.mtf),
   ];
+  if (atIso !== undefined) {
+    lines.push("", `_${escapeMd(atIso)}_`);
+  }
+  return lines.join("\n");
+}
 
-  if (indicators.ema200 != null) {
-    const dist =
-      indicators.distEma200Pct != null ? ` (${signedPct(indicators.distEma200Pct)})` : "";
-    lines.push(`EMA200 ${code(indicators.ema200.toFixed(4))}${escapeMd(dist)}`);
+function formatHtfIndicatorLines(htf: HtfSnapshot | undefined): string[] {
+  if (htf === undefined) {
+    return [`_no HTF indicators_`];
   }
-  if (indicators.ema50 != null) {
-    lines.push(`EMA50 ${code(indicators.ema50.toFixed(4))}`);
+  const lines: string[] = [];
+  if (htf.ema200 != null) {
+    const dist = htf.distEma200Pct != null ? ` (${signedPct(htf.distEma200Pct)})` : "";
+    lines.push(`EMA200 ${code(htf.ema200.toFixed(4))}${escapeMd(dist)}`);
   }
-
-  const adxAtr: string[] = [];
-  if (indicators.adx != null) {
-    adxAtr.push(`ADX ${code(indicators.adx.toFixed(2))}`);
+  if (htf.ema50 != null) {
+    lines.push(`EMA50 ${code(htf.ema50.toFixed(4))}`);
   }
-  if (indicators.plusDi != null && indicators.minusDi != null) {
-    adxAtr.push(
-      `${escapeMd("+DI")} ${code(indicators.plusDi.toFixed(1))} / ${escapeMd("-DI")} ${code(indicators.minusDi.toFixed(1))}`,
-    );
+  if (htf.adx != null) {
+    lines.push(`ADX ${code(htf.adx.toFixed(2))}`);
   }
-  if (indicators.atr != null) {
-    const atrPct = indicators.atrPct != null ? ` (${pctOf(indicators.atrPct)})` : "";
-    adxAtr.push(`ATR ${code(indicators.atr.toFixed(4))}${escapeMd(atrPct)}`);
+  if (htf.plusDi != null) {
+    lines.push(`${escapeMd("+DI")} ${code(htf.plusDi.toFixed(1))}`);
   }
-  if (adxAtr.length > 0) {
-    lines.push(adxAtr.join(" · "));
+  if (htf.minusDi != null) {
+    lines.push(`${escapeMd("-DI")} ${code(htf.minusDi.toFixed(1))}`);
   }
-
-  const supports = (indicators.levels ?? [])
+  if (htf.atr != null) {
+    const atrPct = htf.atrPct != null ? ` (${pctOf(htf.atrPct)})` : "";
+    lines.push(`ATR ${code(htf.atr.toFixed(4))}${escapeMd(atrPct)}`);
+  }
+  const supports = (htf.levels ?? [])
     .filter((l) => l.kind === "support")
     .map((l) => code(formatLevelPrice(l.price)));
-  const resistances = (indicators.levels ?? [])
+  const resistances = (htf.levels ?? [])
     .filter((l) => l.kind === "resistance")
     .map((l) => code(formatLevelPrice(l.price)));
   if (supports.length > 0) {
     lines.push(`Support ${supports.join(" · ")}`);
+  } else if (htf.support != null) {
+    lines.push(`Support ${code(formatLevelPrice(htf.support))}`);
   }
   if (resistances.length > 0) {
     lines.push(`Resistance ${resistances.join(" · ")}`);
+  } else if (htf.resistance != null) {
+    lines.push(`Resistance ${code(formatLevelPrice(htf.resistance))}`);
   }
+  return lines.length > 0 ? lines : [`_no HTF indicators_`];
+}
 
-  lines.push(`_${escapeMd(indicators.at.toISOString())}_`);
-  return lines.join("\n");
+function formatMtfIndicatorLines(mtf: MtfSnapshot | undefined): string[] {
+  if (mtf === undefined) {
+    return [`_no MTF indicators_`];
+  }
+  const lines: string[] = [];
+  if (mtf.atr != null) {
+    const atrPct = mtf.atrPct != null ? ` (${pctOf(mtf.atrPct)})` : "";
+    lines.push(`ATR ${code(mtf.atr.toFixed(4))}${escapeMd(atrPct)}`);
+  } else if (mtf.atrPct != null) {
+    lines.push(`ATR% ${code(pctOf(mtf.atrPct))}`);
+  }
+  if (mtf.bbLower != null && mtf.bbMid != null && mtf.bbUpper != null) {
+    lines.push(
+      `BB ${code(formatLevelPrice(mtf.bbLower))} / ${code(formatLevelPrice(mtf.bbMid))} / ${code(formatLevelPrice(mtf.bbUpper))}`,
+    );
+  } else {
+    if (mtf.bbLower != null) {
+      lines.push(`BB lower ${code(formatLevelPrice(mtf.bbLower))}`);
+    }
+    if (mtf.bbMid != null) {
+      lines.push(`BB mid ${code(formatLevelPrice(mtf.bbMid))}`);
+    }
+    if (mtf.bbUpper != null) {
+      lines.push(`BB upper ${code(formatLevelPrice(mtf.bbUpper))}`);
+    }
+  }
+  if (mtf.kcLower != null && mtf.kcMid != null && mtf.kcUpper != null) {
+    lines.push(
+      `KC ${code(formatLevelPrice(mtf.kcLower))} / ${code(formatLevelPrice(mtf.kcMid))} / ${code(formatLevelPrice(mtf.kcUpper))}`,
+    );
+  } else {
+    if (mtf.kcLower != null) {
+      lines.push(`KC lower ${code(formatLevelPrice(mtf.kcLower))}`);
+    }
+    if (mtf.kcMid != null) {
+      lines.push(`KC mid ${code(formatLevelPrice(mtf.kcMid))}`);
+    }
+    if (mtf.kcUpper != null) {
+      lines.push(`KC upper ${code(formatLevelPrice(mtf.kcUpper))}`);
+    }
+  }
+  return lines.length > 0 ? lines : [`_no MTF indicators_`];
 }
 
 export function formatMarketMessage(indicators: MarketIndicators, previous?: Trend): string {
@@ -502,7 +562,7 @@ async function sendMarketCharts(
 
   let sent = 0;
   for (const [pair, market] of lastMarketIndicators) {
-    if (market.candles.length === 0) {
+    if ((market.htf?.candles.length ?? 0) === 0) {
       try {
         await replyMd(ctx, formatMarketIndicatorsMessage(market));
         sent += 1;

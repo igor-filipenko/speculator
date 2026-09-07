@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Candle, Snapshot } from "../../types.js";
-import { evaluateGrid, gridParamsFor, type GridParams } from "./grid.js";
+import { evaluateGrid, GridStrategy, gridParamsFor, type GridParams } from "./grid.js";
 
 function params(overrides: Partial<GridParams> = {}): GridParams {
   return { ...gridParamsFor("flat", "low"), ...overrides };
@@ -210,8 +210,21 @@ describe("gridParamsFor", () => {
     assert.equal(gridParamsFor("bullish", "high").gridMult, 8);
     assert.equal(gridParamsFor("bullish", "high").adxMax, 30);
     assert.equal(gridParamsFor("bullish", "low").gridMult, 5);
+    assert.equal(gridParamsFor("bullish", "low").adxMax, 22);
+    assert.equal(gridParamsFor("bullish", "squeeze").gridMult, 7);
     assert.equal(gridParamsFor("flat", "low").gridMult, 3);
+    assert.equal(gridParamsFor("flat", "high").gridMult, 4);
+    assert.equal(gridParamsFor("flat", "squeeze").adxMax, 20);
     assert.equal(gridParamsFor("bearish", "high").gridMult, 2);
     assert.equal(gridParamsFor("unknown", "squeeze").gridMult, 2);
+  });
+
+  it("tightens the ATR trail in bullish high/squeeze and keeps a wide trail in flat", () => {
+    assert.equal(new GridStrategy("bullish", "high").getRiskParams().atrTrailMult, 6);
+    assert.equal(new GridStrategy("bullish", "squeeze").getRiskParams().atrTrailMult, 6);
+    assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
+    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrTrailMult, 8);
+    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrStopMult, 4);
+    assert.equal(new GridStrategy("bearish", "high").getRiskParams().atrStopMult, 2.5);
   });
 });

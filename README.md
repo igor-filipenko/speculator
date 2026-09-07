@@ -345,7 +345,7 @@ Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on
 
 ### Grid (`grid`)
 
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX ≤ 30 and close is above trend EMA 20. Sells at entry + one grid spacing (needs portfolio snapshot). ATR stop/trail 2.5× / 3×, cooldown 1 bar.
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX is under the regime cap and close is above trend EMA 50. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/low → ×3; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 3 bars.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 

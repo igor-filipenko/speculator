@@ -64,11 +64,11 @@ describe("ohlcv cache", () => {
     assert.equal(rows[0]?.close, 55);
   });
 
-  it("upserts more rows than postgres.js can bind in one statement", async () => {
+  it("upserts more rows than a single parameterized statement can bind", async () => {
     const timeframe = "1d" as const;
     const fromTime = 1_600_000_000;
     const interval = 86_400;
-    // 8 columns × 8192 rows > 65534 bind parameters (postgres.js cap).
+    // 8 columns × 8192 rows > 65535 bind parameters (PostgreSQL protocol cap).
     const count = 8_192;
     const candles = Array.from({ length: count }, (_, i) => candle(fromTime + i * interval, 100));
 

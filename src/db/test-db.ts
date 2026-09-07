@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { resolveBinary } from "dbmate";
-import { getSql, resetSpeculatorDbCache, setBotId } from "./db.js";
+import { query, resetSpeculatorDbCache, setBotId } from "./db.js";
 import { migrationsDir } from "./migrate.js";
 
 export const TIMESCALEDB_IMAGE = "timescale/timescaledb:2.29.2-pg18";
@@ -78,6 +78,5 @@ export async function useTestDb(botId = `test-${randomUUID()}`): Promise<string>
 }
 
 export async function truncateBotAndMarket(): Promise<void> {
-  const sql = getSql();
-  await sql`TRUNCATE market.candles, market.signals, bot.portfolios, bot.trades`;
+  await query(`TRUNCATE market.candles, market.signals, bot.portfolios, bot.trades`);
 }

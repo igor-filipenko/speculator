@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { getSql, resetSpeculatorDbCache } from "./db.js";
+import { query, resetSpeculatorDbCache } from "./db.js";
 import { insertSignal } from "./signals.js";
 import { useTestDb } from "./test-db.js";
 
@@ -24,12 +24,14 @@ describe("market.signals", () => {
     });
 
     const botId = process.env["BOT_ID"];
-    const sql = getSql();
-    const rows = await sql<Record<string, unknown>[]>`
+    const rows = await query<Record<string, unknown>>(
+      `
       SELECT pair, side, price, reason, ema_fast, ema_slow, rsi, trend_ema, atr, adx
       FROM market.signals
-      WHERE bot_id = ${botId ?? ""}
-    `;
+      WHERE bot_id = $1
+      `,
+      [botId ?? ""],
+    );
     assert.equal(rows.length, 1);
     const row = rows[0];
     assert.ok(row);
@@ -58,12 +60,14 @@ describe("market.signals", () => {
     await insertSignal({ ...signal, reason: "second", price: 152 });
 
     const botId = process.env["BOT_ID"];
-    const sql = getSql();
-    const rows = await sql<{ reason: string; price: number }[]>`
+    const rows = await query<{ reason: string; price: number }>(
+      `
       SELECT reason, price
       FROM market.signals
-      WHERE bot_id = ${botId ?? ""} AND pair = 'SOL/USDC' AND "at" = ${at.toISOString()}::timestamptz
-    `;
+      WHERE bot_id = $1 AND pair = 'SOL/USDC' AND "at" = $2::timestamptz
+      `,
+      [botId ?? "", at.toISOString()],
+    );
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.reason, "first");
     assert.equal(Number(rows[0]?.price), 151);

@@ -6,6 +6,8 @@ import type {
   SignalSide,
   Strategy,
   Timeframe,
+  Trend,
+  Volatility,
 } from "../../types.js";
 import { buildBollingerSvg } from "./bollinger-svg.js";
 import { adx, atr, bollinger, ema, rsi } from "../indicators.js";
@@ -16,7 +18,7 @@ export interface BollingerParams {
   period: number;
   /** Band width in population standard deviations. */
   stdDev: number;
-  /** Slow trend EMA; BUY only when close is above it (avoid catching knives). */
+  /** Slow trend EMA; BUY only when close is above it (avoid catching knives). 0 = skip. */
   trendEmaPeriod: number;
   /** Wilder ATR period (into Signal.meta for risk stops). */
   atrPeriod: number;
@@ -35,26 +37,78 @@ export interface BollingerParams {
   rsiBuyMax: number;
 }
 
-const BOLLINGER_RISK: Omit<RiskParams, "timeframe"> = {
-  atrStopMult: 2,
-  atrTrailMult: 2.5,
-  cooldownBars: 4,
-  minHoldBars: 3,
+/** High vol widens bands slightly so a reclaim is a real extreme. */
+const STD_DEV: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
+  flat: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
+  bearish: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
+  unknown: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
 };
 
-/** Signal-side defaults (for tests). */
-export function bollingerParamsFor(): BollingerParams {
+/** Looser ADX in bullish dips; tighter in flat squeeze so we do not fade the coil. */
+const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 40, low: 28, squeeze: 34, unknown: 32 },
+  flat: { high: 28, low: 32, squeeze: 24, unknown: 28 },
+  bearish: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+  unknown: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+};
+
+/** Skip tiny squeeze TPs; high vol needs enough mid-distance to cover noise. */
+const MIN_BAND_TO_MID: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 0.005, low: 0.004, squeeze: 0.004, unknown: 0.004 },
+  flat: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
+  bearish: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
+  unknown: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
+};
+
+/** Bullish/high washouts can be shallow (RSI 50); quiet bullish stays strict so we skip exhaustion. */
+const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 50, low: 40, squeeze: 48, unknown: 45 },
+  flat: { high: 40, low: 45, squeeze: 40, unknown: 45 },
+  bearish: { high: 40, low: 40, squeeze: 40, unknown: 40 },
+  unknown: { high: 40, low: 40, squeeze: 40, unknown: 40 },
+};
+
+const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
+  flat: { high: 2.5, low: 2, squeeze: 2, unknown: 2 },
+  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+};
+
+const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 3.5, low: 3, squeeze: 3, unknown: 2.5 },
+  flat: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
+  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+};
+
+/** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
+export function bollingerParamsFor(
+  trend: Trend = "flat",
+  volatility: Volatility = "low",
+): BollingerParams {
   return {
     timeframe: "15m",
     period: 14,
-    stdDev: 1.5,
+    stdDev: STD_DEV[trend][volatility],
     trendEmaPeriod: 50,
     atrPeriod: 14,
     adxPeriod: 14,
-    adxMax: 32,
-    minBandToMidPct: 0.004,
+    adxMax: ADX_MAX[trend][volatility],
+    minBandToMidPct: MIN_BAND_TO_MID[trend][volatility],
     rsiPeriod: 14,
-    rsiBuyMax: 45,
+    rsiBuyMax: RSI_BUY_MAX[trend][volatility],
+  };
+}
+
+function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
+  return {
+    timeframe: "15m",
+    atrStopMult: ATR_STOP[trend][volatility],
+    atrTrailMult: ATR_TRAIL[trend][volatility],
+    cooldownBars: 4,
+    minHoldBars: 3,
   };
 }
 
@@ -70,7 +124,7 @@ export interface BollingerInput {
 /**
  * Mean-reversion Bollinger for flat markets.
  * BUY on lower-band **reclaim** (prev close ≤ lower, close > lower) when:
- * ADX ≤ adxMax, close > trend EMA, (mid − lower) / close ≥ minBandToMidPct,
+ * ADX ≤ adxMax, close > trend EMA (skipped when trendEmaPeriod is 0), (mid − lower) / close ≥ minBandToMidPct,
  * and RSI < rsiBuyMax (oversold; skip weak touches).
  * SELL when close ≥ middle (SMA basis). ADX / RSI do not block exits.
  */
@@ -80,7 +134,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const closes = candles.map((c) => c.close);
 
   const bands = bollinger(closes, strategy.period, strategy.stdDev);
-  const trendSeries = ema(closes, strategy.trendEmaPeriod);
+  const trendSeries = strategy.trendEmaPeriod > 0 ? ema(closes, strategy.trendEmaPeriod) : [];
   const atrSeries = atr(candles, strategy.atrPeriod);
   const adxSeries = adx(candles, strategy.adxPeriod);
   const rsiSeries = rsi(closes, strategy.rsiPeriod);
@@ -91,7 +145,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const bbUpper = bands.upper[i];
   const bbLower = bands.lower[i];
   const bbLowerPrev = prev >= 0 ? bands.lower[prev] : null;
-  const trendEma = trendSeries[i];
+  const trendEma = strategy.trendEmaPeriod > 0 ? trendSeries[i] : undefined;
   const atrNow = atrSeries[i];
   const adxNow = adxSeries[i];
   const rsiNow = rsiSeries[i];
@@ -122,7 +176,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     bbUpper == null ||
     bbLower == null ||
     bbLowerPrev == null ||
-    trendEma == null ||
+    (strategy.trendEmaPeriod > 0 && trendEma == null) ||
     adxNow == null ||
     rsiNow == null ||
     prev < 0
@@ -145,7 +199,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (reclaimedLower) {
     if (adxNow > strategy.adxMax) {
       reason = `Lower reclaim ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
-    } else if (close <= trendEma) {
+    } else if (strategy.trendEmaPeriod > 0 && trendEma != null && close <= trendEma) {
       reason = `Lower reclaim ignored: close ${fmt(close)} <= trend EMA${strategy.trendEmaPeriod} ${fmt(trendEma)}`;
     } else if (bandToMidPct < strategy.minBandToMidPct) {
       reason = `Lower reclaim ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
@@ -153,9 +207,10 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
     } else {
       side = "BUY";
+      const emaNote = strategy.trendEmaPeriod > 0 && trendEma != null ? `close > trend EMA; ` : "";
       reason =
         `Reclaimed lower BB (prev ${fmt(closePrev)} ≤ ${fmt(bbLowerPrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; close > trend EMA; band→mid ${pct(bandToMidPct)}; ` +
+        `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; ${emaNote}band→mid ${pct(bandToMidPct)}; ` +
         `RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
   } else if (close >= bbMid) {
@@ -171,13 +226,14 @@ export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;
 
-  constructor(params?: BollingerParams) {
-    this.params = params ?? bollingerParamsFor();
-    this.risk = { timeframe: this.params.timeframe, ...BOLLINGER_RISK };
+  constructor(trend: Trend = "flat", volatility: Volatility = "low") {
+    this.params = bollingerParamsFor(trend, volatility);
+    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
-    return `bollinger (${this.params.timeframe})`;
+    const { timeframe, period, stdDev, adxMax, rsiBuyMax } = this.params;
+    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax})`;
   }
 
   getMode(): "bollinger" {

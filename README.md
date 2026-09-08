@@ -42,6 +42,7 @@ Edit `.env`:
 | `DATABASE_POOL_MIN`                   | pg.Pool min clients (default `0`)                                                     |
 | `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `15000`)                               |
 | `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `30000`)                                     |
+| `PGAPPNAME`                           | Postgres `application_name` (default `speculator/<BOT_ID>`)                           |
 | `JUPITER_API_KEY`                     | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
 | `WATCHLIST`                           | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
 | `POLL_INTERVAL_MS`                    | Poll interval (default `60000`)                                                       |
@@ -335,13 +336,16 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging markets (15m, BB period 16, stdDev 1.5). Buys only on **lower-band reclaim** with filters:
+Mean-reversion for ranging markets (15m, BB period 14). Buys only on **lower-band reclaim** with filters that follow HTF trend × 1h volatility:
 
-| Mode        | Entry                                                                                 | Exit                         | ATR stop/trail | Cooldown | minHold |
-| ----------- | ------------------------------------------------------------------------------------- | ---------------------------- | -------------- | -------- | ------- |
-| `bollinger` | reclaim lower; RSI(14) &lt; 30; ADX ≤ 32; close &gt; EMA 50; (mid−lower)/close ≥ 0.4% | close ≥ BB mid (SMA), or ATR | 2× / 2.5×      | 4 bars   | 3 bars  |
+| Regime         | Entry                                                                             | Exit                   | ATR stop/trail |
+| -------------- | --------------------------------------------------------------------------------- | ---------------------- | -------------- |
+| bullish / high | reclaim lower; RSI &lt; 50; ADX ≤ 40; close &gt; EMA 50; (mid−lower)/close ≥ 0.5% | close ≥ BB mid, or ATR | 3× / 3.5×      |
+| bullish / low  | RSI &lt; 40; ADX ≤ 28 (skip quiet-trend exhaustion)                               | same                   | 2.5× / 3×      |
+| flat / low     | RSI &lt; 45; ADX ≤ 32; stdDev 1.5                                                 | same                   | 2× / 2.5×      |
+| flat / squeeze | RSI &lt; 40; ADX ≤ 24 (do not fade the coil)                                      | same                   | 2× / 2.5×      |
 
-`/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Cooldown 4 bars, minHold 3. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Grid (`grid`)
 

@@ -172,6 +172,27 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("×8"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
+
+  it("recreates BollingerStrategy with looser ADX when trend is bullish and vol is high", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+    const strategyBefore = manager.getActiveStrategy();
+    const mtfCandles = highVolMtf(140);
+    const high = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      mtfCandles,
+      price: mtfCandles[mtfCandles.length - 1]!.close,
+      at,
+      params,
+      mtfParams,
+    });
+    assert.equal(high.trend, "bullish");
+    assert.equal(high.volatility, "high");
+    manager.applyMarketIndicators(high);
+    assert.notEqual(manager.getActiveStrategy(), strategyBefore);
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+  });
 });
 
 describe("evaluateMarketIndicators", () => {
@@ -325,5 +346,34 @@ describe("evaluateMarketIndicators volatility", () => {
       mtfParams,
     });
     assert.equal(indicators.volatility, "low");
+  });
+
+  it("attaches 1h support and resistance from swing clusters", () => {
+    const start = 1_700_000_000;
+    const hour = 60 * 60;
+    const mtfCandles: Candle[] = [
+      { time: start, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + 2 * hour, open: 105, high: 110, low: 100, close: 105, volume: 1 },
+      { time: start + 3 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + 4 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + 5 * hour, open: 95, high: 100, low: 90, close: 95, volume: 1 },
+      { time: start + 6 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + 7 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
+      { time: start + 8 * hour, open: 100, high: 102, low: 98, close: 100, volume: 1 },
+    ];
+    const indicators = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      mtfCandles,
+      price: 100,
+      at,
+      params,
+      mtfParams,
+    });
+    assert.equal(indicators.mtf?.resistance, 110);
+    assert.equal(indicators.mtf?.support, 90);
+    assert.ok(indicators.mtf?.levels?.some((l) => l.kind === "resistance" && l.price === 110));
+    assert.ok(indicators.mtf?.levels?.some((l) => l.kind === "support" && l.price === 90));
   });
 });

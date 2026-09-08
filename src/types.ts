@@ -6,7 +6,7 @@ export type PositionSide = "flat" | "long";
 
 export type StrategyMode = "bollinger" | "grid";
 
-export type Timeframe = "15m" | "1h" | "4h" | "1d";
+export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";

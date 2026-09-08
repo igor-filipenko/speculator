@@ -36,8 +36,8 @@ export interface SimpleStrategyManagerOptions {
 }
 
 /**
- * Active strategy is env/CLI. Grid params follow HTF trend × 1h volatility;
- * the risk manager still follows trend only.
+ * Active strategy is env/CLI. Grid and Bollinger params follow HTF trend × 1h
+ * volatility; the risk manager still follows trend only.
  */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;
@@ -96,8 +96,8 @@ export class SimpleStrategyManager implements StrategyManager {
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,
   ): boolean {
-    // Recreate strategy from HTF trend × 1h volatility (Grid spacing / ATR stops).
-    // Bollinger ignores both; risk manager still follows trend.
+    // Recreate strategy from HTF trend × 1h volatility (Grid spacing, BB gates / ATR).
+    // Risk manager type still follows trend.
     this.strategy = loadStrategy(this.strategyMode, indicators.trend, indicators.volatility);
     this.riskManager = createRiskManager(indicators.trend, this.strategy);
     return (
@@ -118,12 +118,12 @@ export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager
 
 /**
  * Create a strategy for `mode` tuned for HTF `trend` and 1h `volatility`.
- * Grid spacing / ATR stops scale with both; Bollinger ignores them.
+ * Grid spacing / ATR and Bollinger ADX–RSI gates scale with both.
  */
 export function loadStrategy(mode: StrategyMode, trend: Trend, volatility: Volatility): Strategy {
   switch (mode) {
     case "bollinger":
-      return new BollingerStrategy();
+      return new BollingerStrategy(trend, volatility);
     case "grid":
       return new GridStrategy(trend, volatility);
   }

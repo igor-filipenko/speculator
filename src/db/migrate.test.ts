@@ -65,7 +65,7 @@ describe("migrations", () => {
     );
     assert.deepEqual(
       labels.map((r) => r.label),
-      ["15m", "1h", "4h", "1d"].sort(),
+      ["15m", "5m", "1h", "4h", "1d"].sort(),
     );
   });
 
@@ -73,7 +73,7 @@ describe("migrations", () => {
     const before = await query<{ version: string }>(
       `SELECT version FROM schema_migrations ORDER BY version`,
     );
-    assert.equal(before.length, 2);
+    assert.equal(before.length, 3);
 
     await runMigrations(process.env["DATABASE_URL"] ?? "");
 

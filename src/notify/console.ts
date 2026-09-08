@@ -1,5 +1,5 @@
 import { insertSignal } from "../db/signals.js";
-import type { MarketIndicators, Risk, Signal, Snapshot, Trade } from "../types.js";
+import type { MarketIndicators, MtfSnapshot, Risk, Signal, Snapshot, Trade } from "../types.js";
 
 export function logMarket(indicators: MarketIndicators): void {
   const last = indicators.htf?.candles[indicators.htf.candles.length - 1];
@@ -12,17 +12,53 @@ export function logMarket(indicators: MarketIndicators): void {
     htf?.plusDi != null && htf.minusDi != null
       ? ` +DI=${fmt(htf.plusDi)} -DI=${fmt(htf.minusDi)}`
       : "";
-  const support = htf?.support != null ? ` S=${fmt(htf.support)}` : "";
-  const resistance = htf?.resistance != null ? ` R=${fmt(htf.resistance)}` : "";
-  const mtf = indicators.mtf;
-  const mtfAtrPct = mtf?.atrPct != null ? ` mtfAtrPct=${(mtf.atrPct * 100).toFixed(2)}%` : "";
   const tf = htf?.timeframe ?? "";
   console.log(
     `[${ts}] ${indicators.pair} MARKET ${tf} trend=${indicators.trend}` +
       ` vol=${indicators.volatility}` +
       ` ema200=${fmt(htf?.ema200)} ema50=${fmt(htf?.ema50)} adx=${fmt(htf?.adx)}` +
-      `${di} atr=${fmt(htf?.atr)}${atrPct}${dist}${support}${resistance}${mtfAtrPct}`,
+      `${di} atr=${fmt(htf?.atr)}${atrPct}${dist}${sr(htf)}`,
   );
+  if (indicators.mtf !== undefined) {
+    console.log(`[${ts}] ${indicators.pair} ${formatMtf(indicators.mtf)}`);
+  }
+}
+
+function formatMtf(mtf: MtfSnapshot): string {
+  const atrPct = mtf.atrPct != null ? ` atrPct=${(mtf.atrPct * 100).toFixed(2)}%` : "";
+  return (
+    `MTF ${mtf.timeframe}` +
+    ` atr=${fmt(mtf.atr)}${atrPct}` +
+    band("BB", mtf.bbLower, mtf.bbMid, mtf.bbUpper) +
+    band("KC", mtf.kcLower, mtf.kcMid, mtf.kcUpper) +
+    sr(mtf)
+  );
+}
+
+function sr(snapshot: { support?: number; resistance?: number } | undefined): string {
+  const support = snapshot?.support != null ? ` S=${fmt(snapshot.support)}` : "";
+  const resistance = snapshot?.resistance != null ? ` R=${fmt(snapshot.resistance)}` : "";
+  return `${support}${resistance}`;
+}
+
+function band(label: string, lower?: number, mid?: number, upper?: number): string {
+  if (lower == null && mid == null && upper == null) {
+    return "";
+  }
+  if (lower != null && mid != null && upper != null) {
+    return ` ${label}=${fmt(lower)}/${fmt(mid)}/${fmt(upper)}`;
+  }
+  const parts: string[] = [];
+  if (lower != null) {
+    parts.push(`lo=${fmt(lower)}`);
+  }
+  if (mid != null) {
+    parts.push(`mid=${fmt(mid)}`);
+  }
+  if (upper != null) {
+    parts.push(`hi=${fmt(upper)}`);
+  }
+  return ` ${label} ${parts.join(" ")}`;
 }
 
 export function logSignal(signal: Signal): void {

@@ -51,6 +51,11 @@ export interface MtfParams {
   kcAtrMult: number;
   atrPctLookback: number;
   atrPctHighPercentile: number;
+  swingLeftRight: number;
+  levelClusterAtrMult: number;
+  levelAtPriceAtrMult: number;
+  levelMaxDistAtr: number;
+  maxLevelsEach: number;
 }
 
 export function mtfParamsFor(): MtfParams {
@@ -62,6 +67,11 @@ export function mtfParamsFor(): MtfParams {
     kcAtrMult: 1.5,
     atrPctLookback: 100,
     atrPctHighPercentile: 0.7,
+    swingLeftRight: 2,
+    levelClusterAtrMult: 0.5,
+    levelAtPriceAtrMult: 1,
+    levelMaxDistAtr: 8,
+    maxLevelsEach: 3,
   };
 }
 
@@ -168,12 +178,21 @@ export function attachDerivedFromCandles(
   attachKeyLevels(htf, candles, livePrice, htf.atr, params);
 }
 
+type LevelAttachParams = Pick<
+  HtfParams,
+  | "swingLeftRight"
+  | "levelClusterAtrMult"
+  | "levelAtPriceAtrMult"
+  | "levelMaxDistAtr"
+  | "maxLevelsEach"
+>;
+
 function attachKeyLevels(
-  htf: HtfSnapshot,
+  snapshot: HtfSnapshot | MtfSnapshot,
   candles: Candle[],
   price: number,
   atrNow: number | undefined,
-  params: HtfParams,
+  params: LevelAttachParams,
 ): void {
   const found = keyLevels(candles, price, atrNow, {
     swingLeftRight: params.swingLeftRight,
@@ -183,13 +202,13 @@ function attachKeyLevels(
     maxLevelsEach: params.maxLevelsEach,
   });
   if (found.levels.length > 0) {
-    htf.levels = found.levels;
+    snapshot.levels = found.levels;
   }
   if (found.support !== undefined) {
-    htf.support = found.support;
+    snapshot.support = found.support;
   }
   if (found.resistance !== undefined) {
-    htf.resistance = found.resistance;
+    snapshot.resistance = found.resistance;
   }
 }
 
@@ -214,6 +233,7 @@ function classifyVolatility(
       mtf.atrPct = atrNow / price;
     }
   }
+  attachKeyLevels(mtf, candles, price, atrNow, params);
 
   const bbUpper = last(bb.upper);
   const bbLower = last(bb.lower);

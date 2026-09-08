@@ -7,6 +7,7 @@ import type {
   MarketIndicators,
   MtfSnapshot,
   Portfolio,
+  PriceLevel,
   ProgramState,
   Risk,
   Signal,
@@ -280,7 +281,7 @@ export function formatMarketIndicatorsMessage(indicators: MarketIndicators): str
     `*HTF ${escapeMd(htfTf)}*  Trend ${code(indicators.trend)}`,
     ...formatHtfIndicatorLines(indicators.htf),
     "",
-    `*MTF 1h*  Vol ${code(indicators.volatility)}`,
+    `*MTF 1h*  Volatility ${code(indicators.volatility)}`,
     ...formatMtfIndicatorLines(indicators.mtf),
   ];
   if (atIso !== undefined) {
@@ -314,22 +315,7 @@ function formatHtfIndicatorLines(htf: HtfSnapshot | undefined): string[] {
     const atrPct = htf.atrPct != null ? ` (${pctOf(htf.atrPct)})` : "";
     lines.push(`ATR ${code(htf.atr.toFixed(4))}${escapeMd(atrPct)}`);
   }
-  const supports = (htf.levels ?? [])
-    .filter((l) => l.kind === "support")
-    .map((l) => code(formatLevelPrice(l.price)));
-  const resistances = (htf.levels ?? [])
-    .filter((l) => l.kind === "resistance")
-    .map((l) => code(formatLevelPrice(l.price)));
-  if (supports.length > 0) {
-    lines.push(`Support ${supports.join(" · ")}`);
-  } else if (htf.support != null) {
-    lines.push(`Support ${code(formatLevelPrice(htf.support))}`);
-  }
-  if (resistances.length > 0) {
-    lines.push(`Resistance ${resistances.join(" · ")}`);
-  } else if (htf.resistance != null) {
-    lines.push(`Resistance ${code(formatLevelPrice(htf.resistance))}`);
-  }
+  lines.push(...formatSupportResistanceLines(htf));
   return lines.length > 0 ? lines : [`_no HTF indicators_`];
 }
 
@@ -374,7 +360,33 @@ function formatMtfIndicatorLines(mtf: MtfSnapshot | undefined): string[] {
       lines.push(`KC upper ${code(formatLevelPrice(mtf.kcUpper))}`);
     }
   }
+  lines.push(...formatSupportResistanceLines(mtf));
   return lines.length > 0 ? lines : [`_no MTF indicators_`];
+}
+
+function formatSupportResistanceLines(snapshot: {
+  levels?: PriceLevel[];
+  support?: number;
+  resistance?: number;
+}): string[] {
+  const lines: string[] = [];
+  const supports = (snapshot.levels ?? [])
+    .filter((l) => l.kind === "support")
+    .map((l) => code(formatLevelPrice(l.price)));
+  const resistances = (snapshot.levels ?? [])
+    .filter((l) => l.kind === "resistance")
+    .map((l) => code(formatLevelPrice(l.price)));
+  if (supports.length > 0) {
+    lines.push(`Support ${supports.join(" · ")}`);
+  } else if (snapshot.support != null) {
+    lines.push(`Support ${code(formatLevelPrice(snapshot.support))}`);
+  }
+  if (resistances.length > 0) {
+    lines.push(`Resistance ${resistances.join(" · ")}`);
+  } else if (snapshot.resistance != null) {
+    lines.push(`Resistance ${code(formatLevelPrice(snapshot.resistance))}`);
+  }
+  return lines;
 }
 
 export function formatMarketMessage(indicators: MarketIndicators, previous?: Trend): string {

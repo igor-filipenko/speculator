@@ -18,7 +18,7 @@ export type Trend = "bullish" | "bearish" | "flat" | "unknown";
 
 export type Volatility = "high" | "low" | "squeeze" | "unknown";
 
-/** Clustered HTF swing high/low used as support or resistance. */
+/** Clustered swing high/low used as support or resistance. */
 export interface PriceLevel {
   price: number;
   kind: "support" | "resistance";
@@ -67,6 +67,12 @@ export interface MtfSnapshot {
   kcMid?: number;
   kcUpper?: number;
   kcLower?: number;
+  /** Nearest support below price. */
+  support?: number;
+  /** Nearest resistance above price. */
+  resistance?: number;
+  /** Key clustered S/R (nearest-first within each side). */
+  levels?: PriceLevel[];
 }
 
 /** HTF trend + S/R snapshot; 1h volatility is in {@link MarketIndicators.volatility}. */

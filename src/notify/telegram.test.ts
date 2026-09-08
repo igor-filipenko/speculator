@@ -37,6 +37,12 @@ const sample: MarketIndicators = {
     kcMid: 123,
     kcUpper: 124.5,
     kcLower: 121.5,
+    support: 121.1,
+    resistance: 124.8,
+    levels: [
+      { price: 121.1, kind: "support", touches: 2, lastTime: 1_700_200_000, volume: 6 },
+      { price: 124.8, kind: "resistance", touches: 2, lastTime: 1_700_300_000, volume: 7 },
+    ],
   },
 };
 
@@ -67,6 +73,8 @@ describe("formatMarketIndicatorsListMessage", () => {
     assert.match(text, /118\.50/);
     assert.match(text, /Resistance/);
     assert.match(text, /130\.40/);
+    assert.match(text, /121\.10/);
+    assert.match(text, /124\.80/);
     assert.doesNotMatch(text, /bollinger/);
     assert.doesNotMatch(text, /env/);
     assert.doesNotMatch(text, /Risk /);

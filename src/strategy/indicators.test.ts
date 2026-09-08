@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { adx, atr, bollinger, dmi, ema, keltner, percentile, rsi } from "./indicators.js";
+import {
+  adx,
+  atr,
+  bollinger,
+  dmi,
+  donchian,
+  ema,
+  keltner,
+  percentile,
+  rsi,
+  sma,
+} from "./indicators.js";
 
 describe("atr", () => {
   it("returns nulls until warm and matches Wilder smoothing", () => {
@@ -160,6 +171,46 @@ describe("percentile", () => {
   it("rejects p outside [0, 1]", () => {
     assert.throws(() => percentile([1], -0.1), /percentile p/);
     assert.throws(() => percentile([1], 1.1), /percentile p/);
+  });
+});
+
+describe("sma", () => {
+  it("returns nulls until warm and matches the window mean", () => {
+    const values = [1, 2, 3, 4, 5];
+    const series = sma(values, 3);
+    assert.equal(series[0], null);
+    assert.equal(series[1], null);
+    assert.equal(series[2], 2);
+    assert.equal(series[3], 3);
+    assert.equal(series[4], 4);
+  });
+
+  it("rejects invalid period", () => {
+    assert.throws(() => sma([], 0), /SMA period/);
+  });
+});
+
+describe("donchian", () => {
+  it("returns nulls until warm and matches max high / min low", () => {
+    const candles = [
+      { high: 10, low: 8 },
+      { high: 12, low: 9 },
+      { high: 11, low: 7 },
+      { high: 13, low: 10 },
+    ];
+    const { upper, lower, mid } = donchian(candles, 3);
+    assert.equal(upper[0], null);
+    assert.equal(upper[1], null);
+    assert.equal(upper[2], 12);
+    assert.equal(lower[2], 7);
+    assert.equal(mid[2], (12 + 7) / 2);
+    assert.equal(upper[3], 13);
+    assert.equal(lower[3], 7);
+    assert.equal(mid[3], (13 + 7) / 2);
+  });
+
+  it("rejects invalid period", () => {
+    assert.throws(() => donchian([], 0), /Donchian period/);
   });
 });
 

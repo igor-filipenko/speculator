@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default) or `grid`                                                       |
+| `STRATEGY`                            | `bollinger` (default), `grid`, or `donchian`                                          |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
@@ -351,6 +351,14 @@ Cooldown 4 bars, minHold 3. `/chart` draws Bollinger mid/upper/lower plus RSI wi
 
 ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX is under the regime cap and close is above trend EMA 50. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/low → ×3; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 3 bars.
 
+### Donchian breakout (`donchian`)
+
+Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.1×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. Sells when close **crosses below the prior 20-bar low** (volume/EMA do not block exits). ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
+
+**Volume SMA multiplier (bullish only):** high 1.1; low 1.3; squeeze 1.4.
+
+ATR stop is 3× (2.5× flat, 2× bearish); trail 4× / 3.5× / 2.5×. Cooldown 8 bars, minHold 4. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
 ## Project layout
@@ -375,13 +383,15 @@ src/
   exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
+  strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
   strategy/mode/grid-svg.ts      # grid SVG for /chart
+  strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (Timescale bot.* mode=paper)

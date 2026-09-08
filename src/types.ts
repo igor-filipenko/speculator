@@ -4,7 +4,7 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 
 export type PositionSide = "flat" | "long";
 
-export type StrategyMode = "bollinger" | "grid";
+export type StrategyMode = "bollinger" | "grid" | "donchian";
 
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
@@ -112,6 +112,12 @@ export interface Signal {
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;
+    /** Prior Donchian entry-channel high (breakout level). */
+    donchianUpper?: number;
+    /** Prior Donchian exit-channel low. */
+    donchianLower?: number;
+    /** Prior-bar SMA of volume (breakout filter baseline). */
+    volumeSma?: number;
     /** Last bar low (for ATR stop checks in risk). */
     barLow?: number;
     /** Last bar high (for trailing peak updates in risk). */

@@ -49,11 +49,13 @@ src/
   strategy/indicators.ts
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
+  strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol MarketIndicators; getActiveStrategy / getActiveRiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/mode/bollinger-svg.ts # Bollinger band SVG
   strategy/mode/grid-svg.ts    # ATR grid SVG
+  strategy/mode/donchian-svg.ts # Donchian + volume SMA SVG
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (Timescale)

@@ -193,6 +193,25 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
+
+  it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "donchian", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getMode(), "donchian");
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("no-buy"));
+    const first = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    manager.applyMarketIndicators(first);
+    const squeezed = { ...first, volatility: "squeeze" as const };
+    manager.applyMarketIndicators(squeezed, first);
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.4"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+  });
 });
 
 describe("evaluateMarketIndicators", () => {

@@ -2,6 +2,31 @@
  * Lightweight technical indicators (no external TA library).
  */
 
+/** Simple moving average. Returns nulls until warm (first value at index period-1). */
+export function sma(values: number[], period: number): (number | null)[] {
+  if (period < 1) {
+    throw new Error("SMA period must be >= 1");
+  }
+
+  const out: (number | null)[] = Array.from({ length: values.length }, () => null);
+  if (values.length < period) {
+    return out;
+  }
+
+  let sum = 0;
+  for (let i = 0; i < period; i++) {
+    sum += values[i]!;
+  }
+  out[period - 1] = sum / period;
+
+  for (let i = period; i < values.length; i++) {
+    sum += values[i]! - values[i - period]!;
+    out[i] = sum / period;
+  }
+
+  return out;
+}
+
 /** Exponential moving average over `period` closes. Returns nulls until warm. */
 export function ema(values: number[], period: number): (number | null)[] {
   if (period < 1) {
@@ -242,6 +267,50 @@ function dxFromDi(plusDi: number, minusDi: number): number {
     return 0;
   }
   return (100 * Math.abs(plusDi - minusDi)) / sum;
+}
+
+export interface DonchianSeries {
+  upper: (number | null)[];
+  lower: (number | null)[];
+  mid: (number | null)[];
+}
+
+export interface DonchianCandle {
+  high: number;
+  low: number;
+}
+
+/**
+ * Donchian channel: N-bar highest high / lowest low. Returns nulls until warm
+ * (first value at index period-1). Mid is the midpoint of upper and lower.
+ */
+export function donchian(candles: DonchianCandle[], period: number): DonchianSeries {
+  if (period < 1) {
+    throw new Error("Donchian period must be >= 1");
+  }
+
+  const n = candles.length;
+  const upper: (number | null)[] = Array.from({ length: n }, () => null);
+  const lower: (number | null)[] = Array.from({ length: n }, () => null);
+  const mid: (number | null)[] = Array.from({ length: n }, () => null);
+  if (n < period) {
+    return { upper, lower, mid };
+  }
+
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity;
+    let lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      const c = candles[j]!;
+      hi = Math.max(hi, c.high);
+      lo = Math.min(lo, c.low);
+    }
+    upper[i] = hi;
+    lower[i] = lo;
+    mid[i] = (hi + lo) / 2;
+  }
+
+  return { upper, lower, mid };
 }
 
 export interface BollingerSeries {

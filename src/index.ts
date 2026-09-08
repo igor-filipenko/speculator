@@ -37,7 +37,7 @@ Options:
   --days <n>        Backtest lookback in days (default: 90)
   --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Backtest range end inclusive (default: now; requires --from)
-  --strategy <name> Override strategy (bollinger | grid; default: env STRATEGY)
+  --strategy <name> Override strategy (bollinger | grid | donchian; default: env STRATEGY)
   --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
   --ignore-trend    Skip HTF market state (do not apply or log trend)
 `);
@@ -212,7 +212,7 @@ async function runWalletCommand(): Promise<void> {
   await runWallet(config);
 }
 
-const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid"];
+const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid", "donchian"];
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);

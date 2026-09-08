@@ -28,8 +28,12 @@ function geckoTimeframe(timeframe: Timeframe): {
       return { path: "day", aggregate: 1 };
     case "4h":
       return { path: "hour", aggregate: 4 };
+    case "1h":
+      return { path: "hour", aggregate: 1 };
     case "15m":
       return { path: "minute", aggregate: 15 };
+    case "5m":
+      return { path: "minute", aggregate: 5 };
   }
 }
 
@@ -40,8 +44,12 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
       return 24 * 60 * 60;
     case "4h":
       return 4 * 60 * 60;
+    case "1h":
+      return 60 * 60;
     case "15m":
       return 15 * 60;
+    case "5m":
+      return 5 * 60;
   }
 }
 
@@ -105,8 +113,22 @@ export interface FetchCandlesRangeOptions {
   toTime?: number;
   /** Max API pages to pull (each up to {@link PAGE_LIMIT} candles). */
   maxPages?: number;
-  /** Called after each successful page with the merged series so far (oldest→newest). */
-  onPage?: (candlesSoFar: Candle[]) => void | Promise<void>;
+  /** Called after each successful page with that page's candles (oldest→newest). */
+  onPage?: (pageCandles: Candle[]) => void | Promise<void>;
+}
+
+/** 5m windows need more pages (100 bars/page ≈ 8.3h). */
+function defaultMaxPages(timeframe: Timeframe): number {
+  switch (timeframe) {
+    case "5m":
+      return 150;
+    case "15m":
+      return 80;
+    case "1h":
+    case "4h":
+    case "1d":
+      return 80;
+  }
 }
 
 /**
@@ -115,7 +137,13 @@ export interface FetchCandlesRangeOptions {
  * Candles are returned oldest → newest, deduped by `time`.
  */
 export async function fetchCandlesRange(options: FetchCandlesRangeOptions): Promise<Candle[]> {
-  const { poolAddress, timeframe, fromTime, maxPages = 80, onPage } = options;
+  const {
+    poolAddress,
+    timeframe,
+    fromTime,
+    maxPages = defaultMaxPages(timeframe),
+    onPage,
+  } = options;
   const toTime = options.toTime ?? Math.floor(Date.now() / 1000);
 
   const byTime = new Map<number, Candle>();
@@ -167,9 +195,8 @@ export async function fetchCandlesRange(options: FetchCandlesRangeOptions): Prom
         `total=${byTime.size}`,
     );
 
-    const soFar = [...byTime.values()].sort((a, b) => a.time - b.time);
     if (onPage) {
-      await onPage(soFar);
+      await onPage(batch);
     }
 
     // No new bars (API returned an overlapping/identical page) — stop to avoid a loop.

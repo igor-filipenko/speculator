@@ -37,8 +37,8 @@ src/
     pools.ts            # solana.pools
   market/gecko-terminal.ts
   market/ohlcv-cache.ts # OHLCV fetch + Timescale cache orchestration
-  market/htf.ts         # HTF EMA stack + DMI trend + S/R → MarketIndicators
-  market/htf-indicators.ts # HTF MarketIndicators refresh (OHLCV cache)
+  market/htf.ts         # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol → MarketIndicators
+  market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts      # swing-pivot S/R clusters
   exchange/jupiter.ts          # paper Exchange (Jupiter quote only)
   exchange/jupiter-swap.ts     # live Exchange (Swap API V2 order + execute)
@@ -49,7 +49,7 @@ src/
   strategy/indicators.ts
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
-  strategy/strategy-manager.ts # loadStrategy + HTF MarketIndicators; getActiveStrategy / getActiveRiskManager
+  strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol MarketIndicators; getActiveStrategy / getActiveRiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/mode/bollinger-svg.ts # Bollinger band SVG

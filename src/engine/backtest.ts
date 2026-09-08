@@ -86,11 +86,13 @@ export interface RunBacktestOptions {
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
   htfCandles?: Candle[];
+  /** Inject 1h candles for volatility; skips 1h fetch when set. */
+  mtfCandles?: Candle[];
 }
 
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
- * HTF candles are loaded once per pair; market state is evaluated as those bars close.
+ * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
   const { strategyManager } = options;
@@ -122,6 +124,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     }
 
     const ignoreTrend = options.ignoreTrend ?? false;
+    const skipNetwork = options.candles !== undefined;
     const htfCandles = ignoreTrend
       ? []
       : await loadHtfCandles({
@@ -130,7 +133,18 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
           fromTime,
           toTime,
           injected: options.htfCandles,
-          skipFetch: options.candles !== undefined && options.htfCandles === undefined,
+          skipFetch: skipNetwork && options.htfCandles === undefined,
+          cacheOpts,
+        });
+    const mtfCandles = ignoreTrend
+      ? []
+      : await loadMtfCandles({
+          pair,
+          strategyManager,
+          fromTime,
+          toTime,
+          injected: options.mtfCandles,
+          skipFetch: skipNetwork && options.mtfCandles === undefined,
           cacheOpts,
         });
 
@@ -140,6 +154,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
         strategyManager,
         candles,
         htfCandles,
+        mtfCandles,
         ignoreTrend,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
@@ -167,7 +182,7 @@ async function loadHtfCandles(args: {
     return [];
   }
 
-  const required = args.strategyManager.getRequiredCandles();
+  const required = args.strategyManager.getRequiredHtfCandles();
   const interval = candleIntervalSeconds(required.timeframe);
   const candles = await loadCachedCandles({
     symbol: args.pair.symbol,
@@ -183,17 +198,51 @@ async function loadHtfCandles(args: {
   return candles;
 }
 
+async function loadMtfCandles(args: {
+  pair: PairConfig;
+  strategyManager: StrategyManager;
+  fromTime: number;
+  toTime: number;
+  injected: Candle[] | undefined;
+  skipFetch: boolean;
+  cacheOpts: { forceRefresh: boolean };
+}): Promise<Candle[]> {
+  if (args.injected !== undefined) {
+    return args.injected;
+  }
+  if (args.skipFetch) {
+    return [];
+  }
+
+  const required = args.strategyManager.getRequiredMtfCandles();
+  const interval = candleIntervalSeconds(required.timeframe);
+  const candles = await loadCachedCandles({
+    symbol: args.pair.symbol,
+    poolAddress: args.pair.geckoPoolAddress,
+    timeframe: required.timeframe,
+    fromTime: args.fromTime - required.count * interval,
+    toTime: args.toTime,
+    ...args.cacheOpts,
+  });
+  if (candles.length === 0) {
+    console.log(`[${args.pair.symbol}] no MTF ${required.timeframe} candles; volatility skipped`);
+  }
+  return candles;
+}
+
 async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
   candles: Candle[];
   htfCandles: Candle[];
+  mtfCandles: Candle[];
   ignoreTrend: boolean;
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const { pair, strategyManager, candles, htfCandles, ignoreTrend, startingCashUsdc } = args;
+  const { pair, strategyManager, candles, htfCandles, mtfCandles, ignoreTrend, startingCashUsdc } =
+    args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -206,6 +255,7 @@ async function replayPair(args: {
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
   let htfEnd = 0;
+  let mtfEnd = 0;
   let lastMarket: MarketIndicators | undefined;
 
   for (let i = 0; i < candles.length; i++) {
@@ -219,12 +269,15 @@ async function replayPair(args: {
         pair: pair.symbol,
         strategyManager,
         htfCandles,
+        mtfCandles,
         atTime: candle.time,
         price: close,
         htfEnd,
+        mtfEnd,
         lastMarket,
       });
       htfEnd = synced.htfEnd;
+      mtfEnd = synced.mtfEnd;
       lastMarket = synced.lastMarket;
     }
 
@@ -317,26 +370,34 @@ function syncMarketIndicators(args: {
   pair: string;
   strategyManager: StrategyManager;
   htfCandles: Candle[];
+  mtfCandles: Candle[];
   atTime: number;
   price: number;
   htfEnd: number;
+  mtfEnd: number;
   lastMarket: MarketIndicators | undefined;
-}): { htfEnd: number; lastMarket: MarketIndicators | undefined } {
+}): { htfEnd: number; mtfEnd: number; lastMarket: MarketIndicators | undefined } {
   const htfEnd = advanceHtfEnd(args.htfCandles, args.atTime, args.htfEnd);
-  if (htfEnd === 0 || htfEnd === args.htfEnd) {
-    return { htfEnd, lastMarket: args.lastMarket };
+  const mtfEnd = advanceHtfEnd(args.mtfCandles, args.atTime, args.mtfEnd);
+  if ((htfEnd === 0 && mtfEnd === 0) || (htfEnd === args.htfEnd && mtfEnd === args.mtfEnd)) {
+    return { htfEnd, mtfEnd, lastMarket: args.lastMarket };
   }
 
   const htfWindow = args.htfCandles.slice(0, htfEnd);
-  const lastHtf = htfWindow[htfWindow.length - 1]!;
+  const mtfWindow = args.mtfCandles.slice(0, mtfEnd);
+  const lastBar = htfWindow[htfWindow.length - 1] ?? mtfWindow[mtfWindow.length - 1];
+  if (lastBar === undefined) {
+    return { htfEnd, mtfEnd, lastMarket: args.lastMarket };
+  }
   const market = args.strategyManager.evaluate(
     args.pair,
     htfWindow,
+    mtfWindow,
     args.price,
-    new Date(lastHtf.time * 1000),
+    new Date(lastBar.time * 1000),
   );
   args.strategyManager.applyMarketIndicators(market, args.lastMarket);
-  return { htfEnd, lastMarket: market };
+  return { htfEnd, mtfEnd, lastMarket: market };
 }
 
 /**

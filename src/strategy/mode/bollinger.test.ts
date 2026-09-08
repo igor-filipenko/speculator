@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Candle } from "../../types.js";
-import { evaluateBollinger, bollingerParamsFor, type BollingerParams } from "./bollinger.js";
+import {
+  evaluateBollinger,
+  BollingerStrategy,
+  bollingerParamsFor,
+  type BollingerParams,
+} from "./bollinger.js";
 import { rsi } from "../indicators.js";
 
 function baseParams(overrides: Partial<BollingerParams> = {}): BollingerParams {
@@ -145,6 +150,18 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /trend EMA/);
   });
 
+  it("skips the trend EMA gate when trendEmaPeriod is 0", () => {
+    const candles = reclaimInDowntrend();
+    const strategy = looseFilters({ trendEmaPeriod: 0 });
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: candles[candles.length - 1]!.close,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+  });
+
   it("ignores reclaim when band→mid distance is too small", () => {
     const candles = reclaimLowerBand();
     const strategy = looseFilters({ minBandToMidPct: 0.5 });
@@ -209,5 +226,31 @@ describe("evaluateBollinger filters", () => {
     });
     assert.equal(signal.side, "BUY", signal.reason);
     assert.match(signal.reason, /RSI/);
+  });
+});
+
+describe("bollingerParamsFor", () => {
+  it("loosens ADX/RSI in bullish high vol and stays conservative in flat squeeze", () => {
+    assert.equal(bollingerParamsFor("flat", "low").adxMax, 32);
+    assert.equal(bollingerParamsFor("flat", "low").timeframe, "15m");
+    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 45);
+    assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
+    assert.equal(bollingerParamsFor("flat", "low").trendEmaPeriod, 50);
+    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
+    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
+    assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
+    assert.equal(bollingerParamsFor("bullish", "high").trendEmaPeriod, 50);
+    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 40);
+    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 24);
+    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 40);
+  });
+
+  it("widens ATR stop/trail in bullish high vol", () => {
+    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrStopMult, 3);
+    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrTrailMult, 3.5);
+    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrStopMult, 2);
+    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrTrailMult, 2.5);
+    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().cooldownBars, 4);
+    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 3);
   });
 });

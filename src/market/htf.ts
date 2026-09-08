@@ -1,5 +1,14 @@
-import { atr, dmi, ema } from "../strategy/indicators.js";
-import type { Candle, HtfTimeframe, MarketIndicators, Trend } from "../types.js";
+import { atr, bollinger, dmi, ema, keltner, percentile } from "../strategy/indicators.js";
+import type {
+  Candle,
+  HtfSnapshot,
+  HtfTimeframe,
+  MarketIndicators,
+  MtfSnapshot,
+  MtfTimeframe,
+  Trend,
+  Volatility,
+} from "../types.js";
 import { keyLevels } from "./levels.js";
 
 /** HTF indicator periods for {@link evaluateMarketIndicators}. */
@@ -33,28 +42,67 @@ export function htfParamsFor(timeframe: HtfTimeframe): HtfParams {
   };
 }
 
+/** 1h volatility periods for {@link evaluateMarketIndicators}. */
+export interface MtfParams {
+  timeframe: MtfTimeframe;
+  bbPeriod: number;
+  bbStdDev: number;
+  kcPeriod: number;
+  kcAtrMult: number;
+  atrPctLookback: number;
+  atrPctHighPercentile: number;
+  swingLeftRight: number;
+  levelClusterAtrMult: number;
+  levelAtPriceAtrMult: number;
+  levelMaxDistAtr: number;
+  maxLevelsEach: number;
+}
+
+export function mtfParamsFor(): MtfParams {
+  return {
+    timeframe: "1h",
+    bbPeriod: 20,
+    bbStdDev: 2,
+    kcPeriod: 20,
+    kcAtrMult: 1.5,
+    atrPctLookback: 100,
+    atrPctHighPercentile: 0.7,
+    swingLeftRight: 2,
+    levelClusterAtrMult: 0.5,
+    levelAtPriceAtrMult: 1,
+    levelMaxDistAtr: 8,
+    maxLevelsEach: 3,
+  };
+}
+
 export interface EvaluateMarketIndicatorsInput {
   pair: string;
   candles: Candle[];
   price: number;
   at: Date;
   params: HtfParams;
+  mtfCandles?: Candle[];
+  mtfParams?: MtfParams;
 }
 
 /**
- * Pure HTF regime from candles. Callers load OHLCV via required-candle counts.
+ * Pure HTF trend + S/R from `candles`, 1h volatility from `mtfCandles`.
+ * Callers load OHLCV via required-candle counts.
  *
  * TODO: Open Interest / OI-mcap would need a derivatives vendor; GeckoTerminal does not provide it.
  */
 export function evaluateMarketIndicators(input: EvaluateMarketIndicatorsInput): MarketIndicators {
-  const { pair, candles, price, at, params } = input;
+  const { pair, candles, price, params } = input;
+  const mtfParams = input.mtfParams ?? mtfParamsFor();
+  const { volatility, mtf } = classifyVolatility(input.mtfCandles ?? [], price, mtfParams);
+  const htf: HtfSnapshot = { timeframe: params.timeframe, candles };
   const base: MarketIndicators = {
     pair,
-    timeframe: params.timeframe,
-    at,
     price,
     trend: "unknown",
-    candles,
+    volatility,
+    htf,
+    mtf,
   };
 
   if (candles.length === 0) {
@@ -81,33 +129,32 @@ export function evaluateMarketIndicators(input: EvaluateMarketIndicatorsInput): 
     adxFlatMax: params.adxFlatMax,
   });
 
-  const indicators: MarketIndicators = { ...base, trend };
   if (ema200 != null) {
-    indicators.ema200 = ema200;
+    htf.ema200 = ema200;
     if (price > 0 && ema200 > 0) {
-      indicators.distEma200Pct = (price - ema200) / ema200;
+      htf.distEma200Pct = (price - ema200) / ema200;
     }
   }
   if (ema50 != null) {
-    indicators.ema50 = ema50;
+    htf.ema50 = ema50;
   }
   if (adxNow != null) {
-    indicators.adx = adxNow;
+    htf.adx = adxNow;
   }
   if (plusDi != null) {
-    indicators.plusDi = plusDi;
+    htf.plusDi = plusDi;
   }
   if (minusDi != null) {
-    indicators.minusDi = minusDi;
+    htf.minusDi = minusDi;
   }
   if (atrNow != null) {
-    indicators.atr = atrNow;
+    htf.atr = atrNow;
     if (price > 0) {
-      indicators.atrPct = atrNow / price;
+      htf.atrPct = atrNow / price;
     }
   }
-  attachKeyLevels(indicators, candles, price, atrNow, params);
-  return indicators;
+  attachKeyLevels(htf, candles, price, atrNow, params);
+  return { ...base, trend };
 }
 
 /** Recompute S/R and last +DI/−DI from candles (hydrate overlay). */
@@ -117,24 +164,35 @@ export function attachDerivedFromCandles(
   livePrice: number,
   params: HtfParams,
 ): void {
+  const htf = indicators.htf ?? { timeframe: params.timeframe, candles };
+  indicators.htf = htf;
   const dmiNow = dmi(candles, params.adxPeriod);
   const plusDi = last(dmiNow.plusDi);
   const minusDi = last(dmiNow.minusDi);
   if (plusDi != null) {
-    indicators.plusDi = plusDi;
+    htf.plusDi = plusDi;
   }
   if (minusDi != null) {
-    indicators.minusDi = minusDi;
+    htf.minusDi = minusDi;
   }
-  attachKeyLevels(indicators, candles, livePrice, indicators.atr, params);
+  attachKeyLevels(htf, candles, livePrice, htf.atr, params);
 }
 
+type LevelAttachParams = Pick<
+  HtfParams,
+  | "swingLeftRight"
+  | "levelClusterAtrMult"
+  | "levelAtPriceAtrMult"
+  | "levelMaxDistAtr"
+  | "maxLevelsEach"
+>;
+
 function attachKeyLevels(
-  indicators: MarketIndicators,
+  snapshot: HtfSnapshot | MtfSnapshot,
   candles: Candle[],
   price: number,
   atrNow: number | undefined,
-  params: HtfParams,
+  params: LevelAttachParams,
 ): void {
   const found = keyLevels(candles, price, atrNow, {
     swingLeftRight: params.swingLeftRight,
@@ -144,14 +202,92 @@ function attachKeyLevels(
     maxLevelsEach: params.maxLevelsEach,
   });
   if (found.levels.length > 0) {
-    indicators.levels = found.levels;
+    snapshot.levels = found.levels;
   }
   if (found.support !== undefined) {
-    indicators.support = found.support;
+    snapshot.support = found.support;
   }
   if (found.resistance !== undefined) {
-    indicators.resistance = found.resistance;
+    snapshot.resistance = found.resistance;
   }
+}
+
+function classifyVolatility(
+  candles: Candle[],
+  price: number,
+  params: MtfParams,
+): { volatility: Volatility; mtf: MtfSnapshot } {
+  const mtf: MtfSnapshot = { timeframe: params.timeframe };
+  if (candles.length === 0) {
+    return { volatility: "unknown", mtf };
+  }
+
+  const closes = candles.map((c) => c.close);
+  const bb = bollinger(closes, params.bbPeriod, params.bbStdDev);
+  const kc = keltner(candles, params.kcPeriod, params.kcAtrMult);
+  const atrs = atr(candles, params.kcPeriod);
+  const atrNow = last(atrs);
+  if (atrNow != null) {
+    mtf.atr = atrNow;
+    if (price > 0) {
+      mtf.atrPct = atrNow / price;
+    }
+  }
+  attachKeyLevels(mtf, candles, price, atrNow, params);
+
+  const bbUpper = last(bb.upper);
+  const bbLower = last(bb.lower);
+  const bbMid = last(bb.mid);
+  const kcUpper = last(kc.upper);
+  const kcLower = last(kc.lower);
+  const kcMid = last(kc.mid);
+  if (bbMid != null) {
+    mtf.bbMid = bbMid;
+  }
+  if (bbUpper != null) {
+    mtf.bbUpper = bbUpper;
+  }
+  if (bbLower != null) {
+    mtf.bbLower = bbLower;
+  }
+  if (kcMid != null) {
+    mtf.kcMid = kcMid;
+  }
+  if (kcUpper != null) {
+    mtf.kcUpper = kcUpper;
+  }
+  if (kcLower != null) {
+    mtf.kcLower = kcLower;
+  }
+  if (bbUpper == null || bbLower == null || kcUpper == null || kcLower == null) {
+    return { volatility: "unknown", mtf };
+  }
+
+  if (bbUpper < kcUpper && bbLower > kcLower) {
+    return { volatility: "squeeze", mtf };
+  }
+
+  const atrPcts: number[] = [];
+  for (let i = 0; i < candles.length; i++) {
+    const a = atrs[i];
+    const close = candles[i]!.close;
+    if (a != null && close > 0) {
+      atrPcts.push(a / close);
+    }
+  }
+  const window = atrPcts.slice(-params.atrPctLookback);
+  if (window.length < params.atrPctLookback) {
+    return { volatility: "unknown", mtf };
+  }
+  const threshold = percentile(window, params.atrPctHighPercentile);
+  const lastAtrPct = window[window.length - 1];
+  if (threshold == null || lastAtrPct == null) {
+    return { volatility: "unknown", mtf };
+  }
+  if (lastAtrPct > threshold) {
+    return { volatility: "high", mtf };
+  }
+  return { volatility: "low", mtf };
 }
 
 function classifyTrend(input: {

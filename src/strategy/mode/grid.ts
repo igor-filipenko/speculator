@@ -7,10 +7,10 @@ import type {
   Strategy,
   Timeframe,
   Trend,
+  Volatility,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
 import { adx, atr, ema } from "../indicators.js";
-import { match } from "ts-pattern";
 
 export interface GridParams {
   timeframe: Timeframe;
@@ -29,40 +29,55 @@ export interface GridParams {
   trendEmaPeriod: number;
 }
 
-export function gridParamsFor(trend: Trend): GridParams {
+/** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; squeeze stays medium. */
+const GRID_MULT: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 8, low: 5, squeeze: 7, unknown: 6 },
+  flat: { high: 4, low: 3, squeeze: 3, unknown: 3 },
+  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+};
+
+/** Lower ADX cap in quiet bullish and in flat squeeze (coil before an unknown break). */
+const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 30, low: 22, squeeze: 28, unknown: 28 },
+  flat: { high: 25, low: 25, squeeze: 20, unknown: 22 },
+  bearish: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+  unknown: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+};
+
+/** Hard stop follows HTF trend only (vol is already in spacing / trail). */
+const ATR_STOP: Record<Trend, number> = {
+  bullish: 4,
+  flat: 4,
+  bearish: 2.5,
+  unknown: 2.5,
+};
+
+/** Tight trail in bullish high/squeeze so a spike does not reverse through the whole TP. */
+const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 6, low: 8, squeeze: 6, unknown: 8 },
+  flat: { high: 8, low: 8, squeeze: 8, unknown: 8 },
+  bearish: { high: 4, low: 4, squeeze: 4, unknown: 4 },
+  unknown: { high: 4, low: 4, squeeze: 4, unknown: 4 },
+};
+
+export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams {
   return {
     timeframe: "15m",
     atrPeriod: 14,
     adxPeriod: 14,
-    gridMult: match(trend)
-      .with("bullish", () => 8.0)
-      .with("flat", () => 3.0)
-      .with("bearish", () => 2.0)
-      .with("unknown", () => 2.0)
-      .exhaustive(),
+    gridMult: GRID_MULT[trend][volatility],
     reanchorBars: 40,
-    adxMax: trend === "bullish" ? 30 : 25,
+    adxMax: ADX_MAX[trend][volatility],
     trendEmaPeriod: 50,
   };
 }
 
-function riskParamsFor(trend: Trend): RiskParams {
-  const atrStopMult = match(trend)
-    .with("bullish", () => 4)
-    .with("flat", () => 4)
-    .with("bearish", () => 2.5)
-    .with("unknown", () => 2.5)
-    .exhaustive();
-  const atrTrailMult = match(trend)
-    .with("bullish", () => 8)
-    .with("flat", () => 8)
-    .with("bearish", () => 4)
-    .with("unknown", () => 4)
-    .exhaustive();
+function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
   return {
     timeframe: "15m",
-    atrStopMult,
-    atrTrailMult,
+    atrStopMult: ATR_STOP[trend],
+    atrTrailMult: ATR_TRAIL[trend][volatility],
     cooldownBars: 3,
     minHoldBars: 1,
   };
@@ -186,9 +201,9 @@ export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
 
-  constructor(trend: Trend) {
-    this.params = gridParamsFor(trend);
-    this.risk = riskParamsFor(trend);
+  constructor(trend: Trend, volatility: Volatility) {
+    this.params = gridParamsFor(trend, volatility);
+    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {

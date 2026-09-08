@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, MarketIndicators } from "../types.js";
+import type { Candle, MarketIndicators, PriceLevel } from "../types.js";
 import { buildMarketStateSvg } from "./market-state-svg.js";
 import { htfParamsFor } from "./strategy-manager.js";
 
@@ -25,17 +25,19 @@ function makeCandles(n: number): Candle[] {
   return out;
 }
 
-function sampleState(candles: Candle[], levels?: MarketIndicators["levels"]): MarketIndicators {
+function sampleState(candles: Candle[], levels?: PriceLevel[]): MarketIndicators {
   return {
     pair: "SOL/USDC",
-    timeframe: "4h",
-    at: new Date("2026-01-01T00:00:00.000Z"),
     price: candles[candles.length - 1]?.close ?? 100,
     trend: "bullish",
-    support: 95,
-    resistance: 108,
-    ...(levels !== undefined ? { levels } : {}),
-    candles,
+    volatility: "low",
+    htf: {
+      timeframe: "4h",
+      support: 95,
+      resistance: 108,
+      ...(levels !== undefined ? { levels } : {}),
+      candles,
+    },
   };
 }
 
@@ -51,6 +53,7 @@ describe("buildMarketStateSvg", () => {
     assert.ok(svg.includes("EMA200"));
     assert.ok(svg.includes("ADX14"));
     assert.ok(svg.includes("bullish"));
+    assert.ok(svg.includes("1h low"));
     assert.ok(svg.includes("limegreen"));
     assert.ok(svg.includes("tomato"));
     assert.ok(svg.includes("skyblue"));
@@ -59,7 +62,7 @@ describe("buildMarketStateSvg", () => {
   });
 
   it("draws support and resistance level prices", () => {
-    const levels: MarketIndicators["levels"] = [
+    const levels: PriceLevel[] = [
       { price: 95.25, kind: "support", touches: 3, lastTime: 1_700_000_000, volume: 12 },
       { price: 108.5, kind: "resistance", touches: 2, lastTime: 1_700_100_000, volume: 9 },
     ];

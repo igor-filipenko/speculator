@@ -64,11 +64,13 @@ function htfAwareManager(strategy: Strategy): StrategyManager {
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
-    getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
-    evaluate: (pair, candles, price, at): MarketIndicators =>
+    getRequiredHtfCandles: () => ({ timeframe: "4h", count: 220 }),
+    getRequiredMtfCandles: () => ({ timeframe: "1h" as const, count: 120 }),
+    evaluate: (pair, htfCandles, mtfCandles, price, at): MarketIndicators =>
       evaluateMarketIndicators({
         pair,
-        candles,
+        candles: htfCandles,
+        mtfCandles,
         price,
         at,
         params,
@@ -91,14 +93,14 @@ function managerFor(
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
-    getRequiredCandles: () => ({ timeframe: "4h", count: 220 }),
-    evaluate: (pair, candles, price, at): MarketIndicators => ({
+    getRequiredHtfCandles: () => ({ timeframe: "4h", count: 220 }),
+    getRequiredMtfCandles: () => ({ timeframe: "1h" as const, count: 120 }),
+    evaluate: (pair, candles, _mtfCandles, price): MarketIndicators => ({
       pair,
-      timeframe: "4h",
-      at,
       price,
       trend: "unknown",
-      candles,
+      volatility: "unknown",
+      htf: { timeframe: "4h", candles },
     }),
     applyMarketIndicators: () => false,
   };
@@ -318,7 +320,7 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("bollinger");
+    const strategy = loadStrategy("bollinger", "flat", "low");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;

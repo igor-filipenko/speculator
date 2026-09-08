@@ -31,7 +31,7 @@ export interface TelegramConfig {
 
 export interface AppConfig {
   strategy: StrategyMode;
-  /** Higher-timeframe bars for StrategyManager (default 4h). */
+  /** Higher-timeframe bars for StrategyManager trend / S/R (default 4h). */
   htf: HtfTimeframe;
   jupiterApiKey: string;
   watchlist: string[];

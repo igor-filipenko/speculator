@@ -6,7 +6,9 @@ import {
   DEFAULT_POOL_MAX,
   DEFAULT_POOL_MIN,
   isRetryableDbError,
+  readApplicationName,
   readPoolLimits,
+  setBotId,
   withDbRetry,
 } from "./db.js";
 
@@ -31,6 +33,45 @@ afterEach(() => {
       process.env[name] = value;
     }
   }
+});
+
+describe("readApplicationName", () => {
+  const savedPgAppName = process.env["PGAPPNAME"];
+  const savedBotId = process.env["BOT_ID"];
+
+  afterEach(() => {
+    if (savedPgAppName === undefined) {
+      delete process.env["PGAPPNAME"];
+    } else {
+      process.env["PGAPPNAME"] = savedPgAppName;
+    }
+    if (savedBotId === undefined) {
+      delete process.env["BOT_ID"];
+    } else {
+      process.env["BOT_ID"] = savedBotId;
+    }
+    setBotId(undefined);
+  });
+
+  it("uses speculator/<BOT_ID> by default", () => {
+    delete process.env["PGAPPNAME"];
+    setBotId(undefined);
+    process.env["BOT_ID"] = "local";
+    assert.equal(readApplicationName(), "speculator/local");
+  });
+
+  it("falls back to speculator without BOT_ID", () => {
+    delete process.env["PGAPPNAME"];
+    delete process.env["BOT_ID"];
+    setBotId(undefined);
+    assert.equal(readApplicationName(), "speculator");
+  });
+
+  it("prefers PGAPPNAME", () => {
+    process.env["PGAPPNAME"] = "speculator-paper";
+    process.env["BOT_ID"] = "local";
+    assert.equal(readApplicationName(), "speculator-paper");
+  });
 });
 
 describe("readPoolLimits", () => {

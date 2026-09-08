@@ -52,6 +52,26 @@ function envInt(name: string, fallback: number, min: number): number {
   return value;
 }
 
+/** Postgres `application_name` NAMEDATALEN minus terminator. */
+const APPLICATION_NAME_MAX = 63;
+
+function clipApplicationName(name: string): string {
+  return name.length <= APPLICATION_NAME_MAX ? name : name.slice(0, APPLICATION_NAME_MAX);
+}
+
+/**
+ * Name shown in `pg_stat_activity`.
+ * Override with `PGAPPNAME`; otherwise `speculator/<BOT_ID>` or `speculator`.
+ */
+export function readApplicationName(): string {
+  const override = (process.env["PGAPPNAME"] ?? "").trim();
+  if (override) {
+    return clipApplicationName(override);
+  }
+  const botId = (pinnedBotId ?? process.env["BOT_ID"] ?? "").trim();
+  return clipApplicationName(botId ? `speculator/${botId}` : "speculator");
+}
+
 /** Pool size and timeouts from env, with low defaults. */
 export function readPoolLimits(): DbPoolLimits {
   const max = envInt("DATABASE_POOL_MAX", DEFAULT_POOL_MAX, 1);
@@ -86,6 +106,7 @@ function poolOptions(): PoolConfig {
     min: limits.min,
     idleTimeoutMillis: limits.idleTimeoutMillis,
     connectionTimeoutMillis: limits.connectionTimeoutMillis,
+    application_name: readApplicationName(),
     allowExitOnIdle: true,
   };
   if (sslmode === "disable" || sslmode === "allow" || sslmode === "prefer") {

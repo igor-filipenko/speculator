@@ -64,6 +64,19 @@ describe("ohlcv cache", () => {
     assert.equal(rows[0]?.close, 55);
   });
 
+  it("upserts a batch that contains duplicate timestamps", async () => {
+    const timeframe = "15m" as const;
+    const t = 1_700_200_000;
+    const dupes = [candle(t, 10), candle(t + 900, 11), candle(t, 12)];
+
+    await upsertCandles(JUP_POOL, timeframe, dupes);
+
+    const rows = await readCandles(JUP_POOL, timeframe, t, t + 1800);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.close, 12);
+    assert.equal(rows[1]?.close, 11);
+  });
+
   it("upserts more rows than a single parameterized statement can bind", async () => {
     const timeframe = "1d" as const;
     const fromTime = 1_600_000_000;

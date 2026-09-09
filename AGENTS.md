@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Grid on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs.
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Grid on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), plus offline **backtest** replay with emulated fill costs and **regime** replay of HTF/1h market-indicator switches.
 
 Build/run: [README.md](./README.md).
 
@@ -12,6 +12,7 @@ Build/run: [README.md](./README.md).
 
 - Live Jupiter swaps and wallet signing are in scope for **`pnpm trade` only**. Paper and watch stay quote-only; backtest must not call live Jupiter.
 - Candle-replay **backtest** (`pnpm backtest`): Gecko OHLCV + Timescale `market.candles` cache + Jupiter-like fee/slippage emulation.
+- Candle-replay **regime** (`pnpm regime`): same HTF/1h close cadence as backtest; logs trend/vol switches and draws a CLI chart. No fills.
 - **Do not** add shorts, leverage, or multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended).
 - Comments and user-facing docs in this repo are **English**.
@@ -23,7 +24,7 @@ Build/run: [README.md](./README.md).
 
 ```
 src/
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest | regime
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/
@@ -49,11 +50,13 @@ src/
   strategy/indicators.ts
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
+  strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol MarketIndicators; getActiveStrategy / getActiveRiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX SVG
   risk/risk-manager.ts         # Signal + Snapshot + RiskParams → Command | Risk
   strategy/mode/bollinger-svg.ts # Bollinger band SVG
   strategy/mode/grid-svg.ts    # ATR grid SVG
+  strategy/mode/donchian-svg.ts # Donchian + volume SMA SVG
   chart/render-png.ts   # SVG → PNG
   paper/portfolio.ts    # applyOrder (not raw signals)
   paper/store.ts        # paper load/save (Timescale)
@@ -67,6 +70,9 @@ src/
   engine/trade.ts
   engine/wallet.ts      # one-shot live portfolio print
   engine/backtest.ts    # offline candle replay
+  engine/regime.ts      # HTF/1h market-indicator switch replay + CLI chart
+  engine/market-replay.ts # shared HTF/1h load + close-cadence evaluate
+  engine/replay-window.ts # --days / --from / --to parsing
 ```
 
 ## Conventions

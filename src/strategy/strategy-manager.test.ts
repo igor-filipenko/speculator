@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type { Candle } from "../types.js";
 import {
+  classifyHighLow,
+  confirmLabel,
+  confirmTrend,
   evaluateMarketIndicators,
   htfParamsFor,
   mtfParamsFor,
@@ -89,6 +92,7 @@ describe("htfParamsFor / getRequiredCandles", () => {
     assert.equal(required.timeframe, "4h");
     assert.ok(required.count >= 200);
     assert.equal(htfParamsFor("1d").timeframe, "1d");
+    assert.equal(htfParamsFor("4h").trendConfirmBars, 2);
   });
 
   it("requires at least 120 1h bars for MTF volatility", () => {
@@ -97,6 +101,9 @@ describe("htfParamsFor / getRequiredCandles", () => {
     assert.equal(required.timeframe, "1h");
     assert.ok(required.count >= 120);
     assert.equal(mtfParams.timeframe, "1h");
+    assert.equal(mtfParams.volConfirmBars, 2);
+    assert.equal(mtfParams.atrPctEnterHighPercentile, 0.8);
+    assert.equal(mtfParams.atrPctExitHighPercentile, 0.6);
   });
 });
 
@@ -191,6 +198,25 @@ describe("applyMarketIndicators", () => {
     manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+  });
+
+  it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "donchian", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getMode(), "donchian");
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("no-buy"));
+    const first = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    manager.applyMarketIndicators(first);
+    const squeezed = { ...first, volatility: "squeeze" as const };
+    manager.applyMarketIndicators(squeezed, first);
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.6"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 });
@@ -288,6 +314,97 @@ describe("evaluateMarketIndicators", () => {
     assert.ok(candles[candles.length - 1]!.close > indicators.htf.ema200);
     assert.equal(indicators.trend, "flat");
   });
+
+  it("keeps the previous HTF trend through a one-bar stack break", () => {
+    const up = series(250, 50, 0.8);
+    const last = up[up.length - 1]!;
+    const crash: Candle = {
+      ...last,
+      open: last.close,
+      high: last.close,
+      low: last.close * 0.45,
+      close: last.close * 0.5,
+    };
+    const crashed = [...up.slice(0, -1), crash];
+    const steady = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: up,
+      price: last.close,
+      at,
+      params,
+    });
+    const oneBar = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: crashed,
+      price: crash.close,
+      at,
+      params,
+    });
+    const hairTrigger = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: crashed,
+      price: crash.close,
+      at,
+      params: { ...params, trendConfirmBars: 1 },
+    });
+    assert.equal(steady.trend, "bullish");
+    assert.equal(oneBar.trend, "bullish");
+    assert.notEqual(hairTrigger.trend, "bullish");
+  });
+
+  it("publishes a new trend after two consecutive HTF bars", () => {
+    const up = series(250, 50, 0.8);
+    const head = up.slice(0, -2);
+    const t0 = head[head.length - 1]!.time;
+    const interval = 4 * 60 * 60;
+    const crash1 = bar(t0 + interval, 10, 2);
+    const crash2 = bar(t0 + 2 * interval, 9, 2);
+    const twoBars = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: [...head, crash1, crash2],
+      price: crash2.close,
+      at,
+      params,
+    });
+    assert.notEqual(twoBars.trend, "bullish");
+  });
+});
+
+describe("confirmTrend", () => {
+  it("ignores a one-bar blip and switches on the second consecutive label", () => {
+    assert.equal(confirmTrend(["flat", "bearish"], 2), "flat");
+    assert.equal(confirmTrend(["flat", "bearish", "bearish"], 2), "bearish");
+    assert.equal(confirmTrend(["flat", "bearish", "flat"], 2), "flat");
+    assert.equal(confirmTrend(["bullish", "flat", "bullish"], 2), "bullish");
+  });
+
+  it("publishes the first label after unknown immediately", () => {
+    assert.equal(confirmTrend(["unknown", "unknown", "flat"], 2), "flat");
+  });
+
+  it("switches on the first bar when confirmBars is 1", () => {
+    assert.equal(confirmTrend(["flat", "bearish"], 1), "bearish");
+  });
+
+  it("confirms 1h volatility labels the same way", () => {
+    assert.equal(confirmLabel(["low", "high"], 2, "unknown"), "low");
+    assert.equal(confirmLabel(["low", "high", "high"], 2, "unknown"), "high");
+    assert.equal(confirmLabel(["squeeze", "low", "squeeze"], 2, "unknown"), "squeeze");
+  });
+});
+
+describe("classifyHighLow", () => {
+  it("enters high only above the enter cut and stays high until the exit cut", () => {
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "low"), "low");
+    assert.equal(classifyHighLow(0.025, 0.02, 0.01, "low"), "high");
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "high"), "high");
+    assert.equal(classifyHighLow(0.005, 0.02, 0.01, "high"), "low");
+  });
+
+  it("does not stay high when previous is squeeze or unknown", () => {
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "squeeze"), "low");
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "unknown"), "low");
+  });
 });
 
 describe("evaluateMarketIndicators volatility", () => {
@@ -346,6 +463,69 @@ describe("evaluateMarketIndicators volatility", () => {
       mtfParams,
     });
     assert.equal(indicators.volatility, "low");
+  });
+
+  it("keeps the previous 1h vol through a one-bar squeeze break", () => {
+    const squeezed = squeezeMtf(40);
+    const last = squeezed[squeezed.length - 1]!;
+    const breakout: Candle = {
+      ...last,
+      open: last.close,
+      high: last.close * 2,
+      low: last.close,
+      close: last.close * 2,
+    };
+    const blipped = [...squeezed.slice(0, -1), breakout];
+    const htf = series(250, 50, 0.8);
+    const steady = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: htf,
+      mtfCandles: squeezed,
+      price: last.close,
+      at,
+      params,
+      mtfParams,
+    });
+    const oneBar = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: htf,
+      mtfCandles: blipped,
+      price: breakout.close,
+      at,
+      params,
+      mtfParams,
+    });
+    const hairTrigger = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: htf,
+      mtfCandles: blipped,
+      price: breakout.close,
+      at,
+      params,
+      mtfParams: { ...mtfParams, volConfirmBars: 1 },
+    });
+    assert.equal(steady.volatility, "squeeze");
+    assert.equal(oneBar.volatility, "squeeze");
+    assert.notEqual(hairTrigger.volatility, "squeeze");
+  });
+
+  it("publishes a new 1h vol after two consecutive bars", () => {
+    const squeezed = squeezeMtf(40);
+    const head = squeezed.slice(0, -2);
+    const t0 = head[head.length - 1]!.time;
+    const hour = 60 * 60;
+    const break1 = mtfBar(t0 + hour, 200, 0.4);
+    const break2 = mtfBar(t0 + 2 * hour, 201, 0.4);
+    const twoBars = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      mtfCandles: [...head, break1, break2],
+      price: break2.close,
+      at,
+      params,
+      mtfParams,
+    });
+    assert.notEqual(twoBars.volatility, "squeeze");
   });
 
   it("attaches 1h support and resistance from swing clusters", () => {

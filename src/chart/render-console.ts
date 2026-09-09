@@ -1,15 +1,38 @@
 import { Chart, CONSTANTS } from "@neabyte/candlestick-cli";
-import type { Candle, Trade } from "../types.js";
+import type { Candle, Trade, Trend, Volatility } from "../types.js";
+
+export type MarkerColor = "green" | "red" | "yellow" | "cyan" | "magenta" | "white";
+
+/** Extra glyph on the candle plot (regime switch, etc.). */
+export interface ChartEvent {
+  at: Date;
+  /** Single-character label drawn on the event row. */
+  label: string;
+  color?: MarkerColor;
+}
+
+/** Sample used to paint a continuous trend/vol band under the candles. */
+export interface RegimeBandSample {
+  at: Date;
+  trend: Trend;
+  volatility: Volatility;
+}
 
 export interface RenderConsoleChartInput {
   pair: string;
   candles: Candle[];
-  trades: Trade[];
+  trades?: Trade[];
+  events?: ChartEvent[];
+  regimeBands?: RegimeBandSample[];
+  /** Chart title (default: `${pair} backtest`). */
+  title?: string;
+  /** Extra legend lines after the default trade/event legend. */
+  extraLegend?: string;
   /** Terminal chart width (0 = auto from stdout). */
   width?: number;
   /** Terminal chart height (0 = auto from stdout). */
   height?: number;
-  /** Colorize B/S markers (default: stdout.isTTY). */
+  /** Colorize markers (default: stdout.isTTY). */
   color?: boolean;
 }
 
@@ -23,6 +46,22 @@ export interface BucketedCandle extends Candle {
 const ANSI_BUY = "\u001b[92m";
 const ANSI_SELL = "\u001b[91m";
 const ANSI_RESET = "\u001b[00m";
+const ANSI_FG: Record<MarkerColor, string> = {
+  green: "\u001b[92m",
+  red: "\u001b[91m",
+  yellow: "\u001b[93m",
+  cyan: "\u001b[96m",
+  magenta: "\u001b[95m",
+  white: "\u001b[97m",
+};
+const ANSI_BG: Record<MarkerColor, string> = {
+  green: "\u001b[42m",
+  red: "\u001b[41m",
+  yellow: "\u001b[43m",
+  cyan: "\u001b[46m",
+  magenta: "\u001b[45m",
+  white: "\u001b[47;30m",
+};
 /** Strip CSI color sequences from chart lines (for pad measurement). */
 const ANSI_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "g");
 
@@ -112,6 +151,39 @@ export function tradeColumnIndexes(
   return markers;
 }
 
+/** Map each event time onto a bucket column, or -1 if unmatched. */
+export function eventColumnIndexes(
+  buckets: BucketedCandle[],
+  events: ChartEvent[],
+  originalCandles: Candle[],
+): { label: string; color?: MarkerColor; column: number }[] {
+  const markers: { label: string; color?: MarkerColor; column: number }[] = [];
+  for (const event of events) {
+    const sec = Math.floor(event.at.getTime() / 1000);
+    const sourceIndex = findNearestCandleIndex(originalCandles, sec);
+    if (sourceIndex < 0) continue;
+    const column = sourceIndexToColumn(buckets, sourceIndex);
+    if (column < 0) continue;
+    const marker: { label: string; color?: MarkerColor; column: number } = {
+      label: event.label.slice(0, 1) || "•",
+      column,
+    };
+    if (event.color !== undefined) {
+      marker.color = event.color;
+    }
+    markers.push(marker);
+  }
+  return markers;
+}
+
+function sourceIndexToColumn(buckets: BucketedCandle[], sourceIndex: number): number {
+  for (let col = 0; col < buckets.length; col++) {
+    const b = buckets[col]!;
+    if (sourceIndex >= b.sourceFrom && sourceIndex < b.sourceTo) return col;
+  }
+  return -1;
+}
+
 function findNearestCandleIndex(candles: Candle[], timeSec: number): number {
   if (candles.length === 0) return -1;
   let best = 0;
@@ -148,6 +220,128 @@ export function buildTradeMarkerRow(
   });
 
   return `${" ".repeat(Math.max(0, leftPad))}${colored.join("")}`;
+}
+
+export function trendLabel(trend: Trend): string {
+  switch (trend) {
+    case "bullish":
+      return "U";
+    case "bearish":
+      return "D";
+    case "flat":
+      return "F";
+    case "unknown":
+      return "?";
+  }
+}
+
+export function volLabel(volatility: Volatility): string {
+  switch (volatility) {
+    case "high":
+      return "H";
+    case "low":
+      return "L";
+    case "squeeze":
+      return "Q";
+    case "unknown":
+      return "?";
+  }
+}
+
+export function trendColor(trend: Trend): MarkerColor {
+  switch (trend) {
+    case "bullish":
+      return "green";
+    case "bearish":
+      return "red";
+    case "flat":
+      return "yellow";
+    case "unknown":
+      return "white";
+  }
+}
+
+export function volColor(volatility: Volatility): MarkerColor {
+  switch (volatility) {
+    case "high":
+      return "magenta";
+    case "low":
+      return "cyan";
+    case "squeeze":
+      return "yellow";
+    case "unknown":
+      return "white";
+  }
+}
+
+export function buildEventMarkerRow(
+  columnCount: number,
+  markers: { label: string; color?: MarkerColor; column: number }[],
+  leftPad: number,
+  color: boolean,
+): string {
+  const cells: string[] = Array.from({ length: columnCount }, () => " ");
+  const colors: (MarkerColor | undefined)[] = Array.from({ length: columnCount }, () => undefined);
+  for (const m of markers) {
+    if (m.column < 0 || m.column >= columnCount) continue;
+    const prev = cells[m.column]!;
+    if (prev === " " || prev === m.label) {
+      cells[m.column] = m.label;
+      colors[m.column] = m.color;
+    } else {
+      cells[m.column] = "*";
+      colors[m.column] = undefined;
+    }
+  }
+
+  const painted = cells.map((ch, i) => {
+    const fg = colors[i];
+    if (!color || ch === " " || fg === undefined) return ch;
+    return `${ANSI_FG[fg]}${ch}${ANSI_RESET}`;
+  });
+  return `${" ".repeat(Math.max(0, leftPad))}${painted.join("")}`;
+}
+
+/** Last regime sample that falls in each bucket (carry-forward). */
+export function regimeColumnStates(
+  buckets: BucketedCandle[],
+  samples: RegimeBandSample[],
+  originalCandles: Candle[],
+): { trend: Trend; volatility: Volatility }[] {
+  const states: { trend: Trend; volatility: Volatility }[] = [];
+  let carry: { trend: Trend; volatility: Volatility } | undefined;
+  let sampleIndex = 0;
+  const ordered = [...samples].sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  for (const bucket of buckets) {
+    const lastTime = originalCandles[bucket.sourceTo - 1]?.time ?? bucket.time;
+    while (sampleIndex < ordered.length) {
+      const sample = ordered[sampleIndex]!;
+      const sec = Math.floor(sample.at.getTime() / 1000);
+      if (sec > lastTime) break;
+      carry = { trend: sample.trend, volatility: sample.volatility };
+      sampleIndex += 1;
+    }
+    states.push(carry ?? { trend: "unknown", volatility: "unknown" });
+  }
+  return states;
+}
+
+export function buildRegimeBandRow(
+  states: { trend: Trend; volatility: Volatility }[],
+  kind: "trend" | "vol",
+  leftPad: number,
+  color: boolean,
+): string {
+  const cells = states.map((s) => {
+    const label = kind === "trend" ? trendLabel(s.trend) : volLabel(s.volatility);
+    const paint = kind === "trend" ? trendColor(s.trend) : volColor(s.volatility);
+    if (!color) return label;
+    return `${ANSI_BG[paint]}${label}${ANSI_RESET}`;
+  });
+  const prefix = kind === "trend" ? "T" : "V";
+  const pad = Math.max(0, leftPad - 2);
+  return `${" ".repeat(pad)}${prefix} ${cells.join("")}`;
 }
 
 /**
@@ -234,11 +428,11 @@ function toLibCandles(buckets: BucketedCandle[]) {
 }
 
 /**
- * Render a terminal candlestick chart with B/S markers and a time axis.
+ * Render a terminal candlestick chart with optional B/S markers, regime bands, and a time axis.
  * Returns the full multi-line string (does not print).
  */
 export async function renderConsoleChart(input: RenderConsoleChartInput): Promise<string> {
-  const { pair, candles, trades } = input;
+  const { pair, candles, trades = [], events = [], regimeBands = [] } = input;
   if (candles.length === 0) {
     return "(no candles to chart)";
   }
@@ -248,10 +442,11 @@ export async function renderConsoleChart(input: RenderConsoleChartInput): Promis
   const color = input.color ?? Boolean(process.stdout.isTTY);
   const maxCols = visibleCandleColumns(width);
   const buckets = bucketCandlesForWidth(candles, maxCols);
-  const markers = tradeColumnIndexes(buckets, trades, candles);
+  const tradeMarkers = tradeColumnIndexes(buckets, trades, candles);
+  const eventMarkers = eventColumnIndexes(buckets, events, candles);
 
   const chart = new Chart(toLibCandles(buckets), {
-    title: `${pair} backtest`,
+    title: input.title ?? `${pair} backtest`,
     width,
     height,
   });
@@ -266,23 +461,64 @@ export async function renderConsoleChart(input: RenderConsoleChartInput): Promis
       ? buckets.slice(buckets.length - visibleCount)
       : buckets;
   const colOffset = buckets.length - visibleBuckets.length;
-  const visibleMarkers = markers
-    .map((m) => ({ ...m, column: m.column - colOffset }))
-    .filter((m) => m.column >= 0 && m.column < visibleBuckets.length);
+  const shift = <T extends { column: number }>(markers: T[]): T[] =>
+    markers
+      .map((m) => ({ ...m, column: m.column - colOffset }))
+      .filter((m) => m.column >= 0 && m.column < visibleBuckets.length);
 
   const leftPad = inferCandleLeftPad(body);
-  const markerRow = buildTradeMarkerRow(visibleBuckets.length, visibleMarkers, leftPad, color);
+  const overlayRows: string[] = [];
+  if (trades.length > 0) {
+    overlayRows.push(
+      buildTradeMarkerRow(visibleBuckets.length, shift(tradeMarkers), leftPad, color),
+    );
+  }
+  if (events.length > 0) {
+    overlayRows.push(
+      buildEventMarkerRow(visibleBuckets.length, shift(eventMarkers), leftPad, color),
+    );
+  }
+  if (regimeBands.length > 0) {
+    const states = regimeColumnStates(visibleBuckets, regimeBands, candles);
+    overlayRows.push(buildRegimeBandRow(states, "trend", leftPad, color));
+    overlayRows.push(buildRegimeBandRow(states, "vol", leftPad, color));
+  }
+
   const timeAxis = buildTimeAxisRow(visibleBuckets, leftPad);
-  const legend = color
-    ? `Trades: ${ANSI_BUY}B${ANSI_RESET}=BUY  ${ANSI_SELL}S${ANSI_RESET}=SELL  *=both in bucket` +
-      (buckets.length < candles.length
-        ? `  (showing ${visibleBuckets.length}/${candles.length} bucketed candles)`
-        : "")
-    : `Trades: B=BUY  S=SELL  *=both in bucket` +
-      (buckets.length < candles.length
-        ? `  (showing ${visibleBuckets.length}/${candles.length} bucketed candles)`
-        : "");
+  const bucketNote =
+    buckets.length < candles.length
+      ? `  (showing ${visibleBuckets.length}/${candles.length} bucketed candles)`
+      : "";
+  const legendParts: string[] = [];
+  if (trades.length > 0) {
+    legendParts.push(
+      color
+        ? `Trades: ${ANSI_BUY}B${ANSI_RESET}=BUY  ${ANSI_SELL}S${ANSI_RESET}=SELL  *=both in bucket`
+        : "Trades: B=BUY  S=SELL  *=both in bucket",
+    );
+  }
+  if (events.length > 0 || regimeBands.length > 0) {
+    legendParts.push(
+      color
+        ? `Trend: ${ANSI_FG.green}U${ANSI_RESET}=bullish  ${ANSI_FG.red}D${ANSI_RESET}=bearish  ${ANSI_FG.yellow}F${ANSI_RESET}=flat  ?=unknown`
+        : "Trend: U=bullish  D=bearish  F=flat  ?=unknown",
+    );
+    legendParts.push(
+      color
+        ? `Vol:   ${ANSI_FG.magenta}H${ANSI_RESET}=high  ${ANSI_FG.cyan}L${ANSI_RESET}=low  ${ANSI_FG.yellow}Q${ANSI_RESET}=squeeze  ?=unknown`
+        : "Vol:   H=high  L=low  Q=squeeze  ?=unknown",
+    );
+  }
+  if (input.extraLegend) {
+    legendParts.push(input.extraLegend);
+  }
+  if (bucketNote) {
+    legendParts.push(bucketNote.trim());
+  }
+  const legend = legendParts.join("\n");
+  const overlay = overlayRows.length > 0 ? `${overlayRows.join("\n")}\n` : "";
+  const header = legend ? `${legend}\n` : "";
 
   // Info bar is appended on the last price line by the lib; put time axis after the body.
-  return `${legend}\n${markerRow}\n${body}\n${timeAxis}`;
+  return `${header}${overlay}${body}\n${timeAxis}`;
 }

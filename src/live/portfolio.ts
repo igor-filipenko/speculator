@@ -2,7 +2,7 @@ import { match } from "ts-pattern";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../db/live.js";
 import { tradableBaseSize } from "../exchange/amounts.js";
 import type { BalanceSource } from "../exchange/wallet.js";
-import type { Order, PairConfig, Portfolio, Position, Snapshot, Trade } from "../types.js";
+import type { Order, PairConfig, Portfolio, Position, PortfolioSnapshot, Trade } from "../types.js";
 import type {
   PersistableLivePortfolio,
   PersistedLivePortfolio,
@@ -144,7 +144,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     };
   }
 
-  getSnapshot(markPrice: number): Snapshot {
+  getSnapshot(markPrice: number): PortfolioSnapshot {
     const positionValue = this.position.side === "long" ? this.position.size * markPrice : 0;
     return {
       simulated: false,

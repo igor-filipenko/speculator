@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default) or `grid`                                                       |
+| `STRATEGY`                            | `bollinger` (default), `grid`, or `donchian`                                          |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
@@ -162,6 +162,16 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 | Meme (future pairs) | 2.0%     | 0.30%    | same                        |
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
+
+Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
+
+```bash
+pnpm regime
+pnpm regime -- --days 14
+pnpm regime -- --from 01-01-2026 --to 01-08-2026
+```
+
+Same `--days` / `--from` / `--to` / `--force-refresh` flags as backtest. Strategy comes from env `STRATEGY`. Regime does not take `--ignore-trend` (market state is the whole point).
 
 Single iteration (smoke test):
 
@@ -332,7 +342,7 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the 70th percentile of the last 100 ATR% values, else `low` (`unknown` until warm). HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend or volatility changes.
+`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend or volatility changes.
 
 ### Bollinger flat (`bollinger`)
 
@@ -349,7 +359,15 @@ Cooldown 4 bars, minHold 3. `/chart` draws Bollinger mid/upper/lower plus RSI wi
 
 ### Grid (`grid`)
 
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX is under the regime cap and close is above trend EMA 50. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/low → ×3; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 3 bars.
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and close is above trend EMA 50. **Skips squeeze entries at or above the last take-profit**, **skips bullish/low entries at or above the last SELL**, and **skips a new long after an ATR stop/trail while HTF is still bullish**. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×4 and ADX 22; flat/low or squeeze → ×3 and ADX 20; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
+
+### Donchian breakout (`donchian`)
+
+Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars, close above trend EMA 50, and the **prior channel high above the last SELL fill** (skips throwbacks that only reclaim a local high). Sells when close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner. Volume/EMA do not block exits. ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
+
+**Volume SMA multiplier (bullish only):** high 1.2; low 1.5; squeeze 1.6.
+
+ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 5× flat, 3× bearish. Cooldown 96 bars (24h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 
@@ -375,13 +393,15 @@ src/
   exchange/wallet.ts       # JSON keypair + RPC balances
   exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner
+  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
+  strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
   strategy/mode/grid-svg.ts      # grid SVG for /chart
+  strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   paper/portfolio.ts
   paper/store.ts           # paper load/save (Timescale bot.* mode=paper)

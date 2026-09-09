@@ -1,5 +1,6 @@
 import type {
   Candle,
+  MarketIndicators,
   RequiredCandles,
   RiskParams,
   Signal,
@@ -253,7 +254,13 @@ export class BollingerStrategy implements Strategy {
     };
   }
 
-  evaluateSignal(pair: string, candles: Candle[], price: number, at: Date): Signal {
+  evaluateSignal(
+    pair: string,
+    candles: Candle[],
+    _market: MarketIndicators,
+    price: number,
+    at: Date,
+  ): Signal {
     return evaluateBollinger({
       pair,
       candles,

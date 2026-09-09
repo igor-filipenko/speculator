@@ -114,8 +114,16 @@ export async function upsertCandles(
   if (candles.length === 0) {
     return;
   }
-  for (let i = 0; i < candles.length; i += UPSERT_BATCH_SIZE) {
-    const batch = candles.slice(i, i + UPSERT_BATCH_SIZE);
+  // Postgres rejects INSERT … ON CONFLICT when the same conflict key appears twice in one statement.
+  // Gecko pages can include duplicate timestamps (100 bars → 99 unique).
+  const byTime = new Map<number, Candle>();
+  for (const c of candles) {
+    byTime.set(c.time, c);
+  }
+  const unique = [...byTime.values()];
+
+  for (let i = 0; i < unique.length; i += UPSERT_BATCH_SIZE) {
+    const batch = unique.slice(i, i + UPSERT_BATCH_SIZE);
     const values: SqlValue[] = [];
     for (const c of batch) {
       values.push(

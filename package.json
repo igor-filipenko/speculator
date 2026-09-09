@@ -14,6 +14,7 @@
     "trade": "tsx src/index.ts trade",
     "wallet": "tsx src/index.ts wallet",
     "backtest": "tsx src/index.ts backtest",
+    "regime": "tsx src/index.ts regime",
     "migrate": "dbmate --no-dump-schema --migrations-dir ./migrations up",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",

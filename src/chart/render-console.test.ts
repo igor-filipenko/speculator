@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 import type { Candle, Trade } from "../types.js";
 import {
   bucketCandlesForWidth,
+  buildRegimeBandRow,
   buildTimeAxisRow,
   buildTradeMarkerRow,
   formatAxisTime,
   inferCandleLeftPad,
+  regimeColumnStates,
   tradeColumnIndexes,
   visibleCandleColumns,
 } from "./render-console.js";
@@ -145,5 +147,40 @@ describe("formatAxisTime", () => {
 describe("visibleCandleColumns", () => {
   it("returns a positive column budget", () => {
     assert.ok(visibleCandleColumns(120) > 50);
+  });
+});
+
+describe("regimeColumnStates", () => {
+  it("carries the last sample forward across buckets", () => {
+    const candles = [candle(1000, 1), candle(2000, 2), candle(3000, 3), candle(4000, 4)];
+    const buckets = bucketCandlesForWidth(candles, 2);
+    const states = regimeColumnStates(
+      buckets,
+      [
+        { at: new Date(1000 * 1000), trend: "bullish", volatility: "low" },
+        { at: new Date(3500 * 1000), trend: "bearish", volatility: "high" },
+      ],
+      candles,
+    );
+    assert.equal(states.length, 2);
+    assert.equal(states[0]!.trend, "bullish");
+    assert.equal(states[0]!.volatility, "low");
+    assert.equal(states[1]!.trend, "bearish");
+    assert.equal(states[1]!.volatility, "high");
+  });
+});
+
+describe("buildRegimeBandRow", () => {
+  it("prefixes T/V and paints one glyph per column", () => {
+    const row = buildRegimeBandRow(
+      [
+        { trend: "bullish", volatility: "high" },
+        { trend: "flat", volatility: "low" },
+      ],
+      "trend",
+      4,
+      false,
+    );
+    assert.equal(row, "  T UF");
   });
 });

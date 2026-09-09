@@ -284,9 +284,16 @@ async function replayPair(args: {
     const strategy = strategyManager.getActiveStrategy();
     const riskManager = strategyManager.getActiveRiskManager();
 
+    const market = lastMarket ?? {
+      pair: pair.symbol,
+      price: close,
+      trend: "unknown" as const,
+      volatility: "unknown" as const,
+    };
     const signal = strategy.evaluateSignal(
       pair.symbol,
       window,
+      market,
       close,
       new Date(candle.time * 1000),
       portfolio.getSnapshot(close),

@@ -144,9 +144,16 @@ async function processPair(args: {
     limit: required.count,
   });
 
+  const market = lastMarketIndicators.get(pair.symbol) ?? {
+    pair: pair.symbol,
+    price,
+    trend: "unknown" as const,
+    volatility: "unknown" as const,
+  };
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
+    market,
     price,
     new Date(candles[candles.length - 1]!.time * 1000),
   );

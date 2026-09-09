@@ -120,7 +120,7 @@ function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }
     getMode: () => "bollinger",
     getRiskParams: () => risk,
     getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
-    evaluateSignal: (pair, candles, price, at) => {
+    evaluateSignal: (pair, candles, _market, price, at) => {
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
       const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";

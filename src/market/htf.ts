@@ -58,6 +58,11 @@ export interface MtfParams {
   kcAtrMult: number;
   atrPctLookback: number;
   atrPctHighPercentile: number;
+  /**
+   * Consecutive 1h closes of the same raw label before a vol switch is published.
+   * 1 = previous hair-trigger. 2 ignores one-hour squeeze/high/low blips.
+   */
+  volConfirmBars: number;
   swingLeftRight: number;
   levelClusterAtrMult: number;
   levelAtPriceAtrMult: number;
@@ -74,6 +79,7 @@ export function mtfParamsFor(): MtfParams {
     kcAtrMult: 1.5,
     atrPctLookback: 100,
     atrPctHighPercentile: 0.7,
+    volConfirmBars: 2,
     swingLeftRight: 2,
     levelClusterAtrMult: 0.5,
     levelAtPriceAtrMult: 1,
@@ -273,50 +279,69 @@ function classifyVolatility(
   if (kcLower != null) {
     mtf.kcLower = kcLower;
   }
-  if (bbUpper == null || bbLower == null || kcUpper == null || kcLower == null) {
-    return { volatility: "unknown", mtf };
-  }
-
-  if (bbUpper < kcUpper && bbLower > kcLower) {
-    return { volatility: "squeeze", mtf };
-  }
 
   const atrPcts: number[] = [];
+  const raw: Volatility[] = [];
   for (let i = 0; i < candles.length; i++) {
     const a = atrs[i];
     const close = candles[i]!.close;
     if (a != null && close > 0) {
       atrPcts.push(a / close);
     }
+    raw.push(classifyVolatilityAt(i, bb, kc, atrPcts, params));
+  }
+  return { volatility: confirmLabel(raw, params.volConfirmBars, "unknown"), mtf };
+}
+
+function classifyVolatilityAt(
+  i: number,
+  bb: { upper: (number | null)[]; lower: (number | null)[] },
+  kc: { upper: (number | null)[]; lower: (number | null)[] },
+  atrPcts: number[],
+  params: MtfParams,
+): Volatility {
+  const bbUpper = at(bb.upper, i);
+  const bbLower = at(bb.lower, i);
+  const kcUpper = at(kc.upper, i);
+  const kcLower = at(kc.lower, i);
+  if (bbUpper == null || bbLower == null || kcUpper == null || kcLower == null) {
+    return "unknown";
+  }
+  if (bbUpper < kcUpper && bbLower > kcLower) {
+    return "squeeze";
   }
   const window = atrPcts.slice(-params.atrPctLookback);
   if (window.length < params.atrPctLookback) {
-    return { volatility: "unknown", mtf };
+    return "unknown";
   }
   const threshold = percentile(window, params.atrPctHighPercentile);
   const lastAtrPct = window[window.length - 1];
   if (threshold == null || lastAtrPct == null) {
-    return { volatility: "unknown", mtf };
+    return "unknown";
   }
   if (lastAtrPct > threshold) {
-    return { volatility: "high", mtf };
+    return "high";
   }
-  return { volatility: "low", mtf };
+  return "low";
 }
 
 /**
- * Publish a trend only after `confirmBars` consecutive HTF raw labels agree.
- * The first label after `unknown` is accepted immediately (EMA warmup).
+ * Publish a label only after `confirmBars` consecutive raw values agree.
+ * The first label after `unset` (warmup) is accepted immediately.
  * `confirmBars <= 1` restores the previous one-bar hair-trigger.
  */
-export function confirmTrend(rawSeries: Trend[], confirmBars: number): Trend {
+export function confirmLabel<T extends string>(
+  rawSeries: readonly T[],
+  confirmBars: number,
+  unset: T,
+): T {
   const needed = confirmBars <= 1 ? 1 : confirmBars;
-  let published: Trend = "unknown";
-  let pending: Trend | undefined;
+  let published: T = unset;
+  let pending: T | undefined;
   let pendingCount = 0;
 
   for (const raw of rawSeries) {
-    if (published === "unknown") {
+    if (published === unset) {
       published = raw;
       pending = undefined;
       pendingCount = 0;
@@ -340,6 +365,11 @@ export function confirmTrend(rawSeries: Trend[], confirmBars: number): Trend {
     }
   }
   return published;
+}
+
+/** {@link confirmLabel} for HTF trend (`unset` is `unknown`). */
+export function confirmTrend(rawSeries: Trend[], confirmBars: number): Trend {
+  return confirmLabel(rawSeries, confirmBars, "unknown");
 }
 
 /** Raw per-bar vote; {@link confirmTrend} publishes after consecutive HTF closes agree. */

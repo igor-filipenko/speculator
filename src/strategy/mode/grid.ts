@@ -7,6 +7,7 @@ import type {
   PortfolioSnapshot,
   Strategy,
   Timeframe,
+  Trade,
   Trend,
   Volatility,
 } from "../../types.js";
@@ -38,10 +39,10 @@ const GRID_MULT: Record<Trend, Record<Volatility, number>> = {
   unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
 };
 
-/** Lower ADX cap in quiet bullish and in flat squeeze (coil before an unknown break). */
+/** Lower ADX cap in quiet bullish and in flat (skip a range that is already stretching). */
 const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 30, low: 22, squeeze: 28, unknown: 28 },
-  flat: { high: 25, low: 25, squeeze: 20, unknown: 22 },
+  flat: { high: 22, low: 20, squeeze: 20, unknown: 20 },
   bearish: { high: 25, low: 25, squeeze: 25, unknown: 25 },
   unknown: { high: 25, low: 25, squeeze: 25, unknown: 25 },
 };
@@ -79,7 +80,7 @@ function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
     timeframe: "15m",
     atrStopMult: ATR_STOP[trend],
     atrTrailMult: ATR_TRAIL[trend][volatility],
-    cooldownBars: 3,
+    cooldownBars: 8,
     minHoldBars: 1,
   };
 }
@@ -91,10 +92,11 @@ export interface GridSignalInput {
   at: Date;
   params: GridParams;
   snapshot?: PortfolioSnapshot | undefined;
+  market?: MarketIndicators;
 }
 
 export function evaluateGrid(input: GridSignalInput): Signal {
-  const { pair, candles, price, at, params, snapshot } = input;
+  const { pair, candles, price, at, params, snapshot, market } = input;
   const closes = candles.map((c) => c.close);
 
   const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Signal => {
@@ -162,6 +164,31 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     );
   }
 
+  if (market != null && market.trend !== "bullish" && market.trend !== "flat") {
+    return hold(`HTF trend ${market.trend}, skip grid entry`, meta);
+  }
+
+  const lastSell = lastSellTrade(snapshot);
+  if (lastSell?.reason?.startsWith("ATR") === true && market?.trend === "bullish") {
+    return hold(`skip re-entry after ATR exit while HTF bullish`, meta);
+  }
+
+  if (lastSell != null && lastSell.price > 0 && close >= lastSell.price) {
+    const lastExitWasTp = lastSell.reason?.includes("TP") === true;
+    if (market?.volatility === "squeeze" && lastExitWasTp) {
+      return hold(
+        `squeeze chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
+        meta,
+      );
+    }
+    if (market?.trend === "bullish" && market.volatility === "low") {
+      return hold(
+        `low-vol chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
+        meta,
+      );
+    }
+  }
+
   if (currentAdx != null && currentAdx > params.adxMax) {
     return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`, meta);
   }
@@ -198,6 +225,19 @@ function findNearestGridLevelBelow(price: number, reference: number, spacing: nu
   return reference + levels * spacing;
 }
 
+function lastSellTrade(snapshot: PortfolioSnapshot | undefined): Trade | undefined {
+  if (snapshot == null) {
+    return undefined;
+  }
+  for (let i = snapshot.trades.length - 1; i >= 0; i--) {
+    const trade = snapshot.trades[i];
+    if (trade?.side === "SELL") {
+      return trade;
+    }
+  }
+  return undefined;
+}
+
 export class GridStrategy implements Strategy {
   private readonly params: GridParams;
   private readonly risk: RiskParams;
@@ -232,12 +272,12 @@ export class GridStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    _market: MarketIndicators,
+    market: MarketIndicators,
     price: number,
     at: Date,
     snapshot?: PortfolioSnapshot,
   ): Signal {
-    return evaluateGrid({ pair, candles, price, at, params: this.params, snapshot });
+    return evaluateGrid({ pair, candles, price, at, params: this.params, snapshot, market });
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {

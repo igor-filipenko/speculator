@@ -359,15 +359,15 @@ Cooldown 4 bars, minHold 3. `/chart` draws Bollinger mid/upper/lower plus RSI wi
 
 ### Grid (`grid`)
 
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when ADX is under the regime cap and close is above trend EMA 50. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/low → ×3; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 3 bars.
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and close is above trend EMA 50. **Skips squeeze entries at or above the last take-profit**, **skips bullish/low entries at or above the last SELL**, and **skips a new long after an ATR stop/trail while HTF is still bullish**. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×4 and ADX 22; flat/low or squeeze → ×3 and ADX 20; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
 
 ### Donchian breakout (`donchian`)
 
-Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.1×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. Sells when close **crosses below the prior 20-bar low** (volume/EMA do not block exits). ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
+Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars, close above trend EMA 50, and the **prior channel high above the last SELL fill** (skips throwbacks that only reclaim a local high). Sells when close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner. Volume/EMA do not block exits. ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
 
-**Volume SMA multiplier (bullish only):** high 1.1; low 1.3; squeeze 1.4.
+**Volume SMA multiplier (bullish only):** high 1.2; low 1.5; squeeze 1.6.
 
-ATR stop is 3× (2.5× flat, 2× bearish); trail 4× / 3.5× / 2.5×. Cooldown 8 bars, minHold 4. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 5× flat, 3× bearish. Cooldown 96 bars (24h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
 

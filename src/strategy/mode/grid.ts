@@ -1,9 +1,10 @@
 import type {
   Candle,
+  MarketIndicators,
   RequiredCandles,
   RiskParams,
   Signal,
-  Snapshot,
+  PortfolioSnapshot,
   Strategy,
   Timeframe,
   Trend,
@@ -89,7 +90,7 @@ export interface GridSignalInput {
   price: number;
   at: Date;
   params: GridParams;
-  snapshot?: Snapshot | undefined;
+  snapshot?: PortfolioSnapshot | undefined;
 }
 
 export function evaluateGrid(input: GridSignalInput): Signal {
@@ -231,9 +232,10 @@ export class GridStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
+    _market: MarketIndicators,
     price: number,
     at: Date,
-    snapshot?: Snapshot,
+    snapshot?: PortfolioSnapshot,
   ): Signal {
     return evaluateGrid({ pair, candles, price, at, params: this.params, snapshot });
   }

@@ -57,7 +57,10 @@ export interface MtfParams {
   kcPeriod: number;
   kcAtrMult: number;
   atrPctLookback: number;
-  atrPctHighPercentile: number;
+  /** ATR% must exceed this percentile of the lookback to *enter* high from low/squeeze/unknown. */
+  atrPctEnterHighPercentile: number;
+  /** Once high, stay high until ATR% falls to this percentile or below. */
+  atrPctExitHighPercentile: number;
   /**
    * Consecutive 1h closes of the same raw label before a vol switch is published.
    * 1 = previous hair-trigger. 2 ignores one-hour squeeze/high/low blips.
@@ -78,7 +81,8 @@ export function mtfParamsFor(): MtfParams {
     kcPeriod: 20,
     kcAtrMult: 1.5,
     atrPctLookback: 100,
-    atrPctHighPercentile: 0.7,
+    atrPctEnterHighPercentile: 0.8,
+    atrPctExitHighPercentile: 0.6,
     volConfirmBars: 2,
     swingLeftRight: 2,
     levelClusterAtrMult: 0.5,
@@ -288,7 +292,7 @@ function classifyVolatility(
     if (a != null && close > 0) {
       atrPcts.push(a / close);
     }
-    raw.push(classifyVolatilityAt(i, bb, kc, atrPcts, params));
+    raw.push(classifyVolatilityAt(i, bb, kc, atrPcts, params, raw[raw.length - 1] ?? "unknown"));
   }
   return { volatility: confirmLabel(raw, params.volConfirmBars, "unknown"), mtf };
 }
@@ -299,6 +303,7 @@ function classifyVolatilityAt(
   kc: { upper: (number | null)[]; lower: (number | null)[] },
   atrPcts: number[],
   params: MtfParams,
+  previous: Volatility,
 ): Volatility {
   const bbUpper = at(bb.upper, i);
   const bbLower = at(bb.lower, i);
@@ -314,15 +319,27 @@ function classifyVolatilityAt(
   if (window.length < params.atrPctLookback) {
     return "unknown";
   }
-  const threshold = percentile(window, params.atrPctHighPercentile);
+  const enter = percentile(window, params.atrPctEnterHighPercentile);
+  const exit = percentile(window, params.atrPctExitHighPercentile);
   const lastAtrPct = window[window.length - 1];
-  if (threshold == null || lastAtrPct == null) {
+  if (enter == null || exit == null || lastAtrPct == null) {
     return "unknown";
   }
-  if (lastAtrPct > threshold) {
-    return "high";
-  }
-  return "low";
+  return classifyHighLow(lastAtrPct, enter, exit, previous);
+}
+
+/**
+ * High vs low with hysteresis: enter when ATR% > `enterThreshold`, stay high
+ * until ATR% ≤ `exitThreshold`. Squeeze/unknown must re-enter (no stay-high).
+ */
+export function classifyHighLow(
+  lastAtrPct: number,
+  enterThreshold: number,
+  exitThreshold: number,
+  previous: Volatility,
+): "high" | "low" {
+  const cut = previous === "high" ? exitThreshold : enterThreshold;
+  return lastAtrPct > cut ? "high" : "low";
 }
 
 /**

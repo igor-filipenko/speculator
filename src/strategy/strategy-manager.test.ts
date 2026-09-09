@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type { Candle } from "../types.js";
 import {
+  classifyHighLow,
   confirmLabel,
   confirmTrend,
   evaluateMarketIndicators,
@@ -101,6 +102,8 @@ describe("htfParamsFor / getRequiredCandles", () => {
     assert.ok(required.count >= 120);
     assert.equal(mtfParams.timeframe, "1h");
     assert.equal(mtfParams.volConfirmBars, 2);
+    assert.equal(mtfParams.atrPctEnterHighPercentile, 0.8);
+    assert.equal(mtfParams.atrPctExitHighPercentile, 0.6);
   });
 });
 
@@ -387,6 +390,20 @@ describe("confirmTrend", () => {
     assert.equal(confirmLabel(["low", "high"], 2, "unknown"), "low");
     assert.equal(confirmLabel(["low", "high", "high"], 2, "unknown"), "high");
     assert.equal(confirmLabel(["squeeze", "low", "squeeze"], 2, "unknown"), "squeeze");
+  });
+});
+
+describe("classifyHighLow", () => {
+  it("enters high only above the enter cut and stays high until the exit cut", () => {
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "low"), "low");
+    assert.equal(classifyHighLow(0.025, 0.02, 0.01, "low"), "high");
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "high"), "high");
+    assert.equal(classifyHighLow(0.005, 0.02, 0.01, "high"), "low");
+  });
+
+  it("does not stay high when previous is squeeze or unknown", () => {
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "squeeze"), "low");
+    assert.equal(classifyHighLow(0.015, 0.02, 0.01, "unknown"), "low");
   });
 });
 

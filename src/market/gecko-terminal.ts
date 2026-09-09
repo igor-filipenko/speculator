@@ -84,17 +84,12 @@ export async function fetchCandles(options: FetchCandlesOptions): Promise<Candle
   const json = await fetchOhlcvJson(url, timeoutMs ?? INITIAL_TIMEOUT_MS);
   const rows = json.data?.attributes?.ohlcv_list ?? [];
 
-  // API returns newest first; normalize to chronological order.
-  const candles: Candle[] = rows
-    .map(([time, open, high, low, close, volume]) => ({
-      time,
-      open,
-      high,
-      low,
-      close,
-      volume,
-    }))
-    .sort((a, b) => a.time - b.time);
+  // API returns newest first and can repeat a timestamp within a page; keep last, sort oldest→newest.
+  const byTime = new Map<number, Candle>();
+  for (const [time, open, high, low, close, volume] of rows) {
+    byTime.set(time, { time, open, high, low, close, volume });
+  }
+  const candles = [...byTime.values()].sort((a, b) => a.time - b.time);
 
   // Live watch expects data; paginated range fetches tolerate empty pages.
   if (candles.length === 0 && beforeTimestamp === undefined) {

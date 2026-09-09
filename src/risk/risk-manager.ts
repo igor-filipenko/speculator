@@ -9,7 +9,7 @@ import type {
   RiskOrCommand,
   RiskParams,
   Signal,
-  Snapshot,
+  PortfolioSnapshot,
   Trade,
 } from "../types.js";
 
@@ -28,7 +28,7 @@ export class GenericRiskManager implements RiskManager {
     return "Generic risk manager";
   }
 
-  check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
+  check(signal: Signal, snapshot: PortfolioSnapshot, candles: Candle[]): RiskOrCommand {
     const peak = peakSinceOpen(
       snapshot,
       candles,
@@ -95,7 +95,7 @@ function noCommand(): NoCommand {
 
 /** Max of entry, current bar high, and candle highs overlapping the open hold. */
 export function peakSinceOpen(
-  snapshot: Snapshot,
+  snapshot: PortfolioSnapshot,
   candles: Candle[],
   signal: Signal,
   intervalSec: number,
@@ -122,7 +122,7 @@ export function peakSinceOpen(
 /** ATR hard stop / trailing exit using strategy-provided ATR and bar low. */
 export function evaluateProtectiveExit(
   signal: Signal,
-  snapshot: Snapshot,
+  snapshot: PortfolioSnapshot,
   config: RiskParams,
   peak?: number,
 ): Command | null {
@@ -181,7 +181,7 @@ function inCooldown(trades: Trade[], at: Date, config: RiskParams): boolean {
   return barsSince < config.cooldownBars;
 }
 
-function belowMinHold(snapshot: Snapshot, at: Date, config: RiskParams): boolean {
+function belowMinHold(snapshot: PortfolioSnapshot, at: Date, config: RiskParams): boolean {
   if (config.minHoldBars <= 0) {
     return false;
   }
@@ -205,7 +205,7 @@ export class HighRiskManager implements RiskManager {
     return "High risk manager";
   }
 
-  check(signal: Signal, snapshot: Snapshot, candles: Candle[]): RiskOrCommand {
+  check(signal: Signal, snapshot: PortfolioSnapshot, candles: Candle[]): RiskOrCommand {
     const peak = peakSinceOpen(
       snapshot,
       candles,

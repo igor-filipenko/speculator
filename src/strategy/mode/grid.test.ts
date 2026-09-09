@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, Snapshot } from "../../types.js";
+import type { Candle, PortfolioSnapshot } from "../../types.js";
 import { evaluateGrid, GridStrategy, gridParamsFor, type GridParams } from "./grid.js";
 
 function params(overrides: Partial<GridParams> = {}): GridParams {
@@ -13,7 +13,7 @@ function bar(time: number, close: number, range = 0.3): Candle {
   return { time, open: close, high: close + range, low: close - range, close, volume: 10 };
 }
 
-function flatSnapshot(entryPrice = 0): Snapshot {
+function flatSnapshot(entryPrice = 0): PortfolioSnapshot {
   return {
     cashUsdc: 100,
     position: { pair: "SOL/USDC", side: "flat", size: 0, entryPrice },
@@ -24,7 +24,7 @@ function flatSnapshot(entryPrice = 0): Snapshot {
   };
 }
 
-function longSnapshot(entryPrice: number): Snapshot {
+function longSnapshot(entryPrice: number): PortfolioSnapshot {
   return {
     cashUsdc: 0,
     position: { pair: "SOL/USDC", side: "long", size: 1, entryPrice },

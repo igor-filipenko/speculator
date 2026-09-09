@@ -1,6 +1,6 @@
 import { match } from "ts-pattern";
 import { insertPaperTrade, upsertPaperPortfolio } from "../db/paper.js";
-import type { Order, PairConfig, Portfolio, Position, Snapshot, Trade } from "../types.js";
+import type { Order, PairConfig, Portfolio, Position, PortfolioSnapshot, Trade } from "../types.js";
 import {
   loadPaperState,
   type PersistedPortfolio,
@@ -19,7 +19,7 @@ export interface PaperTrade extends Trade {
   simulated: true;
 }
 
-export interface PaperSnapshot extends Snapshot {
+export interface PaperSnapshot extends PortfolioSnapshot {
   simulated: true;
 }
 

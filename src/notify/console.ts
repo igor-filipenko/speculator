@@ -1,5 +1,12 @@
 import { insertSignal } from "../db/signals.js";
-import type { MarketIndicators, MtfSnapshot, Risk, Signal, Snapshot, Trade } from "../types.js";
+import type {
+  MarketIndicators,
+  MtfSnapshot,
+  Risk,
+  Signal,
+  PortfolioSnapshot,
+  Trade,
+} from "../types.js";
 
 export function logMarket(indicators: MarketIndicators): void {
   const last = indicators.htf?.candles[indicators.htf.candles.length - 1];
@@ -93,7 +100,7 @@ export function logTrade(trade: Trade): void {
   );
 }
 
-export function logSnapshot(snapshot: Snapshot): void {
+export function logSnapshot(snapshot: PortfolioSnapshot): void {
   const pos =
     snapshot.position.side === "long"
       ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
@@ -105,7 +112,7 @@ export function logSnapshot(snapshot: Snapshot): void {
 }
 
 /** CLI report matching the Telegram `/portfolio` fields. */
-export function logPortfolio(pair: string, snapshot: Snapshot): void {
+export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
   const pos =
     snapshot.position.side === "long"
       ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`

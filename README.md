@@ -163,6 +163,16 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
 
+Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
+
+```bash
+pnpm regime
+pnpm regime -- --days 14
+pnpm regime -- --from 01-01-2026 --to 01-08-2026
+```
+
+Same `--days` / `--from` / `--to` / `--force-refresh` flags as backtest. Strategy comes from env `STRATEGY`. Regime does not take `--ignore-trend` (market state is the whole point).
+
 Single iteration (smoke test):
 
 ```bash

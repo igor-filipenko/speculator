@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { closeDbPool } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
+import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWallet } from "./engine/wallet.js";
@@ -26,26 +27,28 @@ function usage(): never {
   pnpm trade          # recommendations + live Jupiter swaps
   pnpm wallet         # sync live portfolio from chain and print balances
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
+  pnpm regime         # Replay HTF/1h market-indicator switches (no fills)
   pnpm migrate        # dbmate up (TimescaleDB)
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend]
+  tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
-  --days <n>        Backtest lookback in days (default: 90)
-  --from <date>     Backtest range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
-  --to <date>       Backtest range end inclusive (default: now; requires --from)
-  --strategy <name> Override strategy (bollinger | grid | donchian; default: env STRATEGY)
+  --days <n>        Replay lookback in days (default: 90)
+  --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
+  --to <date>       Replay range end inclusive (default: now; requires --from)
+  --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
-  --ignore-trend    Skip HTF market state (do not apply or log trend)
+  --ignore-trend    Skip HTF market state (backtest only)
 `);
   process.exit(1);
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest"] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest", "regime"] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -82,6 +85,9 @@ async function main(): Promise<void> {
   switch (command) {
     case "backtest":
       await runBacktestCommand(rest);
+      return;
+    case "regime":
+      await runRegimeCommand(rest);
       return;
     case "watch":
       await runWatchCommand(rest);
@@ -238,6 +244,27 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
 
   for (const result of results) {
     await printBacktestReport(result);
+  }
+}
+
+async function runRegimeCommand(argv: string[]): Promise<void> {
+  const flags = parseRegimeArgs(argv);
+  const config = await loadConfig();
+  const strategyManager = new SimpleStrategyManager({
+    strategyMode: config.strategy,
+    htf: config.htf,
+  });
+  const results = await runRegime({
+    config,
+    strategyManager,
+    forceRefresh: flags.forceRefresh,
+    ...(flags.days > 0 ? { days: flags.days } : {}),
+    ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
+    ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
+  });
+
+  for (const result of results) {
+    await printRegimeReport(result);
   }
 }
 

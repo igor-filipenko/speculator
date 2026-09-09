@@ -2,7 +2,6 @@ import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated-quote.js";
-import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import type {
@@ -14,6 +13,10 @@ import type {
   StrategyManager,
   Trade,
 } from "../types.js";
+import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
+import { parseReplayDate, readFlagValue, resolveReplayWindow } from "./replay-window.js";
+
+export { parseReplayDate as parseBacktestDate, resolveReplayWindow as resolveBacktestWindow };
 
 export interface BacktestCliOptions {
   /** Lookback window in calendar days (0 = 90-day default, ignored when from/to set). */
@@ -97,7 +100,7 @@ export interface RunBacktestOptions {
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
   const { strategyManager } = options;
   const strategy = strategyManager.getActiveStrategy();
-  const { fromTime, toTime } = resolveBacktestWindow(options);
+  const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
   const cacheOpts = {
     forceRefresh: options.forceRefresh ?? false,
@@ -164,70 +167,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   }
 
   return results;
-}
-
-async function loadHtfCandles(args: {
-  pair: PairConfig;
-  strategyManager: StrategyManager;
-  fromTime: number;
-  toTime: number;
-  injected: Candle[] | undefined;
-  skipFetch: boolean;
-  cacheOpts: { forceRefresh: boolean };
-}): Promise<Candle[]> {
-  if (args.injected !== undefined) {
-    return args.injected;
-  }
-  if (args.skipFetch) {
-    return [];
-  }
-
-  const required = args.strategyManager.getRequiredHtfCandles();
-  const interval = candleIntervalSeconds(required.timeframe);
-  const candles = await loadCachedCandles({
-    symbol: args.pair.symbol,
-    poolAddress: args.pair.geckoPoolAddress,
-    timeframe: required.timeframe,
-    fromTime: args.fromTime - required.count * interval,
-    toTime: args.toTime,
-    ...args.cacheOpts,
-  });
-  if (candles.length === 0) {
-    console.log(`[${args.pair.symbol}] no HTF ${required.timeframe} candles; market state skipped`);
-  }
-  return candles;
-}
-
-async function loadMtfCandles(args: {
-  pair: PairConfig;
-  strategyManager: StrategyManager;
-  fromTime: number;
-  toTime: number;
-  injected: Candle[] | undefined;
-  skipFetch: boolean;
-  cacheOpts: { forceRefresh: boolean };
-}): Promise<Candle[]> {
-  if (args.injected !== undefined) {
-    return args.injected;
-  }
-  if (args.skipFetch) {
-    return [];
-  }
-
-  const required = args.strategyManager.getRequiredMtfCandles();
-  const interval = candleIntervalSeconds(required.timeframe);
-  const candles = await loadCachedCandles({
-    symbol: args.pair.symbol,
-    poolAddress: args.pair.geckoPoolAddress,
-    timeframe: required.timeframe,
-    fromTime: args.fromTime - required.count * interval,
-    toTime: args.toTime,
-    ...args.cacheOpts,
-  });
-  if (candles.length === 0) {
-    console.log(`[${args.pair.symbol}] no MTF ${required.timeframe} candles; volatility skipped`);
-  }
-  return candles;
 }
 
 async function replayPair(args: {
@@ -365,48 +304,6 @@ async function replayPair(args: {
   };
 }
 
-function advanceHtfEnd(htfCandles: Candle[], atTime: number, htfEnd: number): number {
-  let end = htfEnd;
-  while (end < htfCandles.length && htfCandles[end]!.time <= atTime) {
-    end += 1;
-  }
-  return end;
-}
-
-function syncMarketIndicators(args: {
-  pair: string;
-  strategyManager: StrategyManager;
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
-  atTime: number;
-  price: number;
-  htfEnd: number;
-  mtfEnd: number;
-  lastMarket: MarketIndicators | undefined;
-}): { htfEnd: number; mtfEnd: number; lastMarket: MarketIndicators | undefined } {
-  const htfEnd = advanceHtfEnd(args.htfCandles, args.atTime, args.htfEnd);
-  const mtfEnd = advanceHtfEnd(args.mtfCandles, args.atTime, args.mtfEnd);
-  if ((htfEnd === 0 && mtfEnd === 0) || (htfEnd === args.htfEnd && mtfEnd === args.mtfEnd)) {
-    return { htfEnd, mtfEnd, lastMarket: args.lastMarket };
-  }
-
-  const htfWindow = args.htfCandles.slice(0, htfEnd);
-  const mtfWindow = args.mtfCandles.slice(0, mtfEnd);
-  const lastBar = htfWindow[htfWindow.length - 1] ?? mtfWindow[mtfWindow.length - 1];
-  if (lastBar === undefined) {
-    return { htfEnd, mtfEnd, lastMarket: args.lastMarket };
-  }
-  const market = args.strategyManager.evaluate(
-    args.pair,
-    htfWindow,
-    mtfWindow,
-    args.price,
-    new Date(lastBar.time * 1000),
-  );
-  args.strategyManager.applyMarketIndicators(market, args.lastMarket);
-  return { htfEnd, mtfEnd, lastMarket: market };
-}
-
 /**
  * Benchmark: deploy full starting cash at the first bar close, exit at the last.
  * Uses the same emulated slippage/pool/priority costs as strategy fills.
@@ -442,112 +339,6 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
   totals.slippageUsdc += trade.size * fillCosts.slippageUsdcPerBase;
   totals.poolFeeUsdc += trade.size * fillCosts.poolFeeUsdcPerBase;
   totals.priorityFeeUsdc += order.priorityFeeUsdc;
-}
-function resolveBacktestWindow(options: Pick<RunBacktestOptions, "days" | "fromTime" | "toTime">): {
-  fromTime: number;
-  toTime: number;
-} {
-  const now = Math.floor(Date.now() / 1000);
-
-  if (options.fromTime !== undefined) {
-    const fromTime = options.fromTime;
-    const toTime = options.toTime ?? now;
-    if (!(fromTime < toTime)) {
-      throw new Error(`Invalid backtest window: from (${fromTime}) must be before to (${toTime})`);
-    }
-    return { fromTime, toTime };
-  }
-
-  if (options.toTime !== undefined) {
-    throw new Error("--to requires --from (or use --days for a lookback from now)");
-  }
-
-  const days = options.days !== undefined && options.days > 0 ? options.days : 90;
-  return { fromTime: now - days * 24 * 60 * 60, toTime: now };
-}
-
-/**
- * Parse a calendar date or ISO datetime into Unix seconds.
- * Date-only forms are UTC. Supported:
- * - `YYYY-MM-DD` / `YYYY-MM-DDTHH:mm:ssZ`
- * - `DD-MM-YYYY` (e.g. 01-01-2026)
- */
-export function parseBacktestDate(raw: string, bound: "from" | "to"): number {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error(`Empty --${bound} date`);
-  }
-
-  const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(trimmed);
-  if (dmy) {
-    const day = Number(dmy[1]);
-    const month = Number(dmy[2]);
-    const year = Number(dmy[3]);
-    return calendarDayBoundUtc(year, month, day, bound);
-  }
-
-  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
-  if (ymd) {
-    const year = Number(ymd[1]);
-    const month = Number(ymd[2]);
-    const day = Number(ymd[3]);
-    return calendarDayBoundUtc(year, month, day, bound);
-  }
-
-  const ms = Date.parse(trimmed);
-  if (Number.isNaN(ms)) {
-    throw new Error(
-      `Invalid --${bound} date "${raw}". Use YYYY-MM-DD, DD-MM-YYYY, or an ISO datetime.`,
-    );
-  }
-  return Math.floor(ms / 1000);
-}
-
-function calendarDayBoundUtc(
-  year: number,
-  month: number,
-  day: number,
-  bound: "from" | "to",
-): number {
-  if (month < 1 || month > 12 || day < 1 || day > 31) {
-    throw new Error(`Invalid calendar date ${year}-${month}-${day}`);
-  }
-  // --from = start of that UTC day; --to = start of the next UTC day (exclusive end).
-  const startMs = Date.UTC(year, month - 1, day);
-  const check = new Date(startMs);
-  if (
-    check.getUTCFullYear() !== year ||
-    check.getUTCMonth() !== month - 1 ||
-    check.getUTCDate() !== day
-  ) {
-    throw new Error(
-      `Invalid calendar date ${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-    );
-  }
-  if (bound === "from") {
-    return Math.floor(startMs / 1000);
-  }
-  return Math.floor(Date.UTC(year, month - 1, day + 1) / 1000);
-}
-
-function readFlagValue(
-  argv: string[],
-  index: number,
-  flag: string,
-): { value: string; nextIndex: number } {
-  const eq = argv[index];
-  if (eq?.startsWith(`${flag}=`)) {
-    const value = eq.slice(flag.length + 1);
-    if (!value) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return { value, nextIndex: index };
-  }
-  const value = argv[index + 1];
-  if (value === undefined || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return { value, nextIndex: index + 1 };
 }
 
 /** Parse CLI flags for `backtest`. */
@@ -592,13 +383,13 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
     if (arg === "--from" || arg?.startsWith("--from=")) {
       const { value, nextIndex } = readFlagValue(argv, i, "--from");
-      fromTime = parseBacktestDate(value, "from");
+      fromTime = parseReplayDate(value, "from");
       i = nextIndex;
       continue;
     }
     if (arg === "--to" || arg?.startsWith("--to=")) {
       const { value, nextIndex } = readFlagValue(argv, i, "--to");
-      toTime = parseBacktestDate(value, "to");
+      toTime = parseReplayDate(value, "to");
       i = nextIndex;
       continue;
     }

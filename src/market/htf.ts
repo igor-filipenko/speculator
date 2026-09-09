@@ -19,6 +19,12 @@ export interface HtfParams {
   atrPeriod: number;
   adxPeriod: number;
   adxFlatMax: number;
+  /**
+   * Consecutive HTF closes of the same raw label before a trend switch is published.
+   * 1 = previous hair-trigger (switch on the first 4h/1d bar). 2 ignores one-bar
+   * ADX/stack blips and delays a real move by one HTF bar.
+   */
+  trendConfirmBars: number;
   swingLeftRight: number;
   levelClusterAtrMult: number;
   levelAtPriceAtrMult: number;
@@ -34,6 +40,7 @@ export function htfParamsFor(timeframe: HtfTimeframe): HtfParams {
     atrPeriod: 14,
     adxPeriod: 14,
     adxFlatMax: 20,
+    trendConfirmBars: 2,
     swingLeftRight: 2,
     levelClusterAtrMult: 0.5,
     levelAtPriceAtrMult: 1,
@@ -110,24 +117,31 @@ export function evaluateMarketIndicators(input: EvaluateMarketIndicatorsInput): 
   }
 
   const closes = candles.map((c) => c.close);
-  const lastClose = candles[candles.length - 1]!.close;
-  const ema200 = last(ema(closes, params.emaSlow));
-  const ema50 = last(ema(closes, params.emaFast));
+  const ema200s = ema(closes, params.emaSlow);
+  const ema50s = ema(closes, params.emaFast);
   const atrNow = last(atr(candles, params.atrPeriod));
   const dmiNow = dmi(candles, params.adxPeriod);
   const adxNow = last(dmiNow.adx);
   const plusDi = last(dmiNow.plusDi);
   const minusDi = last(dmiNow.minusDi);
+  const ema200 = last(ema200s);
+  const ema50 = last(ema50s);
 
-  const trend = classifyTrend({
-    close: lastClose,
-    ema200,
-    ema50,
-    adxNow,
-    plusDi,
-    minusDi,
-    adxFlatMax: params.adxFlatMax,
-  });
+  const raw: Trend[] = [];
+  for (let i = 0; i < candles.length; i++) {
+    raw.push(
+      classifyTrend({
+        close: candles[i]!.close,
+        ema200: at(ema200s, i),
+        ema50: at(ema50s, i),
+        adxNow: at(dmiNow.adx, i),
+        plusDi: at(dmiNow.plusDi, i),
+        minusDi: at(dmiNow.minusDi, i),
+        adxFlatMax: params.adxFlatMax,
+      }),
+    );
+  }
+  const trend = confirmTrend(raw, params.trendConfirmBars);
 
   if (ema200 != null) {
     htf.ema200 = ema200;
@@ -290,6 +304,45 @@ function classifyVolatility(
   return { volatility: "low", mtf };
 }
 
+/**
+ * Publish a trend only after `confirmBars` consecutive HTF raw labels agree.
+ * The first label after `unknown` is accepted immediately (EMA warmup).
+ * `confirmBars <= 1` restores the previous one-bar hair-trigger.
+ */
+export function confirmTrend(rawSeries: Trend[], confirmBars: number): Trend {
+  const needed = confirmBars <= 1 ? 1 : confirmBars;
+  let published: Trend = "unknown";
+  let pending: Trend | undefined;
+  let pendingCount = 0;
+
+  for (const raw of rawSeries) {
+    if (published === "unknown") {
+      published = raw;
+      pending = undefined;
+      pendingCount = 0;
+      continue;
+    }
+    if (raw === published) {
+      pending = undefined;
+      pendingCount = 0;
+      continue;
+    }
+    if (raw === pending) {
+      pendingCount += 1;
+    } else {
+      pending = raw;
+      pendingCount = 1;
+    }
+    if (pendingCount >= needed) {
+      published = raw;
+      pending = undefined;
+      pendingCount = 0;
+    }
+  }
+  return published;
+}
+
+/** Raw per-bar vote; {@link confirmTrend} publishes after consecutive HTF closes agree. */
 function classifyTrend(input: {
   close: number;
   ema200: number | undefined;
@@ -318,6 +371,10 @@ function classifyTrend(input: {
 }
 
 function last(series: (number | null)[]): number | undefined {
-  const value = series[series.length - 1];
+  return at(series, series.length - 1);
+}
+
+function at(series: (number | null)[], i: number): number | undefined {
+  const value = series[i];
   return value ?? undefined;
 }

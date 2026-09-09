@@ -24,6 +24,7 @@ import { DonchianStrategy } from "./mode/donchian.js";
 import { GridStrategy } from "./mode/grid.js";
 
 export {
+  confirmTrend,
   evaluateMarketIndicators,
   htfParamsFor,
   mtfParamsFor,

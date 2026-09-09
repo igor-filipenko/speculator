@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import type { Candle } from "../types.js";
 import {
+  confirmTrend,
   evaluateMarketIndicators,
   htfParamsFor,
   mtfParamsFor,
@@ -89,6 +90,7 @@ describe("htfParamsFor / getRequiredCandles", () => {
     assert.equal(required.timeframe, "4h");
     assert.ok(required.count >= 200);
     assert.equal(htfParamsFor("1d").timeframe, "1d");
+    assert.equal(htfParamsFor("4h").trendConfirmBars, 2);
   });
 
   it("requires at least 120 1h bars for MTF volatility", () => {
@@ -306,6 +308,77 @@ describe("evaluateMarketIndicators", () => {
     assert.ok(indicators.htf.ema50 < indicators.htf.ema200);
     assert.ok(candles[candles.length - 1]!.close > indicators.htf.ema200);
     assert.equal(indicators.trend, "flat");
+  });
+
+  it("keeps the previous HTF trend through a one-bar stack break", () => {
+    const up = series(250, 50, 0.8);
+    const last = up[up.length - 1]!;
+    const crash: Candle = {
+      ...last,
+      open: last.close,
+      high: last.close,
+      low: last.close * 0.45,
+      close: last.close * 0.5,
+    };
+    const crashed = [...up.slice(0, -1), crash];
+    const steady = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: up,
+      price: last.close,
+      at,
+      params,
+    });
+    const oneBar = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: crashed,
+      price: crash.close,
+      at,
+      params,
+    });
+    const hairTrigger = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: crashed,
+      price: crash.close,
+      at,
+      params: { ...params, trendConfirmBars: 1 },
+    });
+    assert.equal(steady.trend, "bullish");
+    assert.equal(oneBar.trend, "bullish");
+    assert.notEqual(hairTrigger.trend, "bullish");
+  });
+
+  it("publishes a new trend after two consecutive HTF bars", () => {
+    const up = series(250, 50, 0.8);
+    const head = up.slice(0, -2);
+    const t0 = head[head.length - 1]!.time;
+    const interval = 4 * 60 * 60;
+    const crash1 = bar(t0 + interval, 10, 2);
+    const crash2 = bar(t0 + 2 * interval, 9, 2);
+    const twoBars = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: [...head, crash1, crash2],
+      price: crash2.close,
+      at,
+      params,
+    });
+    assert.notEqual(twoBars.trend, "bullish");
+  });
+});
+
+describe("confirmTrend", () => {
+  it("ignores a one-bar blip and switches on the second consecutive label", () => {
+    assert.equal(confirmTrend(["flat", "bearish"], 2), "flat");
+    assert.equal(confirmTrend(["flat", "bearish", "bearish"], 2), "bearish");
+    assert.equal(confirmTrend(["flat", "bearish", "flat"], 2), "flat");
+    assert.equal(confirmTrend(["bullish", "flat", "bullish"], 2), "bullish");
+  });
+
+  it("publishes the first label after unknown immediately", () => {
+    assert.equal(confirmTrend(["unknown", "unknown", "flat"], 2), "flat");
+  });
+
+  it("switches on the first bar when confirmBars is 1", () => {
+    assert.equal(confirmTrend(["flat", "bearish"], 1), "bearish");
   });
 });
 

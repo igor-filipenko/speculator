@@ -1,6 +1,7 @@
 import type {
   Candle,
   MarketIndicators,
+  PortfolioSnapshot,
   RequiredCandles,
   RiskParams,
   Signal,
@@ -32,16 +33,33 @@ export interface DonchianParams {
    * Filters 20-bar highs that barely poke the channel.
    */
   minBreakAtrMult: number;
-  /** When false, breakouts are ignored (HTF not bullish). Exits still fire. */
-  enableBuy: boolean;
 }
 
-/** Stricter volume confirmation in squeeze; unused when enableBuy is false. */
+/** Stricter volume confirmation in squeeze; unused when HTF is not bullish. */
 const VOLUME_SMA_MULT: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 1.1, low: 1.3, squeeze: 1.4, unknown: 1.2 },
+  bullish: { high: 1.2, low: 1.5, squeeze: 1.6, unknown: 1.3 },
   flat: { high: 1.5, low: 1.5, squeeze: 1.8, unknown: 1.5 },
   bearish: { high: 1.8, low: 1.8, squeeze: 1.8, unknown: 1.8 },
   unknown: { high: 1.8, low: 1.8, squeeze: 1.8, unknown: 1.8 },
+};
+
+/**
+ * Exit channel is longer than entry so a 5h pullback does not dump a multi-day
+ * runner. Squeeze breakouts get the widest channel (those are the big legs).
+ */
+const EXIT_PERIOD: Record<Volatility, number> = {
+  high: 40,
+  low: 40,
+  squeeze: 55,
+  unknown: 40,
+};
+
+/** Skip 20-bar highs that barely poke the channel (false breaks). */
+const MIN_BREAK_ATR: Record<Volatility, number> = {
+  high: 0.2,
+  low: 0.35,
+  squeeze: 0.25,
+  unknown: 0.25,
 };
 
 const ATR_STOP: Record<Trend, number> = {
@@ -51,11 +69,16 @@ const ATR_STOP: Record<Trend, number> = {
   unknown: 2,
 };
 
-const ATR_TRAIL: Record<Trend, number> = {
-  bullish: 4,
-  flat: 3.5,
-  bearish: 2.5,
-  unknown: 2.5,
+/**
+ * Wide enough to hold the first 15m pullback after a breakout (4× trails out
+ * of the runner before the HTF move); not so wide that a 102 spike gives back
+ * to 80. Low-vol grind can trail a bit further.
+ */
+const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
+  bullish: { high: 6, low: 8, squeeze: 6, unknown: 6 },
+  flat: { high: 5, low: 5, squeeze: 5, unknown: 5 },
+  bearish: { high: 3, low: 3, squeeze: 3, unknown: 3 },
+  unknown: { high: 3, low: 3, squeeze: 3, unknown: 3 },
 };
 
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
@@ -66,23 +89,23 @@ export function donchianParamsFor(
   return {
     timeframe: "15m",
     entryPeriod: 20,
-    exitPeriod: 20,
+    exitPeriod: EXIT_PERIOD[volatility],
     volumeSmaPeriod: 20,
     volumeSmaMult: VOLUME_SMA_MULT[trend][volatility],
     trendEmaPeriod: 50,
     atrPeriod: 14,
-    minBreakAtrMult: 0.1,
-    enableBuy: trend === "bullish",
+    minBreakAtrMult: MIN_BREAK_ATR[volatility],
   };
 }
 
-function riskParamsFor(trend: Trend): RiskParams {
+function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
   return {
     timeframe: "15m",
     atrStopMult: ATR_STOP[trend],
-    atrTrailMult: ATR_TRAIL[trend],
-    cooldownBars: 8,
-    minHoldBars: 4,
+    atrTrailMult: ATR_TRAIL[trend][volatility],
+    /** 24h on 15m: skip throwback longs right after a trail/DC exit. */
+    cooldownBars: 96,
+    minHoldBars: 16,
   };
 }
 
@@ -93,14 +116,22 @@ export interface DonchianInput {
   /** Spot price used in the signal (usually exchange quote). */
   price: number;
   at?: Date;
+  /**
+   * Last SELL fill. A new breakout's prior channel high must exceed it so
+   * throwbacks that only reclaim a local 20-bar high are ignored.
+   */
+  lastSellPrice?: number;
+  /** When true, breakouts are ignored (HTF not bullish). Exits still fire. */
+  doNotBuy?: boolean;
 }
 
 /**
  * Trend-following Donchian breakout (HTF bullish only).
  * BUY when close crosses above the prior entry-period high by minBreakAtrMult×ATR,
- * volume exceeds k × prior volume SMA, and close is above trend EMA.
- * SELL when close crosses below the prior exit-period low.
- * Volume / EMA / enableBuy do not block exits.
+ * volume exceeds k × prior volume SMA, close is above trend EMA, and the prior
+ * channel high is above the last SELL fill when one exists.
+ * SELL when close crosses below the prior (longer) exit-period low.
+ * Volume / EMA / doNotBuy do not block exits.
  */
 export function evaluateDonchian(input: DonchianInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -173,7 +204,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
     side = "SELL";
     reason = `Donchian exit: close broke prior ${strategy.exitPeriod}-bar low (prev ${fmt(closePrev)} ≥ ${fmt(exitLowerPrev)}, close ${fmt(close)} < ${fmt(exitLowerPrev)})`;
   } else if (brokeUpper) {
-    if (!strategy.enableBuy) {
+    if (input.doNotBuy) {
       reason = `Breakout ignored: HTF trend not bullish`;
     } else if (close <= entryUpperPrev + breakMargin) {
       reason =
@@ -183,6 +214,8 @@ export function evaluateDonchian(input: DonchianInput): Signal {
       reason = `Breakout ignored: volume ${fmt(volume)} <= ${fmt(volumeThreshold)} (${strategy.volumeSmaMult}× SMA ${fmt(volumeSmaPrev)})`;
     } else if (strategy.trendEmaPeriod > 0 && trendEma != null && close <= trendEma) {
       reason = `Breakout ignored: close ${fmt(close)} <= trend EMA${strategy.trendEmaPeriod} ${fmt(trendEma)}`;
+    } else if (input.lastSellPrice != null && entryUpperPrev <= input.lastSellPrice) {
+      reason = `Breakout ignored: channel high ${fmt(entryUpperPrev)} <= last exit ${fmt(input.lastSellPrice)}`;
     } else {
       side = "BUY";
       const emaNote =
@@ -198,27 +231,22 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m Donchian breakout: 20-bar high + SMA volume + EMA50; HTF bullish only; exit at 20-bar low. */
+/** 15m Donchian breakout: 20-bar high + SMA volume + EMA50; HTF bullish only; exit at 40/55-bar low. */
 export class DonchianStrategy implements Strategy {
   private readonly params: DonchianParams;
   private readonly risk: RiskParams;
+  private readonly trend: Trend;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low") {
+    this.trend = trend;
     this.params = donchianParamsFor(trend, volatility);
-    this.risk = riskParamsFor(trend);
+    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
-    const {
-      timeframe,
-      entryPeriod,
-      exitPeriod,
-      volumeSmaPeriod,
-      volumeSmaMult,
-      trendEmaPeriod,
-      enableBuy,
-    } = this.params;
-    const gate = enableBuy ? "bull" : "no-buy";
+    const { timeframe, entryPeriod, exitPeriod, volumeSmaPeriod, volumeSmaMult, trendEmaPeriod } =
+      this.params;
+    const gate = this.trend === "bullish" ? "bull" : "no-buy";
     return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod} ${gate})`;
   }
 
@@ -244,22 +272,39 @@ export class DonchianStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    _market: MarketIndicators,
+    market: MarketIndicators,
     price: number,
     at: Date,
+    snapshot?: PortfolioSnapshot,
   ): Signal {
+    const lastSellPrice = lastSellFillPrice(snapshot);
     return evaluateDonchian({
       pair,
       candles,
       strategy: this.params,
       price,
       at,
+      doNotBuy: market.trend !== "bullish",
+      ...(lastSellPrice != null ? { lastSellPrice } : {}),
     });
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {
     return buildDonchianSvg({ pair, candles, strategy: this.params });
   }
+}
+
+function lastSellFillPrice(snapshot: PortfolioSnapshot | undefined): number | undefined {
+  if (snapshot == null) {
+    return undefined;
+  }
+  for (let i = snapshot.trades.length - 1; i >= 0; i--) {
+    const trade = snapshot.trades[i];
+    if (trade?.side === "SELL" && trade.price > 0) {
+      return trade.price;
+    }
+  }
+  return undefined;
 }
 
 function fmt(n: number): string {

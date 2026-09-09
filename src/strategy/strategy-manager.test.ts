@@ -215,7 +215,7 @@ describe("applyMarketIndicators", () => {
     manager.applyMarketIndicators(first);
     const squeezed = { ...first, volatility: "squeeze" as const };
     manager.applyMarketIndicators(squeezed, first);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.4"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.6"));
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });

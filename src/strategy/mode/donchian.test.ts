@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle } from "../../types.js";
+import type { Candle, MarketIndicators } from "../../types.js";
 import {
   DonchianStrategy,
   donchianParamsFor,
@@ -22,7 +22,6 @@ function testParams(overrides: Partial<DonchianParams> = {}): DonchianParams {
     trendEmaPeriod: 5,
     atrPeriod: 5,
     minBreakAtrMult: 0,
-    enableBuy: true,
     ...overrides,
   });
 }
@@ -167,13 +166,14 @@ describe("evaluateDonchian", () => {
     assert.ok(signal.meta?.donchianLower != null);
   });
 
-  it("ignores a breakout when enableBuy is false", () => {
+  it("ignores a breakout when doNotBuy is set", () => {
     const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
       candles,
-      strategy: testParams({ enableBuy: false }),
+      strategy: testParams(),
       price: candles[candles.length - 1]!.close,
+      doNotBuy: true,
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /not bullish/i);
@@ -190,27 +190,39 @@ describe("evaluateDonchian", () => {
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /ATR/i);
   });
+
+  it("ignores a breakout whose channel high does not exceed the last SELL fill", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles,
+      strategy: testParams(),
+      price: candles[candles.length - 1]!.close,
+      lastSellPrice: 102,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /last exit/i);
+  });
 });
 
 describe("donchianParamsFor", () => {
-  it("uses 15m DC20/20 defaults and disables BUY in flat/low", () => {
+  it("uses 15m DC20/40 defaults in flat/low", () => {
     const p = donchianParamsFor("flat", "low");
     assert.equal(p.timeframe, "15m");
     assert.equal(p.entryPeriod, 20);
-    assert.equal(p.exitPeriod, 20);
+    assert.equal(p.exitPeriod, 40);
     assert.equal(p.volumeSmaPeriod, 20);
     assert.equal(p.trendEmaPeriod, 50);
-    assert.equal(p.minBreakAtrMult, 0.1);
-    assert.equal(p.enableBuy, false);
+    assert.equal(p.minBreakAtrMult, 0.35);
   });
 
-  it("enables BUY only in bullish and tightens volume in squeeze", () => {
-    assert.equal(donchianParamsFor("bullish", "high").enableBuy, true);
-    assert.equal(donchianParamsFor("bullish", "high").volumeSmaMult, 1.1);
-    assert.equal(donchianParamsFor("bullish", "low").volumeSmaMult, 1.3);
-    assert.equal(donchianParamsFor("bullish", "squeeze").volumeSmaMult, 1.4);
-    assert.equal(donchianParamsFor("flat", "squeeze").enableBuy, false);
-    assert.equal(donchianParamsFor("bearish", "low").enableBuy, false);
+  it("tightens volume and lengthens the exit channel in squeeze", () => {
+    assert.equal(donchianParamsFor("bullish", "high").volumeSmaMult, 1.2);
+    assert.equal(donchianParamsFor("bullish", "high").exitPeriod, 40);
+    assert.equal(donchianParamsFor("bullish", "high").minBreakAtrMult, 0.2);
+    assert.equal(donchianParamsFor("bullish", "low").volumeSmaMult, 1.5);
+    assert.equal(donchianParamsFor("bullish", "squeeze").volumeSmaMult, 1.6);
+    assert.equal(donchianParamsFor("bullish", "squeeze").exitPeriod, 55);
   });
 });
 
@@ -222,9 +234,9 @@ describe("DonchianStrategy", () => {
     const risk = strategy.getRiskParams();
     assert.equal(risk.timeframe, "15m");
     assert.equal(risk.atrStopMult, 2.5);
-    assert.equal(risk.atrTrailMult, 3.5);
-    assert.equal(risk.cooldownBars, 8);
-    assert.equal(risk.minHoldBars, 4);
+    assert.equal(risk.atrTrailMult, 5);
+    assert.equal(risk.cooldownBars, 96);
+    assert.equal(risk.minHoldBars, 16);
     const required = strategy.getRequiredCandles();
     assert.equal(required.timeframe, "15m");
     assert.ok(required.count <= 100);
@@ -233,10 +245,38 @@ describe("DonchianStrategy", () => {
 
   it("widens ATR trail in bullish and names the volume mult", () => {
     const strategy = new DonchianStrategy("bullish", "high");
-    assert.match(strategy.getDisplayName(), /×1\.1/);
+    assert.match(strategy.getDisplayName(), /×1\.2/);
     assert.match(strategy.getDisplayName(), /bull/);
     const risk = strategy.getRiskParams();
     assert.equal(risk.atrStopMult, 3);
-    assert.equal(risk.atrTrailMult, 4);
+    assert.equal(risk.atrTrailMult, 6);
+    assert.equal(new DonchianStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
+    assert.equal(new DonchianStrategy("bullish", "squeeze").getRiskParams().atrTrailMult, 6);
+  });
+
+  it("sets doNotBuy from MarketIndicators.trend, not from constructor params", () => {
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 80; i++) {
+      const price = 100 + ((i % 4) - 1.5) * 0.1;
+      candles.push(bar(start + i * INTERVAL, price, 0.2, 10));
+    }
+    candles.push(bar(start + 80 * INTERVAL, 101.2, 0.5, 40));
+    const price = candles[candles.length - 1]!.close;
+    const at = new Date(candles[candles.length - 1]!.time * 1000);
+    const strategy = new DonchianStrategy("bullish", "high");
+    const flat: MarketIndicators = {
+      pair: "SOL/USDC",
+      price,
+      trend: "flat",
+      volatility: "high",
+    };
+    const blocked = strategy.evaluateSignal("SOL/USDC", candles, flat, price, at);
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /not bullish/i);
+
+    const bullish: MarketIndicators = { ...flat, trend: "bullish" };
+    const allowed = strategy.evaluateSignal("SOL/USDC", candles, bullish, price, at);
+    assert.equal(allowed.side, "BUY", allowed.reason);
   });
 });

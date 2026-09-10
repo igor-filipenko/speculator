@@ -4,6 +4,7 @@ import type {
   Candle,
   MarketIndicators,
   PortfolioSnapshot,
+  PriceLevel,
   Trend,
   Volatility,
 } from "../../types.js";
@@ -41,8 +42,20 @@ function longSnapshot(entryPrice: number): PortfolioSnapshot {
   };
 }
 
-function market(trend: Trend, volatility: Volatility = "low"): MarketIndicators {
-  return { pair: "SOL/USDC", price: 100, trend, volatility };
+function market(
+  trend: Trend,
+  volatility: Volatility = "low",
+  levels?: PriceLevel[],
+): MarketIndicators {
+  const indicators: MarketIndicators = { pair: "SOL/USDC", price: 100, trend, volatility };
+  if (levels != null && levels.length > 0) {
+    indicators.htf = { timeframe: "4h", candles: [], levels };
+  }
+  return indicators;
+}
+
+function srLevel(kind: PriceLevel["kind"], price: number): PriceLevel {
+  return { price, kind, touches: 2, volume: 100, lastTime: 1 };
 }
 
 function snapshotWithSell(price: number, reason: string, at: Date = new Date()): PortfolioSnapshot {
@@ -639,6 +652,61 @@ describe("evaluateGrid", () => {
 
     assert.doesNotMatch(signal.reason, /skip re-entry after ATR/);
   });
+
+  it("caps take-profit at HTF resistance instead of a full grid step", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      gridMult: 10,
+      adxMax: 100,
+      failReclaimAtrMult: 0,
+    });
+    const candles = flatSeries(100, 40);
+    candles.push(bar(candles[candles.length - 1]!.time + INTERVAL, 101.2));
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 101.2,
+      at: new Date(),
+      params: p,
+      snapshot: longSnapshot(100),
+      market: market("flat", "low", [srLevel("resistance", 101.3)]),
+    });
+
+    assert.equal(signal.side, "SELL");
+    assert.match(signal.reason, /grid TP/);
+  });
+
+  it("raises the reclaim level to HTF support", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+      gridMult: 10,
+      dipAtrMult: 0,
+      maxDipAtrMult: 0,
+    });
+    const candles = flatSeries(100, 40);
+    const lastTime = candles[candles.length - 1]!.time;
+    candles[candles.length - 2] = bar(lastTime - INTERVAL, 99.0);
+    candles[candles.length - 1] = bar(lastTime, 100.2);
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 100.2,
+      at: new Date(),
+      params: p,
+      snapshot: flatSnapshot(),
+      market: market("flat", "low", [srLevel("support", 100.1)]),
+    });
+
+    assert.equal(signal.side, "BUY");
+    assert.match(signal.reason, /100\.1000/);
+  });
 });
 
 describe("gridParamsFor", () => {
@@ -659,7 +727,7 @@ describe("gridParamsFor", () => {
     assert.equal(gridParamsFor("flat", "low").chaseAtrMult, 0.5);
     assert.equal(gridParamsFor("flat", "low").atrReentryBars, 96);
     assert.equal(gridParamsFor("flat", "low").dipAtrMult, 1.5);
-    assert.equal(gridParamsFor("flat", "low").maxDipAtrMult, 4);
+    assert.equal(gridParamsFor("flat", "low").maxDipAtrMult, 2);
     assert.equal(gridParamsFor("flat", "low").failReclaimAtrMult, 0.75);
   });
 

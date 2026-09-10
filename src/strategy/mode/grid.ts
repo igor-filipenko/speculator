@@ -2,6 +2,7 @@ import { candleIntervalSeconds } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
+  PriceLevel,
   RequiredCandles,
   RiskParams,
   Signal,
@@ -141,15 +142,16 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   const adxSeries = adx(candles, params.adxPeriod);
   const currentAdx = adxSeries[adxSeries.length - 1];
 
-  const gridSpacing = currentAtr * params.gridMult;
-
-  const anchorSlice = candles.slice(-params.reanchorBars);
-  const referencePrice = anchorSlice.reduce((s, c) => s + c.close, 0) / anchorSlice.length;
-
   const lastCandle = candles[candles.length - 1]!;
   const prevCandle = candles[candles.length - 2]!;
   const close = lastCandle.close;
   const prevClose = prevCandle.close;
+
+  const sr = srBounds(market, close);
+  const gridSpacing = currentAtr * params.gridMult;
+
+  const anchorSlice = candles.slice(-params.reanchorBars);
+  const referencePrice = anchorSlice.reduce((s, c) => s + c.close, 0) / anchorSlice.length;
 
   const meta: NonNullable<Signal["meta"]> = {
     atr: currentAtr,
@@ -160,8 +162,11 @@ export function evaluateGrid(input: GridSignalInput): Signal {
 
   if (snapshot?.position.side === "long") {
     const entryPrice = snapshot.position.entryPrice;
-    const tpSpacing = params.gridMult * currentAtr;
-    const target = entryPrice + tpSpacing;
+    const target =
+      sr.resistance != null
+        ? Math.min(entryPrice + gridSpacing, sr.resistance)
+        : entryPrice + gridSpacing;
+    const tpSpacing = target - entryPrice;
     const barHigh = lastCandle.high;
     // Check intra-bar TP: bar high cleared the target even if close did not.
     // This prevents the ATR trail from stealing trades the price already won.
@@ -178,7 +183,10 @@ export function evaluateGrid(input: GridSignalInput): Signal {
       };
     }
     if (params.failReclaimAtrMult > 0 && market?.trend !== "bullish") {
-      const reclaimedLevel = findNearestGridLevelBelow(entryPrice, referencePrice, gridSpacing);
+      const reclaimedLevel = clipGridLevel(
+        findNearestGridLevelBelow(entryPrice, referencePrice, gridSpacing),
+        sr,
+      );
       const failCap = entryPrice - params.failReclaimAtrMult * currentAtr;
       const failLevel = Math.max(reclaimedLevel, failCap);
       if (close < failLevel) {
@@ -230,7 +238,10 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`, meta);
   }
 
-  const nearestLevelBelow = findNearestGridLevelBelow(close, referencePrice, gridSpacing);
+  const nearestLevelBelow = clipGridLevel(
+    findNearestGridLevelBelow(close, referencePrice, gridSpacing),
+    sr,
+  );
 
   if (prevClose <= nearestLevelBelow && close > nearestLevelBelow) {
     if (params.dipAtrMult > 0 || params.maxDipAtrMult > 0) {
@@ -277,6 +288,69 @@ function lookbackHigh(candles: Candle[], lookback: number): number {
     high = Math.max(high, candle.high);
   }
   return high;
+}
+
+interface SrBounds {
+  support?: number;
+  resistance?: number;
+}
+
+/** Nearest support below and resistance above `price` from HTF then 1h levels. */
+function srBounds(market: MarketIndicators | undefined, price: number): SrBounds {
+  const fromLevels = nearestSr(collectLevels(market), price);
+  const support = fromLevels.support ?? market?.htf?.support ?? market?.mtf?.support;
+  const resistance = fromLevels.resistance ?? market?.htf?.resistance ?? market?.mtf?.resistance;
+  const bounds: SrBounds = {};
+  if (support != null) {
+    bounds.support = support;
+  }
+  if (resistance != null) {
+    bounds.resistance = resistance;
+  }
+  return bounds;
+}
+
+function collectLevels(market: MarketIndicators | undefined): PriceLevel[] {
+  if (market == null) {
+    return [];
+  }
+  return [...(market.htf?.levels ?? []), ...(market.mtf?.levels ?? [])];
+}
+
+function nearestSr(levels: PriceLevel[], price: number): SrBounds {
+  let support: number | undefined;
+  let resistance: number | undefined;
+  for (const level of levels) {
+    if (level.kind === "support" && level.price < price) {
+      if (support == null || level.price > support) {
+        support = level.price;
+      }
+    }
+    if (level.kind === "resistance" && level.price > price) {
+      if (resistance == null || level.price < resistance) {
+        resistance = level.price;
+      }
+    }
+  }
+  const bounds: SrBounds = {};
+  if (support != null) {
+    bounds.support = support;
+  }
+  if (resistance != null) {
+    bounds.resistance = resistance;
+  }
+  return bounds;
+}
+
+function clipGridLevel(level: number, sr: SrBounds): number {
+  let clipped = level;
+  if (sr.support != null) {
+    clipped = Math.max(clipped, sr.support);
+  }
+  if (sr.resistance != null) {
+    clipped = Math.min(clipped, sr.resistance);
+  }
+  return clipped;
 }
 
 function findNearestGridLevelBelow(price: number, reference: number, spacing: number): number {

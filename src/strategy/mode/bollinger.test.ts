@@ -124,6 +124,20 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.rsi != null);
   });
 
+  it("holds reclaim when already long", () => {
+    const candles = reclaimLowerBand();
+    const last = candles[candles.length - 1]!;
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      entryPrice: last.close * 0.99,
+    });
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /already long/);
+  });
+
   it("does not BUY while still below lower (no reclaim)", () => {
     const candles = stuckBelowLower();
     const strategy = looseFilters();

@@ -162,11 +162,12 @@ export interface BollingerInput {
 
 /**
  * Mean-reversion Bollinger for bullish/flat × low/squeeze.
- * BUY on lower-band **reclaim**: same-bar wick (low ≤ lower, close back inside, green)
+ * BUY on lower-band **reclaim** when flat: same-bar wick (low ≤ lower, close back inside, green)
  * or prior close ≤ prior lower then close > lower, when ADX ≤ adxMax, close < mid,
  * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
- * SELL when long and close ≥ middle **and** close is above the open fill after costs.
- * Flat → HOLD on mid (no exit without a position). Regime / ADX / RSI do not block exits.
+ * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
+ * **and** close is above the open fill after costs. Flat → HOLD on mid.
+ * Regime / ADX / RSI do not block exits.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -260,6 +261,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
     } else if (rsiNow >= strategy.rsiBuyMax) {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
+    } else if (long) {
+      reason = `Lower reclaim ignored: already long`;
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";

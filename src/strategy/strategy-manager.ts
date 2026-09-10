@@ -102,7 +102,7 @@ export class SimpleStrategyManager implements StrategyManager {
     lastMarketIndicators?: MarketIndicators,
   ): boolean {
     this.strategy = loadStrategy(this.strategyMode, indicators.trend, indicators.volatility);
-    this.riskManager = createRiskManager(indicators.trend, this.strategy, indicators.volatility);
+    this.riskManager = createRiskManager(indicators.trend, this.strategy);
     return (
       lastMarketIndicators?.trend !== indicators.trend ||
       lastMarketIndicators?.volatility !== indicators.volatility
@@ -110,19 +110,11 @@ export class SimpleStrategyManager implements StrategyManager {
   }
 }
 
-export function createRiskManager(
-  trend: Trend,
-  strategy: Strategy,
-  volatility: Volatility = "low",
-): RiskManager {
+export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
   return match(trend)
     .with("bearish", () => new HighRiskManager("trend is bearish", strategy.getRiskParams()))
     .with("unknown", () => new HighRiskManager("trend is unknown", strategy.getRiskParams()))
-    .with("bullish", "flat", () =>
-      strategy.getMode() === "bollinger" && volatility === "high"
-        ? new HighRiskManager("volatility is high", strategy.getRiskParams())
-        : new GenericRiskManager(strategy.getRiskParams()),
-    )
+    .with("bullish", "flat", () => new GenericRiskManager(strategy.getRiskParams()))
     .exhaustive();
 }
 

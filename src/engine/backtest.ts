@@ -461,8 +461,9 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     for (const t of trades) {
       const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
       const reason = t.reason ? ` — ${t.reason}` : "";
+      const endOfTrip = t.side === "SELL" ? "\n" : "";
       console.log(
-        `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}`,
+        `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}${endOfTrip}`,
       );
     }
   }

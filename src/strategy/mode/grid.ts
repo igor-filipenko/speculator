@@ -1,3 +1,4 @@
+import { candleIntervalSeconds } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
@@ -29,12 +30,16 @@ export interface GridParams {
   adxMax: number;
   /** Trend EMA period; BUY only above it. */
   trendEmaPeriod: number;
+  /** Skip a new long while close is within this many ATR of the last exit. */
+  chaseAtrMult: number;
+  /** Bars to skip BUY after an ATR stop/trail (0 = no skip). */
+  atrReentryBars: number;
 }
 
-/** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; squeeze stays medium. */
+/** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; flat stays ≥ stop so TP ≥ risk. */
 const GRID_MULT: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 8, low: 5, squeeze: 7, unknown: 6 },
-  flat: { high: 4, low: 3, squeeze: 3, unknown: 3 },
+  flat: { high: 6, low: 5, squeeze: 5, unknown: 5 },
   bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
   unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
 };
@@ -50,7 +55,7 @@ const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
 /** Hard stop follows HTF trend only (vol is already in spacing / trail). */
 const ATR_STOP: Record<Trend, number> = {
   bullish: 4,
-  flat: 4,
+  flat: 2.5,
   bearish: 2.5,
   unknown: 2.5,
 };
@@ -72,6 +77,9 @@ export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams 
     reanchorBars: 40,
     adxMax: ADX_MAX[trend][volatility],
     trendEmaPeriod: 50,
+    chaseAtrMult: 0.5,
+    /** 24h on 15m: skip the post-stop bounce, then trade again. */
+    atrReentryBars: 96,
   };
 }
 
@@ -169,23 +177,26 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   }
 
   const lastSell = lastSellTrade(snapshot);
-  if (lastSell?.reason?.startsWith("ATR") === true && market?.trend === "bullish") {
-    return hold(`skip re-entry after ATR exit while HTF bullish`, meta);
+  if (lastSell != null && inAtrReentrySkip(lastSell, at, params)) {
+    return hold(`skip re-entry after ATR exit`, meta);
   }
 
-  if (lastSell != null && lastSell.price > 0 && close >= lastSell.price) {
-    const lastExitWasTp = lastSell.reason?.includes("TP") === true;
-    if (market?.volatility === "squeeze" && lastExitWasTp) {
-      return hold(
-        `squeeze chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
-        meta,
-      );
-    }
-    if (market?.trend === "bullish" && market.volatility === "low") {
-      return hold(
-        `low-vol chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
-        meta,
-      );
+  if (lastSell != null && lastSell.price > 0) {
+    const chaseFloor = lastSell.price - params.chaseAtrMult * currentAtr;
+    if (close >= chaseFloor) {
+      const lastExitWasTp = lastSell.reason?.includes("TP") === true;
+      if (market?.volatility === "squeeze" && lastExitWasTp) {
+        return hold(
+          `squeeze chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)} − ${params.chaseAtrMult}×ATR`,
+          meta,
+        );
+      }
+      if (market?.trend === "bullish" && market.volatility === "low") {
+        return hold(
+          `low-vol chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)} − ${params.chaseAtrMult}×ATR`,
+          meta,
+        );
+      }
     }
   }
 
@@ -223,6 +234,16 @@ function findNearestGridLevelBelow(price: number, reference: number, spacing: nu
   const diff = price - reference;
   const levels = Math.floor(diff / spacing);
   return reference + levels * spacing;
+}
+
+function inAtrReentrySkip(lastSell: Trade, at: Date, params: GridParams): boolean {
+  if (lastSell.reason?.startsWith("ATR") !== true || params.atrReentryBars <= 0) {
+    return false;
+  }
+  const intervalSec = candleIntervalSeconds(params.timeframe);
+  const elapsedSec = Math.max(0, (at.getTime() - lastSell.at.getTime()) / 1000);
+  const barsSince = Math.floor(elapsedSec / intervalSec);
+  return barsSince < params.atrReentryBars;
 }
 
 function lastSellTrade(snapshot: PortfolioSnapshot | undefined): Trade | undefined {

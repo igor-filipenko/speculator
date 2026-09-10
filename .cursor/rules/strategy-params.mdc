@@ -1,0 +1,20 @@
+---
+description: Strategy knobs belong on Params, not module-level magic numbers
+globs: src/strategy/**/*.ts
+alwaysApply: false
+---
+
+# Strategy parameters
+
+Do not add constants used by signal/risk logic inside strategy implementations. Every knob belongs on the mode params object (`GridParams`, `BollingerParams`, `DonchianParams`) and is set in `*ParamsFor(trend, volatility)`.
+
+Regime lookup tables (`GRID_MULT`, `ADX_MAX`, …) are allowed only as the mapping that **fills** those params. `evaluate*` / `evaluateGrid` / `evaluateBollinger` must read `params.foo`, not a module `FOO`.
+
+```typescript
+// BAD
+const CHASE_ATR_MULT = 0.5;
+const chaseFloor = lastSell.price - CHASE_ATR_MULT * currentAtr;
+
+// GOOD
+const chaseFloor = lastSell.price - params.chaseAtrMult * currentAtr;
+```

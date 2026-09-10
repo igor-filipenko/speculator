@@ -360,7 +360,7 @@ Reclaim depth is `(close − lower) / (mid − lower)`. Cooldown 2 bars, minHold
 
 ### Grid (`grid`)
 
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and close is above trend EMA 50. **Skips squeeze entries at or above the last take-profit**, **skips bullish/low entries at or above the last SELL**, and **skips a new long after an ATR stop/trail while HTF is still bullish**. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×4 and ADX 22; flat/low or squeeze → ×3 and ADX 20; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and close is above trend EMA 50. **Skips squeeze entries within `chaseAtrMult` (0.5×ATR) of the last take-profit**, **skips bullish/low entries within the same buffer of the last SELL**, and **skips a new long for `atrReentryBars` (96 = 24h) after an ATR stop/trail**. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×6 and ADX 22; flat/low or squeeze → ×5 and ADX 20; bearish → ×2). ATR stop is 4× in bullish, 2.5× otherwise; trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
 
 ### Donchian breakout (`donchian`)
 

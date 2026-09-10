@@ -1,6 +1,6 @@
 import type { Candle } from "../../types.js";
 import type { GridParams } from "./grid.js";
-import { atr, ema } from "../indicators.js";
+import { atr } from "../indicators.js";
 
 export interface GridChartInput {
   pair: string;
@@ -13,7 +13,7 @@ export interface GridChartInput {
 const PAD = { top: 36, right: 56, bottom: 28, left: 12 };
 
 /**
- * Build an SVG string: price candles + ATR-based grid levels + trend EMA overlay.
+ * Build an SVG string: price candles + ATR-based grid levels.
  */
 export function buildGridSvg(input: GridChartInput): string {
   const width = input.width ?? 900;
@@ -25,7 +25,6 @@ export function buildGridSvg(input: GridChartInput): string {
   }
 
   const closes = candles.map((c) => c.close);
-  const trendEmaSeries = ema(closes, strategy.trendEmaPeriod);
   const atrSeries = atr(candles, strategy.atrPeriod);
 
   const lastAtr = atrSeries[atrSeries.length - 1];
@@ -43,12 +42,6 @@ export function buildGridSvg(input: GridChartInput): string {
   for (const c of candles) {
     minP = Math.min(minP, c.low);
     maxP = Math.max(maxP, c.high);
-  }
-  for (const v of trendEmaSeries) {
-    if (v != null) {
-      minP = Math.min(minP, v);
-      maxP = Math.max(maxP, v);
-    }
   }
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
     minP = closes[0]! * 0.99;
@@ -95,18 +88,6 @@ export function buildGridSvg(input: GridChartInput): string {
     }
   }
 
-  const linePath = (series: (number | null)[]): string => {
-    const parts: string[] = [];
-    for (let i = 0; i < series.length; i++) {
-      const v = series[i];
-      if (v == null) continue;
-      const cmd = parts.length === 0 ? "M" : "L";
-      parts.push(`${cmd}${xAt(i).toFixed(2)},${yPrice(v).toFixed(2)}`);
-    }
-    return parts.join(" ");
-  };
-
-  const trendEmaPath = linePath(trendEmaSeries);
   const title = `${escapeXml(pair)} · ${strategy.timeframe} · Grid(ATR${strategy.atrPeriod}×${strategy.gridMult})`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
@@ -120,9 +101,7 @@ export function buildGridSvg(input: GridChartInput): string {
   <rect x="${PAD.left}" y="${priceTop}" width="${plotW}" height="${plotH}" fill="none" stroke="#1e293b"/>
   ${gridLines.join("\n  ")}
   ${candleParts.join("\n  ")}
-  ${trendEmaPath ? `<path d="${trendEmaPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">EMA${strategy.trendEmaPeriod}</text>
-  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#6366f1" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">grid ×${strategy.gridMult}</text>
+  <text x="${PAD.left}" y="${priceTop + 14}" fill="#6366f1" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">grid ×${strategy.gridMult}</text>
 </svg>`;
 }
 

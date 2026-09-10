@@ -13,7 +13,7 @@ import type {
   Volatility,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
-import { adx, atr, ema } from "../indicators.js";
+import { adx, atr } from "../indicators.js";
 
 export interface GridParams {
   timeframe: Timeframe;
@@ -28,12 +28,26 @@ export interface GridParams {
   reanchorBars: number;
   /** BUY only when ADX <= this (flat regime gate). */
   adxMax: number;
-  /** Trend EMA period; BUY only above it. */
-  trendEmaPeriod: number;
   /** Skip a new long while close is within this many ATR of the last exit. */
   chaseAtrMult: number;
   /** Bars to skip BUY after an ATR stop/trail (0 = no skip). */
   atrReentryBars: number;
+  /**
+   * Reclaim only when the grid level is at/below the anchor and this many
+   * ATR below the recent high. 0 = skip.
+   */
+  dipAtrMult: number;
+  /**
+   * Skip reclaim when the level is more than this many ATR below the recent
+   * high (waterfall after a spike). 0 = skip.
+   */
+  maxDipAtrMult: number;
+  /**
+   * While long and HTF is not bullish, SELL if close falls back through the
+   * reclaimed level, capped at entry − this many ATR (level can drift after
+   * reanchor). 0 = skip. Bullish keeps the ATR stop as the only hard cut.
+   */
+  failReclaimAtrMult: number;
 }
 
 /** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; flat stays ≥ stop so TP ≥ risk. */
@@ -54,10 +68,10 @@ const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
 
 /** Hard stop follows HTF trend only (vol is already in spacing / trail). */
 const ATR_STOP: Record<Trend, number> = {
-  bullish: 4,
-  flat: 2.5,
-  bearish: 2.5,
-  unknown: 2.5,
+  bullish: 3,
+  flat: 1.5,
+  bearish: 1.5,
+  unknown: 1.5,
 };
 
 /** Tight trail in bullish high/squeeze so a spike does not reverse through the whole TP. */
@@ -76,10 +90,12 @@ export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams 
     gridMult: GRID_MULT[trend][volatility],
     reanchorBars: 40,
     adxMax: ADX_MAX[trend][volatility],
-    trendEmaPeriod: 50,
     chaseAtrMult: 0.5,
     /** 24h on 15m: skip the post-stop bounce, then trade again. */
     atrReentryBars: 96,
+    dipAtrMult: 1.5,
+    maxDipAtrMult: 2,
+    failReclaimAtrMult: 0.75,
   };
 }
 
@@ -105,7 +121,6 @@ export interface GridSignalInput {
 
 export function evaluateGrid(input: GridSignalInput): Signal {
   const { pair, candles, price, at, params, snapshot, market } = input;
-  const closes = candles.map((c) => c.close);
 
   const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Signal => {
     const signal: Signal = { pair, side: "HOLD", reason, price, at };
@@ -126,13 +141,10 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   const adxSeries = adx(candles, params.adxPeriod);
   const currentAdx = adxSeries[adxSeries.length - 1];
 
-  const trendEmaSeries = ema(closes, params.trendEmaPeriod);
-  const currentTrendEma = trendEmaSeries[trendEmaSeries.length - 1];
-
   const gridSpacing = currentAtr * params.gridMult;
 
-  const anchorSlice = closes.slice(-params.reanchorBars);
-  const referencePrice = anchorSlice.reduce((s, v) => s + v, 0) / anchorSlice.length;
+  const anchorSlice = candles.slice(-params.reanchorBars);
+  const referencePrice = anchorSlice.reduce((s, c) => s + c.close, 0) / anchorSlice.length;
 
   const lastCandle = candles[candles.length - 1]!;
   const prevCandle = candles[candles.length - 2]!;
@@ -142,7 +154,6 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   const meta: NonNullable<Signal["meta"]> = {
     atr: currentAtr,
     ...(currentAdx != null ? { adx: currentAdx } : {}),
-    ...(currentTrendEma != null ? { trendEma: currentTrendEma } : {}),
     barLow: lastCandle.low,
     barHigh: lastCandle.high,
   };
@@ -165,6 +176,21 @@ export function evaluateGrid(input: GridSignalInput): Signal {
         at,
         meta,
       };
+    }
+    if (params.failReclaimAtrMult > 0 && market?.trend !== "bullish") {
+      const reclaimedLevel = findNearestGridLevelBelow(entryPrice, referencePrice, gridSpacing);
+      const failCap = entryPrice - params.failReclaimAtrMult * currentAtr;
+      const failLevel = Math.max(reclaimedLevel, failCap);
+      if (close < failLevel) {
+        return {
+          pair,
+          side: "SELL",
+          reason: `grid fail reclaim: close ${close.toFixed(4)} < level ${failLevel.toFixed(4)}`,
+          price,
+          at,
+          meta,
+        };
+      }
     }
     return hold(
       `long, waiting for TP, target ${target.toFixed(4)}, current ${close.toFixed(4)}`,
@@ -204,16 +230,30 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`, meta);
   }
 
-  if (currentTrendEma != null && close < currentTrendEma) {
-    return hold(
-      `below trend EMA, current ${close.toFixed(4)}, trend EMA ${currentTrendEma.toFixed(4)}`,
-      meta,
-    );
-  }
-
   const nearestLevelBelow = findNearestGridLevelBelow(close, referencePrice, gridSpacing);
 
   if (prevClose <= nearestLevelBelow && close > nearestLevelBelow) {
+    if (params.dipAtrMult > 0 || params.maxDipAtrMult > 0) {
+      const swingHigh = lookbackHigh(candles, params.reanchorBars);
+      if (params.dipAtrMult > 0) {
+        const highCeiling = swingHigh - params.dipAtrMult * currentAtr;
+        if (nearestLevelBelow > referencePrice || nearestLevelBelow > highCeiling) {
+          return hold(
+            `no dip: level ${nearestLevelBelow.toFixed(4)} > anchor ${referencePrice.toFixed(4)} or high ${swingHigh.toFixed(4)} − ${params.dipAtrMult}×ATR`,
+            meta,
+          );
+        }
+      }
+      if (params.maxDipAtrMult > 0) {
+        const highFloor = swingHigh - params.maxDipAtrMult * currentAtr;
+        if (nearestLevelBelow < highFloor) {
+          return hold(
+            `waterfall: level ${nearestLevelBelow.toFixed(4)} < high ${swingHigh.toFixed(4)} − ${params.maxDipAtrMult}×ATR`,
+            meta,
+          );
+        }
+      }
+    }
     return {
       pair,
       side: "BUY",
@@ -228,6 +268,15 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     `no grid level crossed, current ${close.toFixed(4)}, nearest level below ${nearestLevelBelow.toFixed(4)}`,
     meta,
   );
+}
+
+function lookbackHigh(candles: Candle[], lookback: number): number {
+  const slice = lookback > 0 ? candles.slice(-lookback) : candles;
+  let high = -Infinity;
+  for (const candle of slice) {
+    high = Math.max(high, candle.high);
+  }
+  return high;
 }
 
 function findNearestGridLevelBelow(price: number, reference: number, spacing: number): number {
@@ -285,7 +334,6 @@ export class GridStrategy implements Strategy {
       this.params.reanchorBars,
       this.params.atrPeriod + 1,
       2 * this.params.adxPeriod,
-      this.params.trendEmaPeriod,
     );
     return { timeframe: this.params.timeframe, count: warmup + 100 };
   }

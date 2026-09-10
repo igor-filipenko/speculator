@@ -41,8 +41,8 @@ export interface SimpleStrategyManagerOptions {
 
 /**
  * Active strategy is env/CLI. Grid, Bollinger, and Donchian params (and ATR
- * trail) follow HTF trend × 1h volatility. High risk follows bearish/unknown
- * HTF trend; Bollinger also uses High risk when 1h volatility is high.
+ * trail) follow HTF trend × 1h volatility; Generic vs High risk still follows
+ * trend only.
  */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;

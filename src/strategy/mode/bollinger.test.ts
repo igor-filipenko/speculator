@@ -162,7 +162,7 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /band→mid/);
   });
 
-  it("emits SELL when close is at or above BB mid", () => {
+  it("emits SELL when long and close is at or above BB mid", () => {
     const candles = reboundToMid();
     const strategy = looseFilters();
     const last = candles[candles.length - 1]!;
@@ -171,11 +171,27 @@ describe("evaluateBollinger filters", () => {
       candles,
       strategy,
       price: last.close,
+      entryPrice: last.close * 0.98,
     });
     assert.ok(signal.meta?.bbMid != null);
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "SELL");
     assert.match(signal.reason, /BB mid/);
+  });
+
+  it("holds mid when flat (no long)", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+    });
+    assert.ok(signal.meta?.bbMid != null);
+    assert.ok(last.close >= signal.meta.bbMid);
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /No BB signal/);
   });
 
   it("holds a mid cross when close is still below the open fill", () => {
@@ -238,7 +254,7 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /HTF trend bearish/);
   });
 
-  it("still emits SELL at mid when doNotBuy is set", () => {
+  it("still emits SELL at mid when long and doNotBuy is set", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
     const signal = evaluateBollinger({
@@ -246,6 +262,7 @@ describe("evaluateBollinger filters", () => {
       candles,
       strategy: looseFilters(),
       price: last.close,
+      entryPrice: last.close * 0.98,
       doNotBuy: true,
       doNotBuyReason: "1h volatility high",
     });

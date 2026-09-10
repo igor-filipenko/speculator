@@ -156,7 +156,7 @@ export interface BollingerInput {
   doNotBuy?: boolean;
   /** Extra text for the HOLD reason when {@link doNotBuy} is set. */
   doNotBuyReason?: string;
-  /** Open-long fill; mid-exit is skipped when close is not above this after costs. */
+  /** Open-long fill; required for mid-exit. Skipped when close is not above this after costs. */
   entryPrice?: number;
 }
 
@@ -165,8 +165,8 @@ export interface BollingerInput {
  * BUY on lower-band **reclaim**: same-bar wick (low ≤ lower, close back inside, green)
  * or prior close ≤ prior lower then close > lower, when ADX ≤ adxMax, close < mid,
  * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
- * SELL when close ≥ middle **and** close is above the open fill after costs.
- * Regime / ADX / RSI do not block exits.
+ * SELL when long and close ≥ middle **and** close is above the open fill after costs.
+ * Flat → HOLD on mid (no exit without a position). Regime / ADX / RSI do not block exits.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -236,9 +236,9 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     lastBar.low <= bbLower && close > bbLower && close > lastBar.open && roomToMid;
   const reclaimedLower = closeReclaim || wickReclaim;
   const entry = input.entryPrice;
-  const minExit =
-    entry != null && entry > 0 ? entry * (1 + strategy.minExitAboveEntryPct) : undefined;
-  const profitableMid = close >= bbMid && (minExit == null || close >= minExit);
+  const long = entry != null && entry > 0;
+  const minExit = long ? entry * (1 + strategy.minExitAboveEntryPct) : undefined;
+  const profitableMid = long && close >= bbMid && minExit != null && close >= minExit;
 
   let side: SignalSide = "HOLD";
   let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
@@ -268,7 +268,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
-  } else if (close >= bbMid && entry != null && minExit != null && close < minExit) {
+  } else if (long && close >= bbMid && minExit != null && close < minExit) {
     reason =
       `Close ${fmt(close)} >= BB mid ${fmt(bbMid)} but below entry ${fmt(entry)} + ` +
       `${pct(strategy.minExitAboveEntryPct)}; wait ATR`;

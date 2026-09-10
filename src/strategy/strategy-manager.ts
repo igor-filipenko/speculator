@@ -41,8 +41,8 @@ export interface SimpleStrategyManagerOptions {
 
 /**
  * Active strategy is env/CLI. Grid, Bollinger, and Donchian params (and ATR
- * trail) follow HTF trend × 1h volatility; Generic vs High risk still follows
- * trend only.
+ * trail) follow HTF trend × 1h volatility. High risk follows bearish/unknown
+ * HTF trend; Bollinger also uses High risk when 1h volatility is high.
  */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;
@@ -102,7 +102,7 @@ export class SimpleStrategyManager implements StrategyManager {
     lastMarketIndicators?: MarketIndicators,
   ): boolean {
     this.strategy = loadStrategy(this.strategyMode, indicators.trend, indicators.volatility);
-    this.riskManager = createRiskManager(indicators.trend, this.strategy);
+    this.riskManager = createRiskManager(indicators.trend, this.strategy, indicators.volatility);
     return (
       lastMarketIndicators?.trend !== indicators.trend ||
       lastMarketIndicators?.volatility !== indicators.volatility
@@ -110,19 +110,26 @@ export class SimpleStrategyManager implements StrategyManager {
   }
 }
 
-export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
+export function createRiskManager(
+  trend: Trend,
+  strategy: Strategy,
+  volatility: Volatility = "low",
+): RiskManager {
   return match(trend)
-    .with("bullish", () => new GenericRiskManager(strategy.getRiskParams()))
-    .with("flat", () => new GenericRiskManager(strategy.getRiskParams()))
     .with("bearish", () => new HighRiskManager("trend is bearish", strategy.getRiskParams()))
     .with("unknown", () => new HighRiskManager("trend is unknown", strategy.getRiskParams()))
+    .with("bullish", "flat", () =>
+      strategy.getMode() === "bollinger" && volatility === "high"
+        ? new HighRiskManager("volatility is high", strategy.getRiskParams())
+        : new GenericRiskManager(strategy.getRiskParams()),
+    )
     .exhaustive();
 }
 
 /**
  * Create a strategy for `mode` tuned for HTF `trend` and 1h `volatility`.
- * Grid spacing / ATR, Bollinger ADX–RSI gates, and Donchian volume SMA
- * multiplier scale with both.
+ * Grid spacing / ATR, Bollinger ADX–RSI gates (no BUY in bear or 1h high vol),
+ * and Donchian volume SMA multiplier scale with both.
  */
 export function loadStrategy(mode: StrategyMode, trend: Trend, volatility: Volatility): Strategy {
   switch (mode) {

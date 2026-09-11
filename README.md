@@ -135,6 +135,12 @@ Print on-chain live portfolio (sync + snapshot, no swaps):
 pnpm wallet
 ```
 
+Export the Phantom-importable private key from `WALLET_KEYPAIR_PATH` (stdout — treat as highly sensitive). A Solana CLI keypair has no recoverable Phantom seed phrase; import via **Import Private Key** in Phantom.
+
+```bash
+pnpm wallet export
+```
+
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
 
 ```bash
@@ -413,6 +419,6 @@ src/
   engine/watch.ts
   engine/paper.ts
   engine/trade.ts
-  engine/wallet.ts         # one-shot live portfolio print
+  engine/wallet.ts         # one-shot live portfolio print / keypair export
   engine/backtest.ts
 ```

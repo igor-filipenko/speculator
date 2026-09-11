@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { Keypair } from "@solana/web3.js";
-import { loadKeypairFromFile } from "./wallet.js";
+import { encodeBase58, exportWalletSecrets, loadKeypairFromFile } from "./wallet.js";
 
 describe("loadKeypairFromFile", () => {
   const dirs: string[] = [];
@@ -37,5 +37,22 @@ describe("loadKeypairFromFile", () => {
     const path = join(dir, "bad.json");
     await writeFile(path, JSON.stringify({ not: "a keypair" }));
     await assert.rejects(() => loadKeypairFromFile(path), /JSON array of 64 secret-key bytes/);
+  });
+});
+
+describe("exportWalletSecrets", () => {
+  it("exports a Phantom-importable base58 private key for the same pubkey", () => {
+    const generated = Keypair.generate();
+    const secrets = exportWalletSecrets(generated);
+
+    assert.equal(secrets.publicKey, generated.publicKey.toBase58());
+    assert.equal(secrets.privateKeyBase58, encodeBase58(generated.secretKey));
+  });
+
+  it("encodes known bytes as Solana base58", () => {
+    assert.equal(encodeBase58(new Uint8Array([])), "");
+    assert.equal(encodeBase58(new Uint8Array([0])), "1");
+    assert.equal(encodeBase58(new Uint8Array([0, 0, 1])), "112");
+    assert.equal(encodeBase58(new Uint8Array([1, 2, 3])), "Ldp");
   });
 });

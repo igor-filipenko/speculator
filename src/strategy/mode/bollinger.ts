@@ -127,7 +127,7 @@ function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
     atrStopMult: ATR_STOP[trend][volatility],
     atrTrailMult: ATR_TRAIL[trend][volatility],
     cooldownBars: 2,
-    minHoldBars: 1,
+    minHoldBars: 0,
   };
 }
 
@@ -228,27 +228,37 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
   const close = closes[i]!;
   const closePrev = closes[prev]!;
-  const bandWidth = bbMid - bbLower;
-  const bandToMidPct = bandWidth / close;
-  const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
-  const roomToMid = close < bbMid;
+  const entry = input.entryPrice;
+  const long = entry != null && entry > 0;
+  let side: SignalSide = "HOLD";
+
+  if (long) {
+    const minExit = entry * (1 + strategy.minExitAboveEntryPct);
+    const profitablePrice = Math.max(bbMid, minExit);
+    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`;
+
+    if (price >= profitablePrice) {
+      side = "SELL";
+      reason = `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`;
+    }
+    return { ...base, side, reason };
+  }
+
+  // no long position, looking for entry...
+  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
+
+  const roomToMid = Math.max(close, price) < bbMid;
   const closeReclaim = closePrev <= bbLowerPrev && close > bbLower && roomToMid;
   const wickReclaim =
     lastBar.low <= bbLower && close > bbLower && close > lastBar.open && roomToMid;
   const reclaimedLower = closeReclaim || wickReclaim;
-  const entry = input.entryPrice;
-  const long = entry != null && entry > 0;
-  const minExit = long ? entry * (1 + strategy.minExitAboveEntryPct) : undefined;
-  const profitableMid = long && close >= bbMid && minExit != null && close >= minExit;
 
-  let side: SignalSide = "HOLD";
-  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
-
-  if (profitableMid) {
-    side = "SELL";
-    reason = `Close ${fmt(close)} >= BB mid ${fmt(bbMid)}`;
-  } else if (reclaimedLower) {
+  if (reclaimedLower) {
+    const bandWidth = bbMid - bbLower;
+    const bandToMidPct = bandWidth / close;
+    const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;  
     const blocked = input.doNotBuy === true ? (input.doNotBuyReason ?? "regime") : undefined;
+
     if (blocked != null) {
       reason = `Lower reclaim ignored: ${blocked}`;
     } else if (adxNow > strategy.adxMax) {
@@ -271,10 +281,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
-  } else if (long && close >= bbMid && minExit != null && close < minExit) {
-    reason =
-      `Close ${fmt(close)} >= BB mid ${fmt(bbMid)} but below entry ${fmt(entry)} + ` +
-      `${pct(strategy.minExitAboveEntryPct)}; wait ATR`;
   }
 
   return { ...base, side, reason };

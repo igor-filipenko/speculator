@@ -124,7 +124,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.rsi != null);
   });
 
-  it("holds reclaim when already long", () => {
+  it("does not pyramid when already long below mid", () => {
     const candles = reclaimLowerBand();
     const last = candles[candles.length - 1]!;
     const signal = evaluateBollinger({
@@ -134,8 +134,10 @@ describe("evaluateBollinger filters", () => {
       price: last.close,
       entryPrice: last.close * 0.99,
     });
+    assert.ok(signal.meta?.bbMid != null);
+    assert.ok(last.close < signal.meta.bbMid);
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /already long/);
+    assert.match(signal.reason, /Waiting for profitable price/);
   });
 
   it("does not BUY while still below lower (no reclaim)", () => {
@@ -176,7 +178,7 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /band→mid/);
   });
 
-  it("emits SELL when long and close is at or above BB mid", () => {
+  it("emits SELL when long and price reaches max(mid, minExit)", () => {
     const candles = reboundToMid();
     const strategy = looseFilters();
     const last = candles[candles.length - 1]!;
@@ -190,7 +192,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.bbMid != null);
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "SELL");
-    assert.match(signal.reason, /BB mid/);
+    assert.match(signal.reason, /Price .+ profitable price/);
   });
 
   it("holds mid when flat (no long)", () => {
@@ -208,7 +210,7 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /No BB signal/);
   });
 
-  it("holds a mid cross when close is still below the open fill", () => {
+  it("holds a mid cross when price is still below minExit", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
     const signal = evaluateBollinger({
@@ -218,9 +220,11 @@ describe("evaluateBollinger filters", () => {
       price: last.close,
       entryPrice: last.close * 1.02,
     });
+    assert.ok(signal.meta?.bbMid != null);
+    assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /below entry/);
-    assert.match(signal.reason, /wait ATR/);
+    assert.match(signal.reason, /Waiting for profitable price/);
+    assert.match(signal.reason, /minExit=/);
   });
 
   it("ignores reclaim when RSI is not oversold", () => {
@@ -281,7 +285,7 @@ describe("evaluateBollinger filters", () => {
       doNotBuyReason: "1h volatility high",
     });
     assert.equal(signal.side, "SELL");
-    assert.match(signal.reason, /BB mid/);
+    assert.match(signal.reason, /Price .+ profitable price/);
   });
 
   it("emits BUY when reclaim RSI is below rsiBuyMax", () => {

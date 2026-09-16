@@ -10,11 +10,11 @@ CREATE SCHEMA IF NOT EXISTS bot;
 COMMENT ON SCHEMA bot IS 'Paper and live portfolio ledgers, isolated by bot_id';
 
 DO $$ BEGIN
-  CREATE TYPE market.timeframe AS ENUM ('15m', '4h', '1d');
+  CREATE TYPE market.timeframe AS ENUM ('1m', '5m', '15m', '1h', '4h', '1d');
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
-COMMENT ON TYPE market.timeframe IS 'OHLCV bar size: 15m strategy bars, 4h/1d higher-timeframe bars';
+COMMENT ON TYPE market.timeframe IS 'OHLCV bar size';
 
 DO $$ BEGIN
   CREATE TYPE bot.mode AS ENUM ('paper', 'live');

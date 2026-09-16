@@ -25,7 +25,7 @@ REVOKE ALL ON SCHEMA market FROM speculator;
 GRANT USAGE ON SCHEMA market TO speculator;
 GRANT USAGE ON TYPE market.timeframe TO speculator;
 REVOKE ALL ON TABLE market.candles FROM speculator;
-GRANT SELECT, INSERT ON TABLE market.candles TO speculator;
+GRANT SELECT, INSERT, UPDATE ON TABLE market.candles TO speculator;
 REVOKE ALL ON TABLE market.signals FROM speculator;
 GRANT SELECT, INSERT ON TABLE market.signals TO speculator;
 REVOKE ALL ON SEQUENCE market.signals_id_seq FROM speculator;

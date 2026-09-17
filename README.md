@@ -135,6 +135,12 @@ Print on-chain live portfolio (sync + snapshot, no swaps):
 pnpm wallet
 ```
 
+Export the Phantom-importable private key from `WALLET_KEYPAIR_PATH` (stdout — treat as highly sensitive). A Solana CLI keypair has no recoverable Phantom seed phrase; import via **Import Private Key** in Phantom.
+
+```bash
+pnpm wallet export
+```
+
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
 
 ```bash
@@ -342,24 +348,25 @@ Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart spe
 
 ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
 
-`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). A Telegram message is sent when the trend or volatility changes.
+`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). **Bollinger also switches to HighRiskManager when 1h volatility is `high`**, so it does not fade wide, noisy bands. A Telegram message is sent when the trend or volatility changes.
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging markets (15m, BB period 14). Buys only on **lower-band reclaim** with filters that follow HTF trend × 1h volatility:
+Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid:
 
-| Regime         | Entry                                                                             | Exit                   | ATR stop/trail |
-| -------------- | --------------------------------------------------------------------------------- | ---------------------- | -------------- |
-| bullish / high | reclaim lower; RSI &lt; 50; ADX ≤ 40; close &gt; EMA 50; (mid−lower)/close ≥ 0.5% | close ≥ BB mid, or ATR | 3× / 3.5×      |
-| bullish / low  | RSI &lt; 40; ADX ≤ 28 (skip quiet-trend exhaustion)                               | same                   | 2.5× / 3×      |
-| flat / low     | RSI &lt; 45; ADX ≤ 32; stdDev 1.5                                                 | same                   | 2× / 2.5×      |
-| flat / squeeze | RSI &lt; 40; ADX ≤ 24 (do not fade the coil)                                      | same                   | 2× / 2.5×      |
+| Regime            | Entry                                                                                        | Exit                                       | ATR stop/trail |
+| ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | -------------- |
+| bullish / low     | wick or close reclaim; RSI &lt; 48; ADX ≤ 32; (mid−lower)/close ≥ 0.35%; reclaim depth ≥ 15% | close ≥ BB mid **and** above entry + 0.20% | 2.5× / 3×      |
+| bullish / squeeze | RSI &lt; 50; ADX ≤ 36; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
+| flat / low        | RSI &lt; 50; ADX ≤ 35; stdDev 1.5; reclaim depth ≥ 15%                                       | same                                       | 2.5× / 3×      |
+| flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
+| bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
-Cooldown 4 bars, minHold 3. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Reclaim depth is `(close − lower) / (mid − lower)`. Cooldown 2 bars, minHold 1. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Grid (`grid`)
 
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and close is above trend EMA 50. **Skips squeeze entries at or above the last take-profit**, **skips bullish/low entries at or above the last SELL**, and **skips a new long after an ATR stop/trail while HTF is still bullish**. Sells at entry + one grid spacing (needs portfolio snapshot). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×4 and ADX 22; flat/low or squeeze → ×3 and ADX 20; bearish → ×2). ATR stop is 4× (2.5× in bearish/unknown); trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
+ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and the reclaimed level is a **dip** (at/below the grid anchor **and** `dipAtrMult`–`maxDipAtrMult` × ATR below the recent high over `reanchorBars`; skips waterfalls deeper than 2×ATR). **Skips squeeze entries within `chaseAtrMult` (0.5×ATR) of the last take-profit**, **skips bullish/low entries within the same buffer of the last SELL**, and **skips a new long for `atrReentryBars` (96 = 24h) after an ATR stop/trail**. Sells at entry + one grid spacing, or earlier at the nearest HTF/1h resistance, or if HTF is not bullish and close falls back through the reclaimed level (capped at `failReclaimAtrMult` 0.75×ATR below entry). Grid lines clip to the S/R corridor (`max` nearest support, `min` nearest resistance). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×6 and ADX 22; flat/low or squeeze → ×5 and ADX 20; bearish → ×2). ATR stop is 3× in bullish, 1.5× otherwise; trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
 
 ### Donchian breakout (`donchian`)
 
@@ -412,6 +419,6 @@ src/
   engine/watch.ts
   engine/paper.ts
   engine/trade.ts
-  engine/wallet.ts         # one-shot live portfolio print
+  engine/wallet.ts         # one-shot live portfolio print / keypair export
   engine/backtest.ts
 ```

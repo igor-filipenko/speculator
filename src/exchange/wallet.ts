@@ -9,6 +9,67 @@ export interface BalanceSource {
   tokenUi(mint: string): number;
 }
 
+/** Exported signing material from a Solana CLI JSON keypair (sensitive). */
+export interface WalletSecrets {
+  publicKey: string;
+  /** Full 64-byte secret key as base58 — Phantom "Import Private Key". */
+  privateKeyBase58: string;
+}
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** Bitcoin/Solana base58 encode (no checksum). */
+export function encodeBase58(bytes: Uint8Array): string {
+  if (bytes.length === 0) {
+    return "";
+  }
+
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) {
+    zeros += 1;
+  }
+
+  const size = Math.floor(((bytes.length - zeros) * 138) / 100) + 1;
+  const encoded = new Uint8Array(size);
+  let length = 0;
+
+  for (let i = zeros; i < bytes.length; i += 1) {
+    let carry = bytes[i]!;
+    let j = 0;
+    for (let k = size - 1; (carry !== 0 || j < length) && k >= 0; k -= 1, j += 1) {
+      carry += 256 * encoded[k]!;
+      encoded[k] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    length = j;
+  }
+
+  let start = size - length;
+  while (start < size && encoded[start] === 0) {
+    start += 1;
+  }
+
+  let out = "1".repeat(zeros);
+  for (let i = start; i < size; i += 1) {
+    out += BASE58_ALPHABET[encoded[i]!]!;
+  }
+  return out;
+}
+
+/**
+ * Derive a Phantom-importable private key from a loaded keypair.
+ * Caller must treat the return value as secret material.
+ *
+ * Solana CLI JSON keypairs are raw ed25519 keys, not BIP44 HD wallets, so a
+ * Phantom recovery phrase cannot be reverse-engineered from the keypair file.
+ */
+export function exportWalletSecrets(keypair: Keypair): WalletSecrets {
+  return {
+    publicKey: keypair.publicKey.toBase58(),
+    privateKeyBase58: encodeBase58(keypair.secretKey),
+  };
+}
+
 /**
  * Load a Solana CLI JSON keypair (`[byte, byte, ...]` secret key).
  * Errors never include file contents or secret bytes.

@@ -4,6 +4,7 @@ import type {
   Candle,
   MarketIndicators,
   PortfolioSnapshot,
+  PriceLevel,
   Trend,
   Volatility,
 } from "../../types.js";
@@ -41,11 +42,23 @@ function longSnapshot(entryPrice: number): PortfolioSnapshot {
   };
 }
 
-function market(trend: Trend, volatility: Volatility = "low"): MarketIndicators {
-  return { pair: "SOL/USDC", price: 100, trend, volatility };
+function market(
+  trend: Trend,
+  volatility: Volatility = "low",
+  levels?: PriceLevel[],
+): MarketIndicators {
+  const indicators: MarketIndicators = { pair: "SOL/USDC", price: 100, trend, volatility };
+  if (levels != null && levels.length > 0) {
+    indicators.htf = { timeframe: "4h", candles: [], levels };
+  }
+  return indicators;
 }
 
-function snapshotWithSell(price: number, reason: string): PortfolioSnapshot {
+function srLevel(kind: PriceLevel["kind"], price: number): PriceLevel {
+  return { price, kind, touches: 2, volume: 100, lastTime: 1 };
+}
+
+function snapshotWithSell(price: number, reason: string, at: Date = new Date()): PortfolioSnapshot {
   return {
     ...flatSnapshot(),
     trades: [
@@ -54,7 +67,7 @@ function snapshotWithSell(price: number, reason: string): PortfolioSnapshot {
         side: "SELL",
         price,
         size: 1,
-        at: new Date(),
+        at,
         simulated: true,
         reason,
       },
@@ -91,9 +104,9 @@ describe("evaluateGrid", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
+      dipAtrMult: 0,
     });
     const candles = flatSeries(100, 40);
     const last = candles[candles.length - 1]!;
@@ -119,7 +132,6 @@ describe("evaluateGrid", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       gridMult: 0.1,
       adxMax: 100,
@@ -146,7 +158,6 @@ describe("evaluateGrid", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       gridMult: 10,
       adxMax: 100,
@@ -169,11 +180,86 @@ describe("evaluateGrid", () => {
     assert.ok(signal.meta?.barLow != null);
   });
 
+  it("emits SELL when long and close falls back through the reclaimed level", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      gridMult: 10,
+      adxMax: 100,
+      failReclaimAtrMult: 0.75,
+    });
+    const candles = flatSeries(100, 40);
+    candles.push(bar(candles[candles.length - 1]!.time + INTERVAL, 99.0));
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 99.0,
+      at: new Date(),
+      params: p,
+      snapshot: longSnapshot(100),
+    });
+
+    assert.equal(signal.side, "SELL");
+    assert.match(signal.reason, /fail reclaim/);
+  });
+
+  it("does not fail-reclaim when failReclaimAtrMult is 0", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      gridMult: 10,
+      adxMax: 100,
+      failReclaimAtrMult: 0,
+    });
+    const candles = flatSeries(100, 40);
+    candles.push(bar(candles[candles.length - 1]!.time + INTERVAL, 99.0));
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 99.0,
+      at: new Date(),
+      params: p,
+      snapshot: longSnapshot(100),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /waiting for TP/);
+  });
+
+  it("does not fail-reclaim while HTF is bullish", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      gridMult: 10,
+      adxMax: 100,
+      failReclaimAtrMult: 0.75,
+    });
+    const candles = flatSeries(100, 40);
+    candles.push(bar(candles[candles.length - 1]!.time + INTERVAL, 99.0));
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 99.0,
+      at: new Date(),
+      params: p,
+      snapshot: longSnapshot(100),
+      market: market("bullish", "low"),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /waiting for TP/);
+  });
+
   it("blocks BUY when ADX exceeds adxMax", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 0,
     });
@@ -200,42 +286,104 @@ describe("evaluateGrid", () => {
     assert.match(signal.reason, /ADX/);
   });
 
-  it("blocks BUY when below trend EMA", () => {
+  it("skips reclaim when the grid level is not a dip below recent high/anchor", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
+      gridMult: 0.1,
+      dipAtrMult: 0.5,
     });
-    const start = 1_700_000_000;
-    const candles: Candle[] = [];
-    let price = 120;
-    for (let i = 0; i < 40; i++) {
-      price -= 0.5;
-      candles.push(bar(start + i * INTERVAL, price));
-    }
-    candles.push(bar(start + 40 * INTERVAL, price - 2));
-    candles.push(bar(start + 41 * INTERVAL, price - 1));
+    const candles = flatSeries(100, 40);
+    const lastTime = candles[candles.length - 1]!.time;
+    candles[candles.length - 2] = bar(lastTime - INTERVAL, 99.0);
+    candles[candles.length - 1] = bar(lastTime, 100.5);
 
     const signal = evaluateGrid({
       pair: "SOL/USDC",
       candles,
-      price: candles[candles.length - 1]!.close,
+      price: 100.5,
       at: new Date(),
       params: p,
       snapshot: flatSnapshot(),
     });
 
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /trend EMA/);
+    assert.match(signal.reason, /no dip/);
+  });
+
+  it("emits BUY when the reclaimed level is a dip below the anchor", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+      gridMult: 0.5,
+      dipAtrMult: 0.5,
+      maxDipAtrMult: 0,
+    });
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 30; i++) {
+      candles.push(bar(start + i * INTERVAL, 100 + ((i % 4) - 1.5) * 0.05, 0.05));
+    }
+    candles.push(bar(start + 30 * INTERVAL, 96.0, 0.2));
+    candles.push(bar(start + 31 * INTERVAL, 96.8, 0.2));
+
+    const last = candles[candles.length - 1]!;
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: new Date(),
+      params: p,
+      snapshot: flatSnapshot(),
+    });
+
+    if (signal.side === "BUY") {
+      assert.match(signal.reason, /grid reclaim/);
+    } else {
+      assert.doesNotMatch(signal.reason, /no dip/);
+    }
+  });
+
+  it("skips reclaim when the dip is a waterfall below the recent high", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+      gridMult: 0.5,
+      dipAtrMult: 0.5,
+      maxDipAtrMult: 4,
+    });
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 30; i++) {
+      candles.push(bar(start + i * INTERVAL, 100 + ((i % 4) - 1.5) * 0.05, 0.05));
+    }
+    candles.push(bar(start + 30 * INTERVAL, 90.0, 0.2));
+    candles.push(bar(start + 31 * INTERVAL, 90.8, 0.2));
+
+    const last = candles[candles.length - 1]!;
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: new Date(),
+      params: p,
+      snapshot: flatSnapshot(),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /waterfall/);
   });
 
   it("skips BUY when HTF trend is bearish or unknown", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -261,7 +409,6 @@ describe("evaluateGrid", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       gridMult: 0.1,
       adxMax: 100,
@@ -285,11 +432,10 @@ describe("evaluateGrid", () => {
     assert.match(signal.reason, /grid TP/);
   });
 
-  it("skips squeeze chase when close is at or above the last take-profit", () => {
+  it("skips squeeze chase when close is within 0.5 ATR of the last take-profit", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -310,11 +456,10 @@ describe("evaluateGrid", () => {
     assert.match(signal.reason, /squeeze chase/);
   });
 
-  it("does not treat an ATR stop as a squeeze chase while HTF is flat", () => {
+  it("skips squeeze chase when close is slightly below the last take-profit", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -327,7 +472,31 @@ describe("evaluateGrid", () => {
       price: last.close,
       at: new Date(),
       params: p,
-      snapshot: snapshotWithSell(last.close - 0.01, "ATR stop hit (entry − 4×ATR)"),
+      snapshot: snapshotWithSell(last.close + 0.02, "grid TP: close"),
+      market: market("flat", "squeeze"),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /squeeze chase/);
+  });
+
+  it("does not squeeze-chase when close is more than 0.5 ATR below the last take-profit", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+    });
+    const candles = flatSeries(100, 40);
+    const last = candles[candles.length - 1]!;
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: new Date(),
+      params: p,
+      snapshot: snapshotWithSell(last.close + 5, "grid TP: close"),
       market: market("flat", "squeeze"),
     });
 
@@ -335,11 +504,35 @@ describe("evaluateGrid", () => {
     assert.doesNotMatch(signal.reason, /skip re-entry after ATR/);
   });
 
-  it("skips a low-vol chase when close is at or above the last SELL fill", () => {
+  it("does not treat an ATR stop as a squeeze chase while HTF is flat", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+    });
+    const candles = flatSeries(100, 40);
+    const last = candles[candles.length - 1]!;
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: new Date(),
+      params: p,
+      snapshot: snapshotWithSell(last.close - 0.01, "ATR stop hit (entry − 2.5×ATR)"),
+      market: market("flat", "squeeze"),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /skip re-entry after ATR/);
+    assert.doesNotMatch(signal.reason, /squeeze chase/);
+  });
+
+  it("skips a low-vol chase when close is within 0.5 ATR of the last SELL fill", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -360,11 +553,34 @@ describe("evaluateGrid", () => {
     assert.match(signal.reason, /low-vol chase/);
   });
 
+  it("skips a low-vol chase when close is slightly below the last SELL fill", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+    });
+    const candles = flatSeries(100, 40);
+    const last = candles[candles.length - 1]!;
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: new Date(),
+      params: p,
+      snapshot: snapshotWithSell(last.close + 0.02, "grid TP: close"),
+      market: market("bullish", "low"),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /low-vol chase/);
+  });
+
   it("skips BUY after an ATR exit while HTF is bullish", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -382,14 +598,13 @@ describe("evaluateGrid", () => {
     });
 
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /skip re-entry after ATR exit while HTF bullish/);
+    assert.match(signal.reason, /skip re-entry after ATR exit/);
   });
 
-  it("does not apply the ATR re-entry skip while HTF is flat", () => {
+  it("skips BUY after an ATR exit while HTF is flat", () => {
     const p = params({
       atrPeriod: 5,
       adxPeriod: 5,
-      trendEmaPeriod: 5,
       reanchorBars: 10,
       adxMax: 100,
     });
@@ -402,13 +617,95 @@ describe("evaluateGrid", () => {
       price: last.close,
       at: new Date(),
       params: p,
-      snapshot: snapshotWithSell(last.close + 5, "ATR stop hit (entry − 4×ATR)"),
+      snapshot: snapshotWithSell(last.close + 5, "ATR stop hit (entry − 2.5×ATR)"),
+      market: market("flat", "low"),
+    });
+
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /skip re-entry after ATR/);
+    assert.doesNotMatch(signal.reason, /squeeze chase/);
+    assert.doesNotMatch(signal.reason, /HTF trend/);
+  });
+
+  it("allows BUY again after atrReentryBars have elapsed", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+      atrReentryBars: 96,
+    });
+    const candles = flatSeries(100, 40);
+    const last = candles[candles.length - 1]!;
+    const sellAt = new Date(last.time * 1000);
+    const later = new Date(sellAt.getTime() + 96 * INTERVAL * 1000);
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at: later,
+      params: p,
+      snapshot: snapshotWithSell(last.close + 5, "ATR stop hit (entry − 2.5×ATR)", sellAt),
       market: market("flat", "low"),
     });
 
     assert.doesNotMatch(signal.reason, /skip re-entry after ATR/);
-    assert.doesNotMatch(signal.reason, /squeeze chase/);
-    assert.doesNotMatch(signal.reason, /HTF trend/);
+  });
+
+  it("caps take-profit at HTF resistance instead of a full grid step", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      gridMult: 10,
+      adxMax: 100,
+      failReclaimAtrMult: 0,
+    });
+    const candles = flatSeries(100, 40);
+    candles.push(bar(candles[candles.length - 1]!.time + INTERVAL, 101.2));
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 101.2,
+      at: new Date(),
+      params: p,
+      snapshot: longSnapshot(100),
+      market: market("flat", "low", [srLevel("resistance", 101.3)]),
+    });
+
+    assert.equal(signal.side, "SELL");
+    assert.match(signal.reason, /grid TP/);
+  });
+
+  it("raises the reclaim level to HTF support", () => {
+    const p = params({
+      atrPeriod: 5,
+      adxPeriod: 5,
+      reanchorBars: 10,
+      adxMax: 100,
+      gridMult: 10,
+      dipAtrMult: 0,
+      maxDipAtrMult: 0,
+    });
+    const candles = flatSeries(100, 40);
+    const lastTime = candles[candles.length - 1]!.time;
+    candles[candles.length - 2] = bar(lastTime - INTERVAL, 99.0);
+    candles[candles.length - 1] = bar(lastTime, 100.2);
+
+    const signal = evaluateGrid({
+      pair: "SOL/USDC",
+      candles,
+      price: 100.2,
+      at: new Date(),
+      params: p,
+      snapshot: flatSnapshot(),
+      market: market("flat", "low", [srLevel("support", 100.1)]),
+    });
+
+    assert.equal(signal.side, "BUY");
+    assert.match(signal.reason, /100\.1000/);
   });
 });
 
@@ -419,13 +716,19 @@ describe("gridParamsFor", () => {
     assert.equal(gridParamsFor("bullish", "low").gridMult, 5);
     assert.equal(gridParamsFor("bullish", "low").adxMax, 22);
     assert.equal(gridParamsFor("bullish", "squeeze").gridMult, 7);
-    assert.equal(gridParamsFor("flat", "low").gridMult, 3);
+    assert.equal(gridParamsFor("flat", "low").gridMult, 5);
     assert.equal(gridParamsFor("flat", "low").adxMax, 20);
-    assert.equal(gridParamsFor("flat", "high").gridMult, 4);
+    assert.equal(gridParamsFor("flat", "high").gridMult, 6);
+    assert.equal(gridParamsFor("flat", "squeeze").gridMult, 5);
     assert.equal(gridParamsFor("flat", "high").adxMax, 22);
     assert.equal(gridParamsFor("flat", "squeeze").adxMax, 20);
     assert.equal(gridParamsFor("bearish", "high").gridMult, 2);
     assert.equal(gridParamsFor("unknown", "squeeze").gridMult, 2);
+    assert.equal(gridParamsFor("flat", "low").chaseAtrMult, 0.5);
+    assert.equal(gridParamsFor("flat", "low").atrReentryBars, 96);
+    assert.equal(gridParamsFor("flat", "low").dipAtrMult, 1.5);
+    assert.equal(gridParamsFor("flat", "low").maxDipAtrMult, 2);
+    assert.equal(gridParamsFor("flat", "low").failReclaimAtrMult, 0.75);
   });
 
   it("tightens the ATR trail in bullish high/squeeze and keeps a wide trail in flat", () => {
@@ -433,8 +736,9 @@ describe("gridParamsFor", () => {
     assert.equal(new GridStrategy("bullish", "squeeze").getRiskParams().atrTrailMult, 6);
     assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
     assert.equal(new GridStrategy("flat", "low").getRiskParams().atrTrailMult, 8);
-    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrStopMult, 4);
-    assert.equal(new GridStrategy("bearish", "high").getRiskParams().atrStopMult, 2.5);
+    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrStopMult, 1.5);
+    assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrStopMult, 3);
+    assert.equal(new GridStrategy("bearish", "high").getRiskParams().atrStopMult, 1.5);
     assert.equal(new GridStrategy("flat", "low").getRiskParams().cooldownBars, 8);
   });
 });

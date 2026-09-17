@@ -284,7 +284,7 @@ export class DonchianStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      doNotBuy: market.trend !== "bullish",
+      doNotBuy: market.trend !== "bullish" && market.trend !== "flat",
       ...(lastSellPrice != null ? { lastSellPrice } : {}),
     });
   }

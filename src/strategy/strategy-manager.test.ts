@@ -180,7 +180,7 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
-  it("recreates BollingerStrategy with looser ADX when trend is bullish and vol is high", () => {
+  it("recreates BollingerStrategy as no-buy when trend is bullish and vol is high", () => {
     const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
     const strategyBefore = manager.getActiveStrategy();
     const mtfCandles = highVolMtf(140);
@@ -198,6 +198,7 @@ describe("applyMarketIndicators", () => {
     manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("no-buy"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 

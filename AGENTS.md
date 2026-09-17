@@ -78,6 +78,7 @@ src/
 ## Conventions
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
+- Strategy knobs live on the mode `*Params` object (`gridParamsFor` / `bollingerParamsFor` / …). Do not add magic numbers inside `evaluate*`.
 - Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One long position per pair: ignore BUY when already long; ignore SELL when flat.

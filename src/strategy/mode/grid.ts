@@ -1,6 +1,8 @@
+import { candleIntervalSeconds } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
+  PriceLevel,
   RequiredCandles,
   RiskParams,
   Signal,
@@ -12,7 +14,7 @@ import type {
   Volatility,
 } from "../../types.js";
 import { buildGridSvg } from "./grid-svg.js";
-import { adx, atr, ema } from "../indicators.js";
+import { adx, atr } from "../indicators.js";
 
 export interface GridParams {
   timeframe: Timeframe;
@@ -27,14 +29,32 @@ export interface GridParams {
   reanchorBars: number;
   /** BUY only when ADX <= this (flat regime gate). */
   adxMax: number;
-  /** Trend EMA period; BUY only above it. */
-  trendEmaPeriod: number;
+  /** Skip a new long while close is within this many ATR of the last exit. */
+  chaseAtrMult: number;
+  /** Bars to skip BUY after an ATR stop/trail (0 = no skip). */
+  atrReentryBars: number;
+  /**
+   * Reclaim only when the grid level is at/below the anchor and this many
+   * ATR below the recent high. 0 = skip.
+   */
+  dipAtrMult: number;
+  /**
+   * Skip reclaim when the level is more than this many ATR below the recent
+   * high (waterfall after a spike). 0 = skip.
+   */
+  maxDipAtrMult: number;
+  /**
+   * While long and HTF is not bullish, SELL if close falls back through the
+   * reclaimed level, capped at entry − this many ATR (level can drift after
+   * reanchor). 0 = skip. Bullish keeps the ATR stop as the only hard cut.
+   */
+  failReclaimAtrMult: number;
 }
 
-/** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; squeeze stays medium. */
+/** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; flat stays ≥ stop so TP ≥ risk. */
 const GRID_MULT: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 8, low: 5, squeeze: 7, unknown: 6 },
-  flat: { high: 4, low: 3, squeeze: 3, unknown: 3 },
+  flat: { high: 6, low: 5, squeeze: 5, unknown: 5 },
   bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
   unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
 };
@@ -49,10 +69,10 @@ const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
 
 /** Hard stop follows HTF trend only (vol is already in spacing / trail). */
 const ATR_STOP: Record<Trend, number> = {
-  bullish: 4,
-  flat: 4,
-  bearish: 2.5,
-  unknown: 2.5,
+  bullish: 3,
+  flat: 1.5,
+  bearish: 1.5,
+  unknown: 1.5,
 };
 
 /** Tight trail in bullish high/squeeze so a spike does not reverse through the whole TP. */
@@ -71,7 +91,12 @@ export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams 
     gridMult: GRID_MULT[trend][volatility],
     reanchorBars: 40,
     adxMax: ADX_MAX[trend][volatility],
-    trendEmaPeriod: 50,
+    chaseAtrMult: 0.5,
+    /** 24h on 15m: skip the post-stop bounce, then trade again. */
+    atrReentryBars: 96,
+    dipAtrMult: 1.5,
+    maxDipAtrMult: 2,
+    failReclaimAtrMult: 0.75,
   };
 }
 
@@ -97,7 +122,6 @@ export interface GridSignalInput {
 
 export function evaluateGrid(input: GridSignalInput): Signal {
   const { pair, candles, price, at, params, snapshot, market } = input;
-  const closes = candles.map((c) => c.close);
 
   const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Signal => {
     const signal: Signal = { pair, side: "HOLD", reason, price, at };
@@ -118,31 +142,31 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   const adxSeries = adx(candles, params.adxPeriod);
   const currentAdx = adxSeries[adxSeries.length - 1];
 
-  const trendEmaSeries = ema(closes, params.trendEmaPeriod);
-  const currentTrendEma = trendEmaSeries[trendEmaSeries.length - 1];
-
-  const gridSpacing = currentAtr * params.gridMult;
-
-  const anchorSlice = closes.slice(-params.reanchorBars);
-  const referencePrice = anchorSlice.reduce((s, v) => s + v, 0) / anchorSlice.length;
-
   const lastCandle = candles[candles.length - 1]!;
   const prevCandle = candles[candles.length - 2]!;
   const close = lastCandle.close;
   const prevClose = prevCandle.close;
 
+  const sr = srBounds(market, close);
+  const gridSpacing = currentAtr * params.gridMult;
+
+  const anchorSlice = candles.slice(-params.reanchorBars);
+  const referencePrice = anchorSlice.reduce((s, c) => s + c.close, 0) / anchorSlice.length;
+
   const meta: NonNullable<Signal["meta"]> = {
     atr: currentAtr,
     ...(currentAdx != null ? { adx: currentAdx } : {}),
-    ...(currentTrendEma != null ? { trendEma: currentTrendEma } : {}),
     barLow: lastCandle.low,
     barHigh: lastCandle.high,
   };
 
   if (snapshot?.position.side === "long") {
     const entryPrice = snapshot.position.entryPrice;
-    const tpSpacing = params.gridMult * currentAtr;
-    const target = entryPrice + tpSpacing;
+    const target =
+      sr.resistance != null
+        ? Math.min(entryPrice + gridSpacing, sr.resistance)
+        : entryPrice + gridSpacing;
+    const tpSpacing = target - entryPrice;
     const barHigh = lastCandle.high;
     // Check intra-bar TP: bar high cleared the target even if close did not.
     // This prevents the ATR trail from stealing trades the price already won.
@@ -158,6 +182,24 @@ export function evaluateGrid(input: GridSignalInput): Signal {
         meta,
       };
     }
+    if (params.failReclaimAtrMult > 0 && market?.trend !== "bullish") {
+      const reclaimedLevel = clipGridLevel(
+        findNearestGridLevelBelow(entryPrice, referencePrice, gridSpacing),
+        sr,
+      );
+      const failCap = entryPrice - params.failReclaimAtrMult * currentAtr;
+      const failLevel = Math.max(reclaimedLevel, failCap);
+      if (close < failLevel) {
+        return {
+          pair,
+          side: "SELL",
+          reason: `grid fail reclaim: close ${close.toFixed(4)} < level ${failLevel.toFixed(4)}`,
+          price,
+          at,
+          meta,
+        };
+      }
+    }
     return hold(
       `long, waiting for TP, target ${target.toFixed(4)}, current ${close.toFixed(4)}`,
       meta,
@@ -169,23 +211,26 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   }
 
   const lastSell = lastSellTrade(snapshot);
-  if (lastSell?.reason?.startsWith("ATR") === true && market?.trend === "bullish") {
-    return hold(`skip re-entry after ATR exit while HTF bullish`, meta);
+  if (lastSell != null && inAtrReentrySkip(lastSell, at, params)) {
+    return hold(`skip re-entry after ATR exit`, meta);
   }
 
-  if (lastSell != null && lastSell.price > 0 && close >= lastSell.price) {
-    const lastExitWasTp = lastSell.reason?.includes("TP") === true;
-    if (market?.volatility === "squeeze" && lastExitWasTp) {
-      return hold(
-        `squeeze chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
-        meta,
-      );
-    }
-    if (market?.trend === "bullish" && market.volatility === "low") {
-      return hold(
-        `low-vol chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)}`,
-        meta,
-      );
+  if (lastSell != null && lastSell.price > 0) {
+    const chaseFloor = lastSell.price - params.chaseAtrMult * currentAtr;
+    if (close >= chaseFloor) {
+      const lastExitWasTp = lastSell.reason?.includes("TP") === true;
+      if (market?.volatility === "squeeze" && lastExitWasTp) {
+        return hold(
+          `squeeze chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)} − ${params.chaseAtrMult}×ATR`,
+          meta,
+        );
+      }
+      if (market?.trend === "bullish" && market.volatility === "low") {
+        return hold(
+          `low-vol chase: close ${close.toFixed(4)} >= last exit ${lastSell.price.toFixed(4)} − ${params.chaseAtrMult}×ATR`,
+          meta,
+        );
+      }
     }
   }
 
@@ -193,16 +238,33 @@ export function evaluateGrid(input: GridSignalInput): Signal {
     return hold(`ADX ${currentAdx.toFixed(1)} > ${params.adxMax}`, meta);
   }
 
-  if (currentTrendEma != null && close < currentTrendEma) {
-    return hold(
-      `below trend EMA, current ${close.toFixed(4)}, trend EMA ${currentTrendEma.toFixed(4)}`,
-      meta,
-    );
-  }
-
-  const nearestLevelBelow = findNearestGridLevelBelow(close, referencePrice, gridSpacing);
+  const nearestLevelBelow = clipGridLevel(
+    findNearestGridLevelBelow(close, referencePrice, gridSpacing),
+    sr,
+  );
 
   if (prevClose <= nearestLevelBelow && close > nearestLevelBelow) {
+    if (params.dipAtrMult > 0 || params.maxDipAtrMult > 0) {
+      const swingHigh = lookbackHigh(candles, params.reanchorBars);
+      if (params.dipAtrMult > 0) {
+        const highCeiling = swingHigh - params.dipAtrMult * currentAtr;
+        if (nearestLevelBelow > referencePrice || nearestLevelBelow > highCeiling) {
+          return hold(
+            `no dip: level ${nearestLevelBelow.toFixed(4)} > anchor ${referencePrice.toFixed(4)} or high ${swingHigh.toFixed(4)} − ${params.dipAtrMult}×ATR`,
+            meta,
+          );
+        }
+      }
+      if (params.maxDipAtrMult > 0) {
+        const highFloor = swingHigh - params.maxDipAtrMult * currentAtr;
+        if (nearestLevelBelow < highFloor) {
+          return hold(
+            `waterfall: level ${nearestLevelBelow.toFixed(4)} < high ${swingHigh.toFixed(4)} − ${params.maxDipAtrMult}×ATR`,
+            meta,
+          );
+        }
+      }
+    }
     return {
       pair,
       side: "BUY",
@@ -219,10 +281,92 @@ export function evaluateGrid(input: GridSignalInput): Signal {
   );
 }
 
+function lookbackHigh(candles: Candle[], lookback: number): number {
+  const slice = lookback > 0 ? candles.slice(-lookback) : candles;
+  let high = -Infinity;
+  for (const candle of slice) {
+    high = Math.max(high, candle.high);
+  }
+  return high;
+}
+
+interface SrBounds {
+  support?: number;
+  resistance?: number;
+}
+
+/** Nearest support below and resistance above `price` from HTF then 1h levels. */
+function srBounds(market: MarketIndicators | undefined, price: number): SrBounds {
+  const fromLevels = nearestSr(collectLevels(market), price);
+  const support = fromLevels.support ?? market?.htf?.support ?? market?.mtf?.support;
+  const resistance = fromLevels.resistance ?? market?.htf?.resistance ?? market?.mtf?.resistance;
+  const bounds: SrBounds = {};
+  if (support != null) {
+    bounds.support = support;
+  }
+  if (resistance != null) {
+    bounds.resistance = resistance;
+  }
+  return bounds;
+}
+
+function collectLevels(market: MarketIndicators | undefined): PriceLevel[] {
+  if (market == null) {
+    return [];
+  }
+  return [...(market.htf?.levels ?? []), ...(market.mtf?.levels ?? [])];
+}
+
+function nearestSr(levels: PriceLevel[], price: number): SrBounds {
+  let support: number | undefined;
+  let resistance: number | undefined;
+  for (const level of levels) {
+    if (level.kind === "support" && level.price < price) {
+      if (support == null || level.price > support) {
+        support = level.price;
+      }
+    }
+    if (level.kind === "resistance" && level.price > price) {
+      if (resistance == null || level.price < resistance) {
+        resistance = level.price;
+      }
+    }
+  }
+  const bounds: SrBounds = {};
+  if (support != null) {
+    bounds.support = support;
+  }
+  if (resistance != null) {
+    bounds.resistance = resistance;
+  }
+  return bounds;
+}
+
+function clipGridLevel(level: number, sr: SrBounds): number {
+  let clipped = level;
+  if (sr.support != null) {
+    clipped = Math.max(clipped, sr.support);
+  }
+  if (sr.resistance != null) {
+    clipped = Math.min(clipped, sr.resistance);
+  }
+  return clipped;
+}
+
 function findNearestGridLevelBelow(price: number, reference: number, spacing: number): number {
   const diff = price - reference;
   const levels = Math.floor(diff / spacing);
   return reference + levels * spacing;
+}
+
+function inAtrReentrySkip(lastSell: Trade, at: Date, params: GridParams): boolean {
+  if (lastSell.reason?.startsWith("ATR") !== true || params.atrReentryBars <= 0) {
+    return false;
+  }
+  const intervalSec = candleIntervalSeconds(params.timeframe);
+  const elapsedSec = Math.max(0, (at.getTime() - lastSell.at.getTime()) / 1000);
+  const barsSince = Math.floor(elapsedSec / intervalSec);
+  return barsSince < params.atrReentryBars;
 }
 
 function lastSellTrade(snapshot: PortfolioSnapshot | undefined): Trade | undefined {
@@ -264,7 +408,6 @@ export class GridStrategy implements Strategy {
       this.params.reanchorBars,
       this.params.atrPeriod + 1,
       2 * this.params.adxPeriod,
-      this.params.trendEmaPeriod,
     );
     return { timeframe: this.params.timeframe, count: warmup + 100 };
   }

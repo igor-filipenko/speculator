@@ -4,7 +4,7 @@ import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/ba
 import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
 import { runPaper } from "./engine/paper.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
-import { runWallet } from "./engine/wallet.js";
+import { runWallet, runWalletExport } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./paper/portfolio.js";
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
       await runTradeCommand(rest);
       return;
     case "wallet":
-      await runWalletCommand();
+      await runWalletCommand(rest);
       return;
   }
 }
@@ -213,8 +213,22 @@ async function runTradeCommand(argv: string[]): Promise<void> {
   });
 }
 
-async function runWalletCommand(): Promise<void> {
+async function runWalletCommand(argv: string[]): Promise<void> {
+  const sub = argv[0];
+  if (sub !== undefined && sub !== "export") {
+    console.error(`Unknown wallet subcommand "${sub}". Expected: wallet | wallet export`);
+    usage();
+  }
+  if (argv.length > 1) {
+    console.error("Too many arguments for wallet. Expected: wallet | wallet export");
+    usage();
+  }
+
   const config = await loadConfig();
+  if (sub === "export") {
+    await runWalletExport(config);
+    return;
+  }
   await runWallet(config);
 }
 

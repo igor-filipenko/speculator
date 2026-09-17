@@ -47,6 +47,7 @@ ssh "$HOST" "mkdir -p $(printf '%q' "$REMOTE_PATH")"
 echo "Uploading runtime files…"
 # Replace dist/ atomically-ish: upload to dist.new then swap on the host.
 ssh "$HOST" "rm -rf $(printf '%q' "$REMOTE_PATH/dist.new")"
+ssh "$HOST" "mkdir -p $(printf '%q' "$REMOTE_PATH/dist.new")"
 scp -r dist "$HOST:$REMOTE_PATH/dist.new"
 ssh "$HOST" "rm -rf $(printf '%q' "$REMOTE_PATH/dist") && mv $(printf '%q' "$REMOTE_PATH/dist.new") $(printf '%q' "$REMOTE_PATH/dist")"
 

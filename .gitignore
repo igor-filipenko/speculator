@@ -6,6 +6,9 @@
 node_modules/
 dist/
 dist-test/
+web/dist/
+web/node_modules/
+server/target/
 
 # Logs / local state
 *.log

@@ -9,6 +9,10 @@
     "helius": {
       "command": "npx",
       "args": ["helius-mcp@latest"]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
     }
   }
 }

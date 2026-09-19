@@ -53,6 +53,9 @@ Edit `.env`:
 | `LIVE_SOL_RESERVE_SOL`                | Native SOL to keep for fees; not sold (default `0.05`)                                |
 | `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
 | `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                              |
+| `TELEGRAM_ALLOWED_USER_ID`            | Mini App allowlist (defaults to `TELEGRAM_CHAT_ID`)                                   |
+| `WEB_LISTEN`                          | Mini App listen addr (default `127.0.0.1:8787`)                                       |
+| `WEB_STATIC_DIR`                      | SPA directory (default `web/dist`)                                                    |
 
 Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 
@@ -77,6 +80,26 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [gra
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
 3. Put both values in `.env`.
+
+### Telegram Mini App (optional)
+
+Read-only portfolio UI served by a separate Rust HTTP process (`server/`) and React SPA (`web/`).
+
+| Endpoint                              | Auth                            | Purpose                         |
+| ------------------------------------- | ------------------------------- | ------------------------------- |
+| `GET /api/health`                     | none                            | Liveness                        |
+| `GET /api/portfolio?mode=paper\|live` | `Authorization: tma <initData>` | Portfolio snapshot for `BOT_ID` |
+
+Local development:
+
+```bash
+pnpm web:build          # or pnpm web:dev (Vite proxies /api → :8787)
+pnpm server:dev         # listens on WEB_LISTEN (default 127.0.0.1:8787)
+```
+
+Required for the web server: `DATABASE_URL`, `BOT_ID`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_ALLOWED_USER_ID` (or `TELEGRAM_CHAT_ID` for a private chat). Point BotFather’s Mini App / menu button URL at your public origin. Opening the SPA in a normal browser shows an “Open from Telegram” page (no API calls).
+
+Production unit: [deploy/miniapp.service](./deploy/miniapp.service) (`User=miniapp`, `Group=speculator`, binary `bin/server`, static files `web/dist`).
 
 ## Build
 
@@ -203,146 +226,79 @@ Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `
 
 ## Deploy (Ubuntu VPS + systemd)
 
-Run paper mode as a supervised service using [deploy/speculator.service](./deploy/speculator.service). Logs go to **journald**; signal history and paper portfolio state live in TimescaleDB (`DATABASE_URL`).
+Build on your machine and copy each process with [deploy/bot.sh](./deploy/bot.sh) and [deploy/miniapp.sh](./deploy/miniapp.sh). The bot script creates user **`bot`** (group **`speculator`**), installs [deploy/bot.service](./deploy/bot.service), and uploads `dist/`, `migrations/`, and prod `node_modules`. The Mini App script creates user **`miniapp`**, installs [deploy/miniapp.service](./deploy/miniapp.service), and uploads `web/dist` plus `bin/server`. Logs go to **journald**; signal history and paper portfolio state live in TimescaleDB (`DATABASE_URL`).
 
-### 1. Install runtime on the VPS
+### 1. Host prerequisites
+
+On the VPS: Node ≥ 24, `pnpm`, and SSH sudo for the deploy user.
 
 ```bash
-# Node 24 LTS (or any Node >= 24)
 curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-sudo apt-get install -y nodejs git
-
+sudo apt-get install -y nodejs
 sudo corepack enable
 corepack prepare pnpm@10.14.0 --activate
+which pnpm   # should be /usr/bin/pnpm (used by bot.service)
 ```
 
-Confirm `pnpm` is on the path systemd will use (often `/usr/bin/pnpm`):
+### 2. Deploy from your machine
+
+Requires SSH access and `pnpm` on the host (bot only). Builds locally, then scp’s the runtime:
 
 ```bash
-which pnpm
-```
-
-If it differs, edit `ExecStart=` in the unit file accordingly.
-
-### 2. Clone and configure
-
-```bash
-git clone git@github.com:igor-filipenko/speculator.git ~/speculator
-cd ~/speculator
-pnpm install
-cp .env.example .env
-chmod 600 .env
-nano .env   # set JUPITER_API_KEY (and optional Telegram vars)
-```
-
-Smoke-test once before enabling the service:
-
-```bash
-pnpm exec tsx src/index.ts paper --once
-```
-
-### 3. Install `speculator.service`
-
-```bash
-# Adjust User, Group, WorkingDirectory, EnvironmentFile, ExecStart paths
-nano deploy/speculator.service
-
-sudo cp deploy/speculator.service /etc/systemd/system/speculator.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now speculator
-sudo systemctl status speculator
-```
-
-The unit reads `MODE` from `.env` (default **`paper`**). For signals only, set `MODE=watch`.
-
-### Alternative: runtime install under `/opt/speculator`
-
-Install a production layout (`dist/` + prod `node_modules`) instead of running from a full source clone. After install, edit secrets once:
-
-```bash
-sudo nano /opt/speculator/.env
-sudo chmod 600 /opt/speculator/.env
-```
-
-Both methods copy `dist/`, `migrations/`, `package.json`, `pnpm-lock.yaml`, `.env.example`, run `pnpm install --prod`, and **preserve** an existing `.env`. After deploy, run `pnpm migrate` against the shared database.
-
-#### A. From the VPS (git clone + `install-runtime`)
-
-```bash
-git clone git@github.com:igor-filipenko/speculator.git ~/speculator-src
-cd ~/speculator-src
-pnpm install
-pnpm build
-sudo pnpm install-runtime -- /opt/speculator
-```
-
-#### B. From your machine (no git on the VPS)
-
-Requires SSH access and `pnpm` on the host. Builds locally, then scp’s the runtime and installs prod deps remotely:
-
-```bash
-./deploy/deploy.sh user@vps.example.com
+./deploy/bot.sh user@vps.example.com
+./deploy/miniapp.sh user@vps.example.com
 # or a custom path:
-./deploy/deploy.sh user@vps.example.com /opt/speculator
+./deploy/bot.sh user@vps.example.com /opt/speculator
+./deploy/miniapp.sh user@vps.example.com /opt/speculator
 ```
 
-Point the service at that directory (see [deploy/speculator.service](./deploy/speculator.service)):
+First time: edit secrets on the host, then migrate:
 
-```ini
-WorkingDirectory=/opt/speculator
-EnvironmentFile=/opt/speculator/.env
-ExecStart=/usr/bin/node /opt/speculator/dist/index.js paper
+```bash
+ssh user@vps.example.com
+sudo nano /opt/speculator/.env
+sudo chmod 640 /opt/speculator/.env
+cd /opt/speculator && pnpm migrate
+sudo systemctl restart bot miniapp
 ```
+
+The units read `MODE` from `.env` (default **`paper`**). For signals only, set `MODE=watch`. Mini App listen address is `WEB_LISTEN` (default `127.0.0.1:8787`).
 
 Runtime layout:
 
 ```text
 /opt/speculator/
-  dist/
+  dist/           # bot (User=bot)
   migrations/
+  web/dist/       # Mini App SPA (User=miniapp)
+  bin/server      # Mini App HTTP binary
   node_modules/
   package.json
   pnpm-lock.yaml
   .env
 ```
 
-### 4. Monitor logs
+### 3. Monitor logs
 
 ```bash
-# Follow live ticks, fills, and errors
-journalctl -u speculator -f
+journalctl -u bot -f
+journalctl -u miniapp -f
+journalctl -u bot --since "1 hour ago"
 
-# Recent history
-journalctl -u speculator --since "1 hour ago"
-
-# Inspect paper / tokens / signals (example)
 psql "$DATABASE_URL" -c "SELECT pair, cash_usdc, position_side FROM bot.portfolios WHERE mode = 'paper';"
 psql "$DATABASE_URL" -c "SELECT symbol, mint, decimals FROM solana.tokens;"
 psql "$DATABASE_URL" -c "SELECT address, base_mint, quote_mint FROM solana.pools;"
 psql "$DATABASE_URL" -c "SELECT at, pair, side, price FROM market.signals ORDER BY at DESC LIMIT 20;"
 ```
 
-### 5. Redeploy
-
-**From a source clone on the VPS:**
+### 4. Redeploy
 
 ```bash
-git pull && pnpm install && pnpm build && \
-  sudo pnpm install-runtime -- /opt/speculator && \
-  sudo systemctl restart speculator
+./deploy/bot.sh user@vps.example.com /opt/speculator
+./deploy/miniapp.sh user@vps.example.com /opt/speculator
 ```
 
-**From your machine** (no git pull on the VPS):
-
-```bash
-./deploy/deploy.sh user@vps.example.com /opt/speculator
-```
-
-The script stops `speculator`, copies runtime files (including `migrations/`), then starts the service again.
-
-Change `/opt/speculator` if you use another runtime path.
-
-Useful controls: `sudo systemctl stop speculator` · `sudo systemctl restart speculator` · `sudo systemctl disable speculator`.
+Useful controls: `sudo systemctl stop bot` · `sudo systemctl restart miniapp` · `sudo systemctl disable bot`.
 
 ## Strategy (v1)
 
@@ -382,10 +338,14 @@ Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (
 
 ```
 deploy/
-  deploy.sh                # build + scp runtime to a remote host
-  speculator.service       # systemd unit template
+  bot.sh                   # build trading bot + scp to a remote host
+  miniapp.sh               # build Mini App + scp to a remote host
+  bot.service              # systemd unit (trading bot, User=bot)
+  miniapp.service          # systemd unit (Mini App HTTP, User=miniapp)
+web/                       # React + TypeScript + shadcn Mini App SPA
+server/                    # Rust Axum HTTP API + static SPA
 scripts/
-  install-runtime.mjs      # copy runtime + pnpm install --prod to a path
+  install-runtime.mjs      # copy bot runtime + pnpm install --prod to a path
 src/
   index.ts                 # CLI
   config.ts                # zod + env

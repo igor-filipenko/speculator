@@ -25,6 +25,10 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "test": "rm -rf dist-test && tsc -p tsconfig.test.json && node --test --test-concurrency=1 --test-timeout=120000 'dist-test/**/*.test.js'",
     "build": "tsc -p tsconfig.build.json",
+    "web:dev": "pnpm --dir web dev",
+    "web:build": "pnpm --dir web build",
+    "server:build": "cargo build --release --manifest-path server/Cargo.toml",
+    "server:dev": "cargo run --manifest-path server/Cargo.toml",
     "install-runtime": "node scripts/install-runtime.mjs"
   },
   "pnpm": {

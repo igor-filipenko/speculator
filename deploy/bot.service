@@ -5,15 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Replace with the Linux user that owns the runtime directory
-User=YOUR_USER
-Group=YOUR_USER
+User=bot
+Group=speculator
 WorkingDirectory=/opt/speculator
 
-# Loads JUPITER_API_KEY, TELEGRAM_*, STRATEGY, etc.
+# Loads JUPITER_API_KEY, TELEGRAM_*, STRATEGY, MODE, etc.
 EnvironmentFile=/opt/speculator/.env
 
-# Built runtime (deployed via README one-shot command). Engine comes from MODE in EnvironmentFile.
 ExecStart=/usr/bin/node /opt/speculator/dist/index.js
 
 Restart=always
@@ -21,9 +19,8 @@ RestartSec=10
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=speculator
+SyslogIdentifier=bot
 
-# Hardening (safe for a non-root bot process)
 NoNewPrivileges=true
 PrivateTmp=true
 

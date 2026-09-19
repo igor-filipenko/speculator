@@ -1,0 +1,28 @@
+[Unit]
+Description=Speculator Telegram Mini App (HTTP API + SPA)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=miniapp
+Group=speculator
+WorkingDirectory=/opt/speculator
+
+# DATABASE_URL, BOT_ID, TELEGRAM_*, WEB_LISTEN, WEB_STATIC_DIR
+EnvironmentFile=/opt/speculator/.env
+
+ExecStart=/opt/speculator/bin/server
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=miniapp
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

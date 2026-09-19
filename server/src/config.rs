@@ -16,7 +16,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let database_url = required("DATABASE_URL")?;
+        let database_url = normalize_database_url(&required("DATABASE_URL")?);
         let bot_id = env_or("BOT_ID", "local");
         let telegram_bot_token = required("TELEGRAM_BOT_TOKEN")?;
         let allowed = env_or("TELEGRAM_ALLOWED_USER_ID", "").trim().to_string();
@@ -65,4 +65,32 @@ fn optional(key: &str) -> Option<String> {
 
 fn env_or(key: &str, default: &str) -> String {
     optional(key).unwrap_or_else(|| default.to_string())
+}
+
+/// sqlx does not accept Node/`pg` `sslmode=no-verify` (TLS, skip cert check).
+/// Map it to libpq/sqlx `require`, which has the same meaning.
+fn normalize_database_url(url: &str) -> String {
+    let mut out = url.to_string();
+    for key in ["sslmode", "ssl_mode"] {
+        for sep in ['?', '&'] {
+            let from = format!("{sep}{key}=no-verify");
+            let to = format!("{sep}{key}=require");
+            out = out.replace(&from, &to);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_no_verify_to_require() {
+        let url = "postgres://u:p@db:5432/speculator?sslmode=no-verify";
+        assert_eq!(
+            normalize_database_url(url),
+            "postgres://u:p@db:5432/speculator?sslmode=require"
+        );
+    }
 }

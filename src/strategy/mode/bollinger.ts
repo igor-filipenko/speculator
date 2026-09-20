@@ -267,12 +267,16 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
 
   // no long position, looking for entry...
-  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
-
   const roomToMid = Math.max(close, price) < bbMid;
-  const closeReclaim = closePrev <= bbLowerPrev && close > bbLower && roomToMid;
+  if (!roomToMid) {
+    const reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+    return { ...base, side, reason };
+  }
+
+  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
+  const closeReclaim = closePrev <= bbLowerPrev && close > bbLower;
   const wickReclaim =
-    lastBar.low <= bbLower && close > bbLower && close > lastBar.open && roomToMid;
+    lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
 
   if (reclaimedLower) {

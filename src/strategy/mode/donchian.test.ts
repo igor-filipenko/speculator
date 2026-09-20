@@ -265,18 +265,22 @@ describe("DonchianStrategy", () => {
     const price = candles[candles.length - 1]!.close;
     const at = new Date(candles[candles.length - 1]!.time * 1000);
     const strategy = new DonchianStrategy("bullish", "high");
-    const flat: MarketIndicators = {
+    const base: MarketIndicators = {
       pair: "SOL/USDC",
       price,
-      trend: "flat",
+      trend: "bearish",
       volatility: "high",
     };
-    const blocked = strategy.evaluateSignal("SOL/USDC", candles, flat, price, at);
+    const blocked = strategy.evaluateSignal("SOL/USDC", candles, base, price, at);
     assert.equal(blocked.side, "HOLD", blocked.reason);
     assert.match(blocked.reason, /not bullish/i);
 
-    const bullish: MarketIndicators = { ...flat, trend: "bullish" };
+    const bullish: MarketIndicators = { ...base, trend: "bullish" };
     const allowed = strategy.evaluateSignal("SOL/USDC", candles, bullish, price, at);
     assert.equal(allowed.side, "BUY", allowed.reason);
+
+    const flat: MarketIndicators = { ...base, trend: "flat" };
+    const flatAllowed = strategy.evaluateSignal("SOL/USDC", candles, flat, price, at);
+    assert.equal(flatAllowed.side, "BUY", flatAllowed.reason);
   });
 });

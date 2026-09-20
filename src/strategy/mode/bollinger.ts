@@ -275,8 +275,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
   let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
   const closeReclaim = closePrev <= bbLowerPrev && close > bbLower;
-  const wickReclaim =
-    lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
+  const wickReclaim = lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
 
   if (reclaimedLower) {

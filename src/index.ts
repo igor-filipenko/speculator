@@ -32,7 +32,7 @@ function usage(): never {
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
-  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend]
+  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend] [--no-intrabar]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
 Options:
@@ -43,6 +43,7 @@ Options:
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
   --ignore-trend    Skip HTF market state (backtest only)
+  --no-intrabar     Evaluate only at candle close (backtest only)
 `);
   process.exit(1);
 }
@@ -251,6 +252,7 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     strategyManager,
     forceRefresh: flags.forceRefresh,
     ignoreTrend: flags.ignoreTrend,
+    noIntrabar: flags.noIntrabar,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),

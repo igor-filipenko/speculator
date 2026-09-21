@@ -327,11 +327,11 @@ ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish
 
 ### Donchian breakout (`donchian`)
 
-Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars, close above trend EMA 50, and the **prior channel high above the last SELL fill** (skips throwbacks that only reclaim a local high). Sells when close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner. Volume/EMA do not block exits. ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
+Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner, or when price **gives back 3×ATR from the hold's peak** (caps drawdown if HTF later widens the risk trail). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
 
-**Volume SMA multiplier (bullish only):** high 1.2; low 1.5; squeeze 1.6.
+**Volume SMA multiplier:** bullish high 1.2 / low 1.5 / squeeze 1.6; flat high/low 1.5, squeeze 1.8.
 
-ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 5× flat, 3× bearish. Cooldown 96 bars (24h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak. Cooldown 8 bars (2h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks by default (or candle close with `--no-intrabar`; stop level for ATR exits).
 

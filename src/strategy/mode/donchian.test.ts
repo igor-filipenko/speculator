@@ -115,6 +115,45 @@ describe("evaluateDonchian", () => {
     assert.ok(signal.meta?.barHigh != null);
   });
 
+  it("does not BUY a forming breakout (waits for the 15m close)", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const last = candles[candles.length - 1]!;
+    const forming = { ...last, close: last.high };
+    const at = new Date((last.time + 7 * 60) * 1000);
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles.slice(0, -1), forming],
+      strategy: testParams(),
+      price: forming.close,
+      at,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /waiting for closed 15m breakout/i);
+  });
+
+  it("BUYs on the next bar after a closed breakout", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const last = candles[candles.length - 1]!;
+    const next: Candle = {
+      time: last.time + INTERVAL,
+      open: last.close,
+      high: last.close,
+      low: last.close,
+      close: last.close,
+      volume: 10,
+    };
+    const at = new Date((next.time + 60) * 1000);
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, next],
+      strategy: testParams(),
+      price: next.close,
+      at,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /Donchian breakout/i);
+  });
+
   it("holds a breakout when volume is at or below SMA", () => {
     const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 5, lastRange: 0.5 });
     const signal = evaluateDonchian({
@@ -191,17 +230,30 @@ describe("evaluateDonchian", () => {
     assert.match(signal.reason, /ATR/i);
   });
 
-  it("ignores a breakout whose channel high does not exceed the last SELL fill", () => {
+  it("emits SELL when long and price gives back 3×ATR from the hold peak", () => {
     const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const last = candles[candles.length - 1]!;
+    const dumped: Candle[] = [
+      ...candles,
+      {
+        time: last.time + INTERVAL,
+        open: last.close,
+        high: last.close,
+        low: last.close - 2,
+        close: last.close - 1.5,
+        volume: 10,
+      },
+    ];
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
-      candles,
-      strategy: testParams(),
-      price: candles[candles.length - 1]!.close,
-      lastSellPrice: 102,
+      candles: dumped,
+      strategy: testParams({ givebackAtrMult: 1 }),
+      price: last.close - 1.5,
+      entryPrice: last.close,
+      openedAt: new Date(last.time * 1000),
     });
-    assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /last exit/i);
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Gave back/i);
   });
 });
 
@@ -214,6 +266,7 @@ describe("donchianParamsFor", () => {
     assert.equal(p.volumeSmaPeriod, 20);
     assert.equal(p.trendEmaPeriod, 50);
     assert.equal(p.minBreakAtrMult, 0.35);
+    assert.equal(p.givebackAtrMult, 3);
   });
 
   it("tightens volume and lengthens the exit channel in squeeze", () => {
@@ -230,12 +283,12 @@ describe("DonchianStrategy", () => {
   it("exposes risk params and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");
     assert.equal(strategy.getMode(), "donchian");
-    assert.match(strategy.getDisplayName(), /no-buy/);
+    assert.match(strategy.getDisplayName(), /flat/);
     const risk = strategy.getRiskParams();
     assert.equal(risk.timeframe, "15m");
     assert.equal(risk.atrStopMult, 2.5);
-    assert.equal(risk.atrTrailMult, 5);
-    assert.equal(risk.cooldownBars, 96);
+    assert.equal(risk.atrTrailMult, 3);
+    assert.equal(risk.cooldownBars, 8);
     assert.equal(risk.minHoldBars, 16);
     const required = strategy.getRequiredCandles();
     assert.equal(required.timeframe, "15m");
@@ -262,8 +315,9 @@ describe("DonchianStrategy", () => {
       candles.push(bar(start + i * INTERVAL, price, 0.2, 10));
     }
     candles.push(bar(start + 80 * INTERVAL, 101.2, 0.5, 40));
-    const price = candles[candles.length - 1]!.close;
-    const at = new Date(candles[candles.length - 1]!.time * 1000);
+    const last = candles[candles.length - 1]!;
+    const price = last.close;
+    const at = new Date((last.time + INTERVAL) * 1000);
     const strategy = new DonchianStrategy("bullish", "high");
     const base: MarketIndicators = {
       pair: "SOL/USDC",

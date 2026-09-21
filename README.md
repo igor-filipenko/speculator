@@ -329,7 +329,7 @@ ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish
 
 Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner, or when price **gives back 3×ATR from the hold's peak** (caps drawdown if HTF later widens the risk trail). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
 
-**Volume SMA multiplier:** bullish high 1.2 / low 1.5 / squeeze 1.6; flat high/low 1.5, squeeze 1.8.
+**Volume SMA multiplier:** bullish high 1.2 / low 1.5 / squeeze 1.6; flat high 1.5 / low 2.0 / squeeze 1.8.
 
 ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak. Cooldown 8 bars (2h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 

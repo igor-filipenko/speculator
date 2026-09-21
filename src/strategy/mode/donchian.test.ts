@@ -267,6 +267,7 @@ describe("donchianParamsFor", () => {
     assert.equal(p.trendEmaPeriod, 50);
     assert.equal(p.minBreakAtrMult, 0.35);
     assert.equal(p.givebackAtrMult, 3);
+    assert.equal(p.volumeSmaMult, 2.0);
   });
 
   it("tightens volume and lengthens the exit channel in squeeze", () => {

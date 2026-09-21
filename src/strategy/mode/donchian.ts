@@ -44,7 +44,7 @@ export interface DonchianParams {
 /** Stricter volume confirmation in squeeze; unused when HTF is bearish/unknown. */
 const VOLUME_SMA_MULT: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 1.2, low: 1.5, squeeze: 1.6, unknown: 1.3 },
-  flat: { high: 1.5, low: 1.7, squeeze: 1.8, unknown: 1.8 },
+  flat: { high: 1.5, low: 2.0, squeeze: 1.8, unknown: 1.8 },
   bearish: { high: 1.8, low: 1.8, squeeze: 1.8, unknown: 1.8 },
   unknown: { high: 1.8, low: 1.8, squeeze: 1.8, unknown: 1.8 },
 };

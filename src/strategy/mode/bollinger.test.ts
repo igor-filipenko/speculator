@@ -261,6 +261,46 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /wick reclaim/i);
   });
 
+  it("does not BUY a forming wick reclaim (waits for the 15m close)", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const forming = { ...last, close: last.high };
+    const at = new Date((last.time + 7 * 60) * 1000);
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles: [...candles.slice(0, -1), forming],
+      strategy: looseFilters(),
+      price: forming.close,
+      at,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /waiting for closed 15m reclaim/i);
+  });
+
+  it("BUYs on the next bar after a closed wick reclaim", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const interval = 15 * 60;
+    const next: Candle = {
+      time: last.time + interval,
+      open: last.close,
+      high: last.close,
+      low: last.close,
+      close: last.close,
+      volume: 10,
+    };
+    const at = new Date((next.time + 60) * 1000);
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles: [...candles, next],
+      strategy: looseFilters(),
+      price: next.close,
+      at,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /wick reclaim/i);
+  });
+
   it("ignores reclaim when doNotBuy is set (bear / high vol)", () => {
     const candles = reclaimLowerBand();
     const signal = evaluateBollinger({
@@ -398,8 +438,9 @@ describe("bollingerDoNotBuyReason", () => {
 describe("BollingerStrategy regime gate", () => {
   it("holds a reclaim when HTF is bearish or 1h vol is high", () => {
     const candles = reclaimLowerBand();
-    const price = candles[candles.length - 1]!.close;
-    const at = new Date(candles[candles.length - 1]!.time * 1000);
+    const last = candles[candles.length - 1]!;
+    const price = last.close;
+    const at = new Date((last.time + 15 * 60) * 1000);
     const strategy = new BollingerStrategy("bullish", "low");
     const blockedBear = strategy.evaluateSignal(
       "SOL/USDC",

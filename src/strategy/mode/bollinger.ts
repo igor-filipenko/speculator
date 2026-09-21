@@ -1,3 +1,4 @@
+import { isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
@@ -174,9 +175,10 @@ export interface BollingerInput {
 
 /**
  * Mean-reversion Bollinger for bullish/flat × low/squeeze.
- * BUY on lower-band **reclaim** when flat: same-bar wick (low ≤ lower, close back inside, green)
+ * BUY on a **closed** lower-band reclaim: same-bar wick (low ≤ lower, close back inside, green)
  * or prior close ≤ prior lower then close > lower, when ADX ≤ adxMax, close < mid,
  * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
+ * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
  * **and** close is above the open fill after costs. Flat → HOLD on mid.
  * Regime / ADX / RSI do not block exits.
@@ -186,11 +188,15 @@ export interface BollingerInput {
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
-  const closes = candles.map((c) => c.close);
+  const forming = candles[candles.length - 1];
+  const lastIsClosed =
+    forming != null && isCandleClosed(forming, at.getTime() / 1000, strategy.timeframe);
+  const signalCandles = lastIsClosed || forming == null ? candles : candles.slice(0, -1);
+  const closes = signalCandles.map((c) => c.close);
 
   const bands = bollinger(closes, strategy.period, strategy.stdDev);
-  const atrSeries = atr(candles, strategy.atrPeriod);
-  const dmiNow = dmi(candles, strategy.adxPeriod);
+  const atrSeries = atr(signalCandles, strategy.atrPeriod);
+  const dmiNow = dmi(signalCandles, strategy.adxPeriod);
   const rsiSeries = rsi(closes, strategy.rsiPeriod);
   const workEmaFast = ema(closes, strategy.workTrendEmaFast);
   const workEmaSlow = ema(closes, strategy.workTrendEmaSlow);
@@ -208,7 +214,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const rsiNow = rsiSeries[i];
   const emaFastNow = workEmaFast[i];
   const emaSlowNow = workEmaSlow[i];
-  const lastBar = candles[i];
+  const lastBar = signalCandles[i];
 
   const meta: NonNullable<Signal["meta"]> = {};
   if (bbMid != null) meta.bbMid = bbMid;
@@ -219,9 +225,10 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (plusDi != null) meta.plusDi = plusDi;
   if (minusDi != null) meta.minusDi = minusDi;
   if (rsiNow != null) meta.rsi = rsiNow;
-  if (lastBar != null) {
-    meta.barLow = lastBar.low;
-    meta.barHigh = lastBar.high;
+  const rangeBar = forming ?? lastBar;
+  if (rangeBar != null) {
+    meta.barLow = rangeBar.low;
+    meta.barHigh = rangeBar.high;
   }
 
   const base = {
@@ -273,7 +280,9 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     return { ...base, side, reason };
   }
 
-  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
+  let reason = lastIsClosed
+    ? `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`
+    : `No BB signal (waiting for closed 15m reclaim; close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
   const closeReclaim = closePrev <= bbLowerPrev && close > bbLower;
   const wickReclaim = lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
@@ -326,7 +335,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m mean-reversion: BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;

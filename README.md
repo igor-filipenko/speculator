@@ -309,7 +309,7 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid:
+Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on a **closed** 15m **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range:
 
 | Regime            | Entry                                                                                        | Exit                                       | ATR stop/trail |
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | -------------- |

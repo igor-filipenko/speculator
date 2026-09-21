@@ -211,9 +211,9 @@ async function replayPair(args: {
     poolFeeUsdc: 0,
     priorityFeeUsdc: 0,
   };
-  const intervalSec = noIntrabar
-    ? 0
-    : candleIntervalSeconds(strategyManager.getActiveStrategy().getRequiredCandles().timeframe);
+  const barIntervalSec = candleIntervalSeconds(
+    strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
+  );
 
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
@@ -226,8 +226,8 @@ async function replayPair(args: {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
     const ticks = noIntrabar
-      ? [{ price: candle.close, atSec: candle.time, forming: candle }]
-      : intraBarTicks(candle, intervalSec);
+      ? [{ price: candle.close, atSec: candle.time + barIntervalSec, forming: candle }]
+      : intraBarTicks(candle, barIntervalSec);
 
     for (const tick of ticks) {
       const window = closed.concat(tick.forming);

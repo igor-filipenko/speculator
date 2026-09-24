@@ -1,3 +1,4 @@
+import { isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
@@ -12,7 +13,7 @@ import type {
   Volatility,
 } from "../../types.js";
 import { buildBollingerSvg } from "./bollinger-svg.js";
-import { adx, atr, bollinger, rsi } from "../indicators.js";
+import { atr, bollinger, dmi, ema, rsi } from "../indicators.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;
@@ -41,6 +42,15 @@ export interface BollingerParams {
    * cannot book a "TP" at a loss. ATR still stops failed reversion.
    */
   minExitAboveEntryPct: number;
+  /** Fast EMA for the 15m work-trend gate. */
+  workTrendEmaFast: number;
+  /** Slow EMA for the 15m work-trend gate. */
+  workTrendEmaSlow: number;
+  /**
+   * ADX floor for a tradable 15m downtrend (stacked oversold reclaim).
+   * Below this, close under the fast EMA with -DI > +DI is treated as drift and skipped.
+   */
+  workTrendAdxFlatMax: number;
   /** Wilder RSI period (oversold gate on lower-band reclaim). */
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
@@ -116,6 +126,9 @@ export function bollingerParamsFor(
     minBandToMidPct: MIN_BAND_TO_MID[trend][volatility],
     minReclaimDepth: MIN_RECLAIM_DEPTH[trend][volatility],
     minExitAboveEntryPct: 0.002,
+    workTrendEmaFast: 20,
+    workTrendEmaSlow: 50,
+    workTrendAdxFlatMax: 18,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
   };
@@ -162,22 +175,31 @@ export interface BollingerInput {
 
 /**
  * Mean-reversion Bollinger for bullish/flat × low/squeeze.
- * BUY on lower-band **reclaim** when flat: same-bar wick (low ≤ lower, close back inside, green)
+ * BUY on a **closed** lower-band reclaim: same-bar wick (low ≤ lower, close back inside, green)
  * or prior close ≤ prior lower then close > lower, when ADX ≤ adxMax, close < mid,
  * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
+ * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
  * **and** close is above the open fill after costs. Flat → HOLD on mid.
  * Regime / ADX / RSI do not block exits.
+ * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
+ * is allowed; other below-fast-EMA sells are drift and skipped.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
-  const closes = candles.map((c) => c.close);
+  const forming = candles[candles.length - 1];
+  const lastIsClosed =
+    forming != null && isCandleClosed(forming, at.getTime() / 1000, strategy.timeframe);
+  const signalCandles = lastIsClosed || forming == null ? candles : candles.slice(0, -1);
+  const closes = signalCandles.map((c) => c.close);
 
   const bands = bollinger(closes, strategy.period, strategy.stdDev);
-  const atrSeries = atr(candles, strategy.atrPeriod);
-  const adxSeries = adx(candles, strategy.adxPeriod);
+  const atrSeries = atr(signalCandles, strategy.atrPeriod);
+  const dmiNow = dmi(signalCandles, strategy.adxPeriod);
   const rsiSeries = rsi(closes, strategy.rsiPeriod);
+  const workEmaFast = ema(closes, strategy.workTrendEmaFast);
+  const workEmaSlow = ema(closes, strategy.workTrendEmaSlow);
 
   const i = closes.length - 1;
   const prev = i - 1;
@@ -186,9 +208,13 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const bbLower = bands.lower[i];
   const bbLowerPrev = prev >= 0 ? bands.lower[prev] : null;
   const atrNow = atrSeries[i];
-  const adxNow = adxSeries[i];
+  const adxNow = dmiNow.adx[i];
+  const plusDi = dmiNow.plusDi[i];
+  const minusDi = dmiNow.minusDi[i];
   const rsiNow = rsiSeries[i];
-  const lastBar = candles[i];
+  const emaFastNow = workEmaFast[i];
+  const emaSlowNow = workEmaSlow[i];
+  const lastBar = signalCandles[i];
 
   const meta: NonNullable<Signal["meta"]> = {};
   if (bbMid != null) meta.bbMid = bbMid;
@@ -196,10 +222,13 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (bbLower != null) meta.bbLower = bbLower;
   if (atrNow != null) meta.atr = atrNow;
   if (adxNow != null) meta.adx = adxNow;
+  if (plusDi != null) meta.plusDi = plusDi;
+  if (minusDi != null) meta.minusDi = minusDi;
   if (rsiNow != null) meta.rsi = rsiNow;
-  if (lastBar != null) {
-    meta.barLow = lastBar.low;
-    meta.barHigh = lastBar.high;
+  const rangeBar = forming ?? lastBar;
+  if (rangeBar != null) {
+    meta.barLow = rangeBar.low;
+    meta.barHigh = rangeBar.high;
   }
 
   const base = {
@@ -245,18 +274,23 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
 
   // no long position, looking for entry...
-  let reason = `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
-
   const roomToMid = Math.max(close, price) < bbMid;
-  const closeReclaim = closePrev <= bbLowerPrev && close > bbLower && roomToMid;
-  const wickReclaim =
-    lastBar.low <= bbLower && close > bbLower && close > lastBar.open && roomToMid;
+  if (!roomToMid) {
+    const reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+    return { ...base, side, reason };
+  }
+
+  let reason = lastIsClosed
+    ? `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`
+    : `No BB signal (waiting for closed 15m reclaim; close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`;
+  const closeReclaim = closePrev <= bbLowerPrev && close > bbLower;
+  const wickReclaim = lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
 
   if (reclaimedLower) {
     const bandWidth = bbMid - bbLower;
     const bandToMidPct = bandWidth / close;
-    const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;  
+    const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
     const blocked = input.doNotBuy === true ? (input.doNotBuyReason ?? "regime") : undefined;
 
     if (blocked != null) {
@@ -271,6 +305,21 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
     } else if (rsiNow >= strategy.rsiBuyMax) {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
+    } else if (
+      isWorkDriftDown({
+        close,
+        emaFast: emaFastNow,
+        emaSlow: emaSlowNow,
+        adxNow,
+        plusDi,
+        minusDi,
+        adxFlatMax: strategy.workTrendAdxFlatMax,
+      })
+    ) {
+      reason =
+        `Lower reclaim ignored: 15m drift down ` +
+        `(ADX ${fmt(adxNow)} < ${strategy.workTrendAdxFlatMax} or EMAs not stacked oversold; ` +
+        `+DI ${fmt(plusDi ?? 0)} −DI ${fmt(minusDi ?? 0)})`;
     } else if (long) {
       reason = `Lower reclaim ignored: already long`;
     } else {
@@ -286,7 +335,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m mean-reversion: BB wick/close reclaim + RSI; HOLD in bear or 1h high vol; exit at mid. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;
@@ -315,8 +364,8 @@ export class BollingerStrategy implements Strategy {
   }
 
   getRequiredCandles(): RequiredCandles {
-    const { timeframe, period, atrPeriod, adxPeriod, rsiPeriod } = this.params;
-    const warm = Math.max(period, atrPeriod, adxPeriod * 2, rsiPeriod) + 5;
+    const { timeframe, period, atrPeriod, adxPeriod, rsiPeriod, workTrendEmaSlow } = this.params;
+    const warm = Math.max(period, atrPeriod, adxPeriod * 2, rsiPeriod, workTrendEmaSlow) + 5;
     return {
       timeframe,
       count: Math.max(warm, 160),
@@ -349,6 +398,32 @@ export class BollingerStrategy implements Strategy {
   buildChartSvg(pair: string, candles: Candle[]): string {
     return buildBollingerSvg({ pair, candles, strategy: this.params });
   }
+}
+
+/**
+ * Skip 15m lower-band sells that are drift/chop, not a stacked oversold trend.
+ * Stacked oversold (close < EMA fast < slow, -DI > +DI, ADX >= floor) is the
+ * mean-reversion setup and is allowed.
+ */
+export function isWorkDriftDown(input: {
+  close: number;
+  emaFast: number | null | undefined;
+  emaSlow: number | null | undefined;
+  adxNow: number | null | undefined;
+  plusDi: number | null | undefined;
+  minusDi: number | null | undefined;
+  adxFlatMax: number;
+}): boolean {
+  const { close, emaFast, emaSlow, adxNow, plusDi, minusDi, adxFlatMax } = input;
+  if (emaFast == null || emaSlow == null || adxNow == null || plusDi == null || minusDi == null) {
+    return false;
+  }
+  const stackedOversold =
+    close < emaFast && emaFast < emaSlow && minusDi > plusDi && adxNow >= adxFlatMax;
+  if (stackedOversold) {
+    return false;
+  }
+  return close < emaFast && (minusDi > plusDi || emaFast < emaSlow);
 }
 
 function fmt(n: number): string {

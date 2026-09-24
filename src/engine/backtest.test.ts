@@ -26,6 +26,7 @@ import {
   runBacktest,
   computeBuyHoldEquity,
 } from "./backtest.js";
+import { intraBarPrices } from "./intra-bar.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
@@ -180,21 +181,31 @@ describe("parseBacktestArgs", () => {
       days: 14,
       forceRefresh: true,
       ignoreTrend: false,
+      noIntrabar: false,
     });
     assert.deepEqual(parseBacktestArgs(["--days=7"]), {
       days: 7,
       forceRefresh: false,
       ignoreTrend: false,
+      noIntrabar: false,
     });
     assert.deepEqual(parseBacktestArgs([]), {
       days: 0,
       forceRefresh: false,
       ignoreTrend: false,
+      noIntrabar: false,
     });
     assert.deepEqual(parseBacktestArgs(["--ignore-trend"]), {
       days: 0,
       forceRefresh: false,
       ignoreTrend: true,
+      noIntrabar: false,
+    });
+    assert.deepEqual(parseBacktestArgs(["--no-intrabar"]), {
+      days: 0,
+      forceRefresh: false,
+      ignoreTrend: false,
+      noIntrabar: true,
     });
   });
 
@@ -266,6 +277,7 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
     assert.equal(result.metrics.strategy.getMode(), "bollinger");
+    assert.equal(result.metrics.intrabar, true);
     assert.ok(result.equityCurve.length === candles.length);
 
     assert.ok(result.trades.length >= 1);
@@ -274,12 +286,15 @@ describe("runBacktest", () => {
     assert.equal(buy.side, "BUY");
     assert.equal(buy.simulated, true);
 
-    const buyBar = candles.find((c) => c.time === Math.floor(buy.at.getTime() / 1000));
+    const buyBar = candles[buyIndex];
     assert.ok(buyBar);
-    const emulated = emulateFillPrice({ side: "BUY", close: buyBar.close, tier: "liquid" });
+    assert.equal(Math.floor(buy.at.getTime() / 1000), buyBar.time);
+    const firstTick = intraBarPrices(buyBar)[0];
+    assert.ok(firstTick);
+    const emulated = emulateFillPrice({ side: "BUY", close: firstTick, tier: "liquid" });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
 
-    const midSize = startingCash / buyBar.close;
+    const midSize = startingCash / firstTick;
     assert.ok(buy.size < midSize);
 
     assert.ok(result.metrics.costs.slippageUsdc > 0);
@@ -376,6 +391,183 @@ describe("runBacktest", () => {
     });
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
+  });
+
+  it("evaluates a forming last candle along the green/red OHLC path", async () => {
+    const start = 1_700_000_000;
+    const interval = 15 * 60;
+    const green: Candle = {
+      time: start,
+      open: 100,
+      high: 104,
+      low: 98,
+      close: 103,
+      volume: 5,
+    };
+    const red: Candle = {
+      time: start + interval,
+      open: 103,
+      high: 105,
+      low: 97,
+      close: 99,
+      volume: 5,
+    };
+    const calls: { price: number; last: Candle }[] = [];
+    const strategy: Strategy = {
+      getDisplayName: () => "recorder",
+      getMode: () => "bollinger",
+      getRiskParams: () => ({
+        timeframe: "15m",
+        atrStopMult: 100,
+        atrTrailMult: 100,
+        cooldownBars: 0,
+        minHoldBars: 0,
+      }),
+      getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+      evaluateSignal: (pair, window, _market, price, at) => {
+        calls.push({ price, last: window[window.length - 1]! });
+        return { pair, side: "HOLD", reason: "record", price, at };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    };
+
+    await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: managerFor(strategy),
+      candles: [green, red],
+    });
+
+    const greenCalls = calls.filter((c) => c.last.time === green.time);
+    assert.deepEqual(
+      greenCalls.map((c) => c.price),
+      [100, 98, 104, 103],
+    );
+    assert.deepEqual(greenCalls[0]!.last, { ...green, high: 100, low: 100, close: 100 });
+    assert.deepEqual(greenCalls[1]!.last, { ...green, high: 100, low: 98, close: 98 });
+    assert.deepEqual(greenCalls[2]!.last, { ...green, high: 104, low: 98, close: 104 });
+    assert.deepEqual(greenCalls[3]!.last, green);
+
+    const redCalls = calls.filter((c) => c.last.time === red.time);
+    assert.deepEqual(
+      redCalls.map((c) => c.price),
+      [103, 105, 97, 99],
+    );
+    assert.deepEqual(redCalls[0]!.last, { ...red, high: 103, low: 103, close: 103 });
+    assert.deepEqual(redCalls[1]!.last, { ...red, high: 105, low: 103, close: 105 });
+    assert.deepEqual(redCalls[2]!.last, { ...red, high: 105, low: 97, close: 97 });
+    assert.deepEqual(redCalls[3]!.last, red);
+  });
+
+  it("fills a wick BUY at the intra-bar low, not the close", async () => {
+    const start = 1_700_000_000;
+    const interval = 15 * 60;
+    const warmup: Candle[] = Array.from({ length: 3 }, (_, i) => ({
+      time: start + i * interval,
+      open: 100,
+      high: 100.2,
+      low: 99.8,
+      close: 100,
+      volume: 1,
+    }));
+    const wickBar: Candle = {
+      time: start + 3 * interval,
+      open: 100,
+      high: 101,
+      low: 95,
+      close: 100.5,
+      volume: 1,
+    };
+    const strategy: Strategy = {
+      getDisplayName: () => "wick-buy",
+      getMode: () => "bollinger",
+      getRiskParams: () => ({
+        timeframe: "15m",
+        atrStopMult: 100,
+        atrTrailMult: 100,
+        cooldownBars: 0,
+        minHoldBars: 0,
+      }),
+      getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+      evaluateSignal: (pair, window, _market, price, at) => {
+        const last = window[window.length - 1]!;
+        const side: SignalSide =
+          last.time === wickBar.time && price === last.low && last.low < last.open ? "BUY" : "HOLD";
+        return {
+          pair,
+          side,
+          reason: side === "BUY" ? "wick" : "hold",
+          price,
+          at,
+          meta: { atr: 1, barLow: last.low, barHigh: last.high },
+        };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    };
+
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: managerFor(strategy),
+      candles: [...warmup, wickBar],
+    });
+    assert.ok(result);
+    const buy = result.trades.find((t) => t.side === "BUY");
+    assert.ok(buy);
+    const emulated = emulateFillPrice({ side: "BUY", close: wickBar.low, tier: "liquid" });
+    assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
+    assert.ok(buy.price < wickBar.close);
+  });
+
+  it("evaluates only at close with a fully closed last bar when noIntrabar is set", async () => {
+    const start = 1_700_000_000;
+    const interval = 15 * 60;
+    const green: Candle = {
+      time: start,
+      open: 100,
+      high: 104,
+      low: 98,
+      close: 103,
+      volume: 5,
+    };
+    const red: Candle = {
+      time: start + interval,
+      open: 103,
+      high: 105,
+      low: 97,
+      close: 99,
+      volume: 5,
+    };
+    const calls: { price: number; last: Candle }[] = [];
+    const strategy: Strategy = {
+      getDisplayName: () => "recorder",
+      getMode: () => "bollinger",
+      getRiskParams: () => ({
+        timeframe: "15m",
+        atrStopMult: 100,
+        atrTrailMult: 100,
+        cooldownBars: 0,
+        minHoldBars: 0,
+      }),
+      getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+      evaluateSignal: (pair, window, _market, price, at) => {
+        calls.push({ price, last: window[window.length - 1]! });
+        return { pair, side: "HOLD", reason: "record", price, at };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    };
+
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: managerFor(strategy),
+      candles: [green, red],
+      noIntrabar: true,
+    });
+    assert.ok(result);
+    assert.equal(result.metrics.intrabar, false);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]!.price, green.close);
+    assert.deepEqual(calls[0]!.last, green);
+    assert.equal(calls[1]!.price, red.close);
+    assert.deepEqual(calls[1]!.last, red);
   });
 
   it("skips HTF apply and log when ignoreTrend is set", async () => {

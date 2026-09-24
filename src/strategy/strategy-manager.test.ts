@@ -205,7 +205,7 @@ describe("applyMarketIndicators", () => {
   it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", () => {
     const manager = new SimpleStrategyManager({ strategyMode: "donchian", htf: "4h" });
     assert.equal(manager.getActiveStrategy().getMode(), "donchian");
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("no-buy"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("flat"));
     const first = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),

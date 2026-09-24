@@ -6,6 +6,7 @@ import {
   BollingerStrategy,
   bollingerDoNotBuyReason,
   bollingerParamsFor,
+  isWorkDriftDown,
   type BollingerParams,
 } from "./bollinger.js";
 import { rsi } from "../indicators.js";
@@ -24,6 +25,8 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
     adxMax: 100,
     minBandToMidPct: 0.001,
     minReclaimDepth: 0,
+    workTrendEmaFast: 1000,
+    workTrendEmaSlow: 1000,
     rsiPeriod: 5,
     rsiBuyMax: 100,
     ...overrides,
@@ -207,7 +210,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.bbMid != null);
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /No BB signal/);
+    assert.match(signal.reason, /No room/);
   });
 
   it("holds a mid cross when price is still below minExit", () => {
@@ -253,6 +256,46 @@ describe("evaluateBollinger filters", () => {
       candles,
       strategy: looseFilters(),
       price: candles[candles.length - 1]!.close,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /wick reclaim/i);
+  });
+
+  it("does not BUY a forming wick reclaim (waits for the 15m close)", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const forming = { ...last, close: last.high };
+    const at = new Date((last.time + 7 * 60) * 1000);
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles: [...candles.slice(0, -1), forming],
+      strategy: looseFilters(),
+      price: forming.close,
+      at,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /waiting for closed 15m reclaim/i);
+  });
+
+  it("BUYs on the next bar after a closed wick reclaim", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const interval = 15 * 60;
+    const next: Candle = {
+      time: last.time + interval,
+      open: last.close,
+      high: last.close,
+      low: last.close,
+      close: last.close,
+      volume: 10,
+    };
+    const at = new Date((next.time + 60) * 1000);
+    const signal = evaluateBollinger({
+      pair: "SOL/USDC",
+      candles: [...candles, next],
+      strategy: looseFilters(),
+      price: next.close,
+      at,
     });
     assert.equal(signal.side, "BUY", signal.reason);
     assert.match(signal.reason, /wick reclaim/i);
@@ -327,6 +370,9 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
     assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.002);
+    assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
+    assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
+    assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 18);
     assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
     assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
     assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
@@ -343,7 +389,38 @@ describe("bollingerParamsFor", () => {
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrStopMult, 2.5);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrTrailMult, 3);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().cooldownBars, 2);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 1);
+    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 0);
+  });
+});
+
+describe("isWorkDriftDown", () => {
+  const stackedOversold = {
+    close: 99,
+    emaFast: 100,
+    emaSlow: 101,
+    adxNow: 22,
+    plusDi: 10,
+    minusDi: 16,
+    adxFlatMax: 18,
+  };
+
+  it("allows a stacked 15m oversold trend (the MR setup)", () => {
+    assert.equal(isWorkDriftDown(stackedOversold), false);
+  });
+
+  it("blocks close below fast EMA when ADX is too low to count as oversold", () => {
+    assert.equal(isWorkDriftDown({ ...stackedOversold, adxNow: 12 }), true);
+  });
+
+  it("blocks a non-stacked dip with -DI > +DI", () => {
+    assert.equal(
+      isWorkDriftDown({ ...stackedOversold, emaFast: 101, emaSlow: 100, adxNow: 26 }),
+      true,
+    );
+  });
+
+  it("does not block when indicators are not warm", () => {
+    assert.equal(isWorkDriftDown({ ...stackedOversold, emaSlow: undefined }), false);
   });
 });
 
@@ -361,8 +438,9 @@ describe("bollingerDoNotBuyReason", () => {
 describe("BollingerStrategy regime gate", () => {
   it("holds a reclaim when HTF is bearish or 1h vol is high", () => {
     const candles = reclaimLowerBand();
-    const price = candles[candles.length - 1]!.close;
-    const at = new Date(candles[candles.length - 1]!.time * 1000);
+    const last = candles[candles.length - 1]!;
+    const price = last.close;
+    const at = new Date((last.time + 15 * 60) * 1000);
     const strategy = new BollingerStrategy("bullish", "low");
     const blockedBear = strategy.evaluateSignal(
       "SOL/USDC",

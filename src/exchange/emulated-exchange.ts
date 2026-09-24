@@ -3,7 +3,7 @@ import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 
 /**
  * Offline exchange: fills from candle mid + Jupiter-like fee/slippage model.
- * Call {@link setMidPrice} before each bar's spotPrice/execute.
+ * Call {@link setMidPrice} before each tick's spotPrice/execute.
  */
 export class EmulatedExchange implements Exchange {
   private mid = 0;

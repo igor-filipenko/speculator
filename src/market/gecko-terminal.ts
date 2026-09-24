@@ -53,6 +53,11 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
   }
 }
 
+/** True when `atSec` is at or after the bar close (`candle.time + interval`). */
+export function isCandleClosed(candle: Candle, atSec: number, timeframe: Timeframe): boolean {
+  return atSec - candle.time >= candleIntervalSeconds(timeframe);
+}
+
 export interface FetchCandlesOptions {
   poolAddress: string;
   timeframe: Timeframe;

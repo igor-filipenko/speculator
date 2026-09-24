@@ -162,6 +162,8 @@ const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
   rsi: "RSI",
   atr: "ATR",
   adx: "ADX",
+  plusDi: "+DI",
+  minusDi: "-DI",
   bbMid: "BB mid",
   bbUpper: "BB upper",
   bbLower: "BB lower",

@@ -109,6 +109,10 @@ export interface Signal {
     rsi?: number;
     atr?: number;
     adx?: number;
+    /** Wilder +DI on the signal timeframe (work-TF trend gate). */
+    plusDi?: number;
+    /** Wilder −DI on the signal timeframe (work-TF trend gate). */
+    minusDi?: number;
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;

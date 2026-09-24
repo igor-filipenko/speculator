@@ -180,10 +180,11 @@ pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
 | `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
 | `--ignore-trend`  | Do not evaluate/apply HTF market state (no MARKET logs, no trend risk) |
+| `--no-intrabar`   | Evaluate only at candle close with a fully closed last bar             |
 
 Use either `--days` or `--from`/`--to`, not both.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. Fills use candle **close** as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. By default each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Pass `--no-intrabar` to evaluate once per bar at close. Fills use the intra-bar tick (or close) as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -308,7 +309,7 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid:
+Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on a **closed** 15m **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range:
 
 | Regime            | Entry                                                                                        | Exit                                       | ATR stop/trail |
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | -------------- |
@@ -318,7 +319,7 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 | flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
 | bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
-Reclaim depth is `(close − lower) / (mid − lower)`. Cooldown 2 bars, minHold 1. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Grid (`grid`)
 
@@ -326,13 +327,13 @@ ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish
 
 ### Donchian breakout (`donchian`)
 
-Trend-following channel breakout on 15m. **Buys only while HTF trend is bullish.** Entry is a close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars, close above trend EMA 50, and the **prior channel high above the last SELL fill** (skips throwbacks that only reclaim a local high). Sells when close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner. Volume/EMA do not block exits. ATR stop/trail still apply. Flat/bearish/unknown HTF skip new BUYs (exits still fire).
+Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner, or when price **gives back 3×ATR from the hold's peak** (caps drawdown if HTF later widens the risk trail). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
 
-**Volume SMA multiplier (bullish only):** high 1.2; low 1.5; squeeze 1.6.
+**Volume SMA multiplier:** bullish high 1.2 / low 1.5 / squeeze 1.6; flat high 1.5 / low 2.0 / squeeze 1.8.
 
-ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 5× flat, 3× bearish. Cooldown 96 bars (24h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak. Cooldown 8 bars (2h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
-Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on candle close (or stop level for ATR exits).
+Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks by default (or candle close with `--no-intrabar`; stop level for ATR exits).
 
 ## Project layout
 

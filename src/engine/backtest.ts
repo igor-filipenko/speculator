@@ -2,6 +2,7 @@ import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated-exchange.js";
 import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated-quote.js";
+import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
 import { PaperPortfolio } from "../paper/portfolio.js";
 import type {
@@ -13,6 +14,7 @@ import type {
   StrategyManager,
   Trade,
 } from "../types.js";
+import { intraBarTicks } from "./intra-bar.js";
 import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
 import { parseReplayDate, readFlagValue, resolveReplayWindow } from "./replay-window.js";
 
@@ -28,6 +30,8 @@ export interface BacktestCliOptions {
   forceRefresh: boolean;
   /** Skip HTF market indicators (no applyMarketIndicators, no MARKET logs). */
   ignoreTrend: boolean;
+  /** Evaluate only at candle close with a fully closed last bar. */
+  noIntrabar: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
   strategy?: string;
 }
@@ -64,6 +68,8 @@ export interface BacktestMetrics {
   candleCount: number;
   fromTime: number;
   toTime: number;
+  /** False when replayed close-only (`--no-intrabar`). */
+  intrabar: boolean;
 }
 
 export interface BacktestResult {
@@ -85,6 +91,8 @@ export interface RunBacktestOptions {
   forceRefresh?: boolean;
   /** Skip HTF evaluate/apply/log (strategy risk params stay as constructed). */
   ignoreTrend?: boolean;
+  /** Evaluate only at candle close with a fully closed last bar. */
+  noIntrabar?: boolean;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
@@ -95,6 +103,9 @@ export interface RunBacktestOptions {
 
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
+ * By default each signal-timeframe bar is walked as a forming candle (open/high/low/close,
+ * green vs red path) so `evaluateSignal` sees the same incomplete last bar as live.
+ * Pass {@link RunBacktestOptions.noIntrabar} to evaluate once per bar at close.
  * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
@@ -127,6 +138,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     }
 
     const ignoreTrend = options.ignoreTrend ?? false;
+    const noIntrabar = options.noIntrabar ?? false;
     const skipNetwork = options.candles !== undefined;
     const htfCandles = ignoreTrend
       ? []
@@ -159,6 +171,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
         htfCandles,
         mtfCandles,
         ignoreTrend,
+        noIntrabar,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
         toTime: candles[candles.length - 1]!.time + 1,
@@ -176,12 +189,21 @@ async function replayPair(args: {
   htfCandles: Candle[];
   mtfCandles: Candle[];
   ignoreTrend: boolean;
+  noIntrabar: boolean;
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const { pair, strategyManager, candles, htfCandles, mtfCandles, ignoreTrend, startingCashUsdc } =
-    args;
+  const {
+    pair,
+    strategyManager,
+    candles,
+    htfCandles,
+    mtfCandles,
+    ignoreTrend,
+    noIntrabar,
+    startingCashUsdc,
+  } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -189,6 +211,9 @@ async function replayPair(args: {
     poolFeeUsdc: 0,
     priorityFeeUsdc: 0,
   };
+  const barIntervalSec = candleIntervalSeconds(
+    strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
+  );
 
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
@@ -199,59 +224,65 @@ async function replayPair(args: {
 
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
-    const window = candles.slice(0, i + 1);
-    const close = candle.close;
-    exchange.setMidPrice(close);
+    const closed = candles.slice(0, i);
+    const ticks = noIntrabar
+      ? [{ price: candle.close, atSec: candle.time + barIntervalSec, forming: candle }]
+      : intraBarTicks(candle, barIntervalSec);
 
-    if (!ignoreTrend) {
-      const synced = syncMarketIndicators({
-        pair: pair.symbol,
-        strategyManager,
-        htfCandles,
-        mtfCandles,
-        atTime: candle.time,
-        price: close,
-        htfEnd,
-        mtfEnd,
-        lastMarket,
-      });
-      htfEnd = synced.htfEnd;
-      mtfEnd = synced.mtfEnd;
-      lastMarket = synced.lastMarket;
-    }
+    for (const tick of ticks) {
+      const window = closed.concat(tick.forming);
+      const price = tick.price;
+      exchange.setMidPrice(price);
 
-    const strategy = strategyManager.getActiveStrategy();
-    const riskManager = strategyManager.getActiveRiskManager();
-
-    const market = lastMarket ?? {
-      pair: pair.symbol,
-      price: close,
-      trend: "unknown" as const,
-      volatility: "unknown" as const,
-    };
-    const signal = strategy.evaluateSignal(
-      pair.symbol,
-      window,
-      market,
-      close,
-      new Date(candle.time * 1000),
-      portfolio.getSnapshot(close),
-    );
-
-    const result = riskManager.check(signal, portfolio.getSnapshot(close), window);
-    if (result.kind === "command") {
-      const command = result.command;
-      // Protective exits fill at the stop/trail level; cross signals use candle close.
-      exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : close);
-      const order = await exchange.execute(command, pair);
-      const trade = portfolio.applyOrderSync(order);
-      if (trade) {
-        accumulateCosts(costs, trade, order);
+      if (!ignoreTrend) {
+        const synced = syncMarketIndicators({
+          pair: pair.symbol,
+          strategyManager,
+          htfCandles,
+          mtfCandles,
+          atTime: tick.atSec,
+          price,
+          htfEnd,
+          mtfEnd,
+          lastMarket,
+        });
+        htfEnd = synced.htfEnd;
+        mtfEnd = synced.mtfEnd;
+        lastMarket = synced.lastMarket;
       }
-      exchange.setMidPrice(close);
+
+      const strategy = strategyManager.getActiveStrategy();
+      const riskManager = strategyManager.getActiveRiskManager();
+
+      const market = lastMarket ?? {
+        pair: pair.symbol,
+        price,
+        trend: "unknown" as const,
+        volatility: "unknown" as const,
+      };
+      const signal = strategy.evaluateSignal(
+        pair.symbol,
+        window,
+        market,
+        price,
+        new Date(tick.atSec * 1000),
+        portfolio.getSnapshot(price),
+      );
+
+      const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
+      if (result.kind === "command") {
+        const command = result.command;
+        // Protective exits fill at the stop/trail level; cross signals use the tick price.
+        exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : price);
+        const order = await exchange.execute(command, pair);
+        const trade = portfolio.applyOrderSync(order);
+        if (trade) {
+          accumulateCosts(costs, trade, order);
+        }
+      }
     }
 
-    const equity = portfolio.getSnapshot(close).equity;
+    const equity = portfolio.getSnapshot(candle.close).equity;
     equityCurve.push(equity);
     if (equity > peakEquity) {
       peakEquity = equity;
@@ -297,6 +328,7 @@ async function replayPair(args: {
       candleCount: candles.length,
       fromTime: args.fromTime,
       toTime: args.toTime,
+      intrabar: !noIntrabar,
     },
     trades: snap.trades,
     equityCurve,
@@ -346,6 +378,7 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let days = 0;
   let forceRefresh = false;
   let ignoreTrend = false;
+  let noIntrabar = false;
   let daysExplicit = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
@@ -362,6 +395,10 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
     if (arg === "--ignore-trend") {
       ignoreTrend = true;
+      continue;
+    }
+    if (arg === "--no-intrabar") {
+      noIntrabar = true;
       continue;
     }
     if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
@@ -412,6 +449,7 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     days: daysExplicit ? days : 0,
     forceRefresh,
     ignoreTrend,
+    noIntrabar,
   };
   if (fromTime !== undefined) {
     result.fromTime = fromTime;
@@ -452,7 +490,11 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
       `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} USDC`,
   );
-  console.log("(Fills use emulated exchange costs on candle close; not live quotes.)");
+  console.log(
+    metrics.intrabar
+      ? "(Fills use emulated exchange costs on intra-bar OHLC ticks; last bar is forming, like live.)"
+      : "(Fills use emulated exchange costs on candle close; last bar is fully closed.)",
+  );
 
   if (trades.length === 0) {
     console.log("No simulated fills.");

@@ -4,7 +4,7 @@ import { Keypair } from "@solana/web3.js";
 import { WSOL_MINT } from "./amounts.js";
 import { ExchangeError } from "../error.js";
 import { isOrder, type BalanceSource, type Command, type PairConfig } from "../../types.js";
-import { JupiterSwapExchange } from "./jupiter-swap.js";
+import { JupiterExchange } from "./jupiter.js";
 
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -92,7 +92,7 @@ function trackingFetch(): { fetched: { value: boolean }; fetchImpl: typeof fetch
   return { fetched, fetchImpl };
 }
 
-describe("JupiterSwapExchange.execute", () => {
+describe("JupiterExchange.execute", () => {
   it("returns a live fill from mocked /order + /execute", async () => {
     const calls: { url: string; body?: string | undefined }[] = [];
     const fetchImpl: typeof fetch = (input, init) => {
@@ -118,7 +118,7 @@ describe("JupiterSwapExchange.execute", () => {
       return Promise.resolve(new Response("unexpected", { status: 404 }));
     };
 
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: new FakeBalances(),
@@ -150,7 +150,7 @@ describe("JupiterSwapExchange.execute", () => {
       return Promise.resolve(new Response(JSON.stringify({ status: "Failed", error: "slippage" })));
     };
 
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: new FakeBalances(),
@@ -185,7 +185,7 @@ describe("JupiterSwapExchange.execute", () => {
       );
     };
 
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
@@ -202,7 +202,7 @@ describe("JupiterSwapExchange.execute", () => {
 
   it("aborts a token BUY when native SOL is below the fee reserve", async () => {
     const { fetched, fetchImpl } = trackingFetch();
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
@@ -219,7 +219,7 @@ describe("JupiterSwapExchange.execute", () => {
 
   it("aborts a SELL when native SOL is below the fee reserve", async () => {
     const { fetched, fetchImpl } = trackingFetch();
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
@@ -254,7 +254,7 @@ describe("JupiterSwapExchange.execute", () => {
       }
       return Promise.resolve(new Response("unexpected", { status: 500 }));
     };
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       keypair: Keypair.generate(),
       balances: new FakeBalances(),
       fetchImpl,
@@ -274,7 +274,7 @@ describe("JupiterSwapExchange.execute", () => {
   });
 
   it("rejects a perps short on a market jupiter does not list", async () => {
-    const exchange = new JupiterSwapExchange({
+    const exchange = new JupiterExchange({
       keypair: Keypair.generate(),
       balances: new FakeBalances(),
       fetchImpl: () => {

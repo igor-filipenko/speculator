@@ -21,8 +21,15 @@ const increaseSchema = z.object({
   quote: quoteSchema.optional(),
 });
 
+const decreaseQuoteSchema = z.object({
+  pnlAfterFeesUsd: z.string().optional(),
+  sizeUsdDelta: z.string().optional(),
+  transferAmountUsd: z.string().optional(),
+});
+
 const decreaseSchema = z.object({
   serializedTxBase64: z.string().min(1),
+  quote: decreaseQuoteSchema.optional(),
 });
 
 const executeSchema = z.object({
@@ -31,16 +38,38 @@ const executeSchema = z.object({
 
 const positionSchema = z.object({
   positionPubkey: z.string(),
+  asset: z.string().optional(),
+  assetMint: z.string().optional(),
   marketMint: z.string().optional(),
   side: z.string(),
+  leverage: z.string().optional(),
+  sizeUsd: z.string().optional(),
   sizeTokenAmount: z.string(),
   entryPriceUsd: z.string(),
+  markPriceUsd: z.string().optional(),
+  liquidationPriceUsd: z.string().optional(),
   collateralUsd: z.string().optional(),
+  pnlAfterFeesUsd: z.string().optional(),
 });
 
 const positionsSchema = z.object({
   dataList: z.array(positionSchema),
 });
+
+/** One open Jupiter Perps position, amounts in UI units. */
+export interface ListedPerpsPosition {
+  positionPubkey: string;
+  asset: string;
+  side: string;
+  leverage: string;
+  sizeToken: number;
+  sizeUsd: number;
+  collateralUsd: number;
+  entryPrice: number;
+  markPrice: number;
+  liquidationPrice: number;
+  pnlUsd: number;
+}
 
 export interface JupiterPerpsClientOptions {
   baseUrl?: string;
@@ -73,7 +102,7 @@ export class JupiterPerpsClient {
       inputToken: "USDC",
       inputTokenAmount: input.inputTokenAmount,
       side: "short",
-      leverage: "1",
+      leverage: "1.1",
       maxSlippageBps: String(input.maxSlippageBps),
     });
     const parsed = increaseSchema.parse(body);
@@ -86,7 +115,12 @@ export class JupiterPerpsClient {
     walletAddress: string;
     pair: PairConfig;
     maxSlippageBps: number;
-  }): Promise<{ serializedTxBase64: string }> {
+  }): Promise<{
+    serializedTxBase64: string;
+    pnlUsd: number;
+    sizeUsd: number;
+    transferUsd: number;
+  }> {
     const open = await this.findShort(input.walletAddress, input.pair);
     if (open == null) {
       throw new ExchangeError(`no jupiter perps short for ${input.pair.symbol}`);
@@ -97,7 +131,21 @@ export class JupiterPerpsClient {
       entirePosition: true,
       maxSlippageBps: String(input.maxSlippageBps),
     });
-    return decreaseSchema.parse(body);
+    const parsed = decreaseSchema.parse(body);
+    return {
+      serializedTxBase64: parsed.serializedTxBase64,
+      pnlUsd: usd(parsed.quote?.pnlAfterFeesUsd),
+      sizeUsd: usd(parsed.quote?.sizeUsdDelta),
+      transferUsd: usd(parsed.quote?.transferAmountUsd),
+    };
+  }
+
+  async listPositions(walletAddress: string): Promise<ListedPerpsPosition[]> {
+    const url = new URL(`${this.baseUrl}/positions`);
+    url.searchParams.set("walletAddress", walletAddress);
+    const body = await this.send(url, { method: "GET" });
+    const parsed = positionsSchema.parse(body);
+    return parsed.dataList.map((row) => toListedPosition(row));
   }
 
   async execute(
@@ -133,7 +181,7 @@ export class JupiterPerpsClient {
     const body = await this.send(url, { method: "GET" });
     const parsed = positionsSchema.parse(body);
     const match = parsed.dataList.find(
-      (row) => row.side.toLowerCase() === "short" && rowMatchesAsset(row.marketMint, asset, pair),
+      (row) => row.side.toLowerCase() === "short" && rowMatchesAsset(row, asset, pair),
     );
     if (match == null) {
       return null;
@@ -192,14 +240,67 @@ function assetFor(pair: PairConfig): PerpsAsset {
 }
 
 function rowMatchesAsset(
-  marketMint: string | undefined,
+  row: z.infer<typeof positionSchema>,
   asset: PerpsAsset,
   pair: PairConfig,
 ): boolean {
-  if (marketMint === undefined || marketMint.length === 0) {
+  const labeled = row.asset?.toUpperCase();
+  if (labeled === "SOL" || labeled === "ETH" || labeled === "BTC") {
+    return labeled === asset;
+  }
+  const mint = row.assetMint ?? row.marketMint;
+  if (mint === undefined || mint.length === 0) {
     return asset === pair.symbol.split("/")[0]?.toUpperCase();
   }
-  return marketMint === pair.baseMint;
+  return mint === pair.baseMint;
+}
+
+function labeledAsset(row: z.infer<typeof positionSchema>): string {
+  const named = row.asset?.toUpperCase();
+  if (named !== undefined && named.length > 0) {
+    return named;
+  }
+  return assetFromMint(row.assetMint ?? row.marketMint) ?? "?";
+}
+
+function toListedPosition(row: z.infer<typeof positionSchema>): ListedPerpsPosition {
+  const asset = labeledAsset(row);
+  return {
+    positionPubkey: row.positionPubkey,
+    asset,
+    side: row.side.toLowerCase(),
+    leverage: row.leverage ?? "",
+    sizeToken: fromAtomic(parseAmount(row.sizeTokenAmount), decimalsForAsset(asset)),
+    sizeUsd: usd(row.sizeUsd),
+    collateralUsd: usd(row.collateralUsd),
+    entryPrice: usd(row.entryPriceUsd),
+    markPrice: usd(row.markPriceUsd),
+    liquidationPrice: usd(row.liquidationPriceUsd),
+    pnlUsd: usd(row.pnlAfterFeesUsd),
+  };
+}
+
+function assetFromMint(mint: string | undefined): PerpsAsset | undefined {
+  if (mint === "So11111111111111111111111111111111111111112") {
+    return "SOL";
+  }
+  if (mint === "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs") {
+    return "ETH";
+  }
+  if (mint === "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh") {
+    return "BTC";
+  }
+  return undefined;
+}
+
+function decimalsForAsset(asset: string): number {
+  if (asset === "SOL") {
+    return 9;
+  }
+  if (asset === "ETH" || asset === "BTC") {
+    return 8;
+  }
+  return 0;
 }
 
 function usd(raw: string | undefined): number {

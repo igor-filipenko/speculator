@@ -10,7 +10,7 @@ Build/run: [README.md](./README.md).
 
 ## Hard constraints
 
-- Live Jupiter swaps and wallet signing are in scope for **`pnpm trade` only**. Paper and watch stay quote-only; backtest must not call live Jupiter.
+- Live Jupiter swaps and wallet signing are in scope for **`pnpm trade`** and **`pnpm positions`**. Paper and watch construct `JupiterExchange` without a keypair, so fills stay simulated quotes. Backtest must not call live Jupiter.
 - The Mini App server (`server/`) is **read-only** (health + portfolio). It must not place orders or call Jupiter.
 - Candle-replay **backtest** (`pnpm backtest`): Gecko OHLCV + Timescale `market.candles` cache + Jupiter-like fee/slippage emulation.
 - Candle-replay **regime** (`pnpm regime`): same HTF/1h close cadence as backtest; logs trend/vol switches and draws a CLI chart. No fills.
@@ -34,7 +34,7 @@ deploy/
   miniapp.sh
 
 src/ highlights:
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | backtest | regime
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | regime
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (portfolios, trades, signals, candles, tokens, pools)

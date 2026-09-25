@@ -13,6 +13,7 @@
     "paper": "tsx src/index.ts paper",
     "trade": "tsx src/index.ts trade",
     "wallet": "tsx src/index.ts wallet",
+    "positions": "tsx src/index.ts positions",
     "backtest": "tsx src/index.ts backtest",
     "regime": "tsx src/index.ts regime",
     "migrate": "dbmate --no-dump-schema --migrations-dir ./migrations up",

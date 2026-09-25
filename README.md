@@ -63,7 +63,7 @@ Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 pnpm start
 ```
 
-Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot).
+Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot), `pnpm positions` (open or close the live long or short).
 
 ### Telegram (optional)
 
@@ -162,6 +162,16 @@ Export the Phantom-importable private key from `WALLET_KEYPAIR_PATH` (stdout —
 
 ```bash
 pnpm wallet export
+```
+
+Open or close the live position on the first `WATCHLIST` pair through `JupiterExchange`. Longs are spot swaps. Shorts are Jupiter Perps. Opens spend that many USDC. Closes exit the whole position. Each fill is a **LIVE** transaction.
+
+```bash
+pnpm positions list
+pnpm positions open long 10
+pnpm positions close long
+pnpm positions open short 10
+pnpm positions close short
 ```
 
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):

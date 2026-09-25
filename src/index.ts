@@ -3,6 +3,7 @@ import { closeDbPool } from "./db/db.js";
 import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
 import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
 import { runPaper } from "./engine/paper.js";
+import { positionsUsage, runPositions } from "./engine/positions.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWallet, runWalletExport } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
@@ -26,12 +27,18 @@ function usage(): never {
   pnpm paper          # recommendations + virtual portfolio
   pnpm trade          # recommendations + live Jupiter swaps
   pnpm wallet         # sync live portfolio from chain and print balances
+  pnpm positions      # list or open/close the live long or short
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
   pnpm regime         # Replay HTF/1h market-indicator switches (no fills)
   pnpm migrate        # dbmate up (TimescaleDB)
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet
+  tsx src/index.ts positions list
+  tsx src/index.ts positions open long <usdc>
+  tsx src/index.ts positions close long
+  tsx src/index.ts positions open short <usdc>
+  tsx src/index.ts positions close short
   tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend] [--no-intrabar]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
@@ -49,7 +56,7 @@ Options:
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "backtest", "regime"] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "positions", "backtest", "regime"] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -101,6 +108,9 @@ async function main(): Promise<void> {
       return;
     case "wallet":
       await runWalletCommand(rest);
+      return;
+    case "positions":
+      await runPositionsCommand(rest);
       return;
   }
 }
@@ -212,6 +222,15 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     once,
     shutdownCb,
   });
+}
+
+async function runPositionsCommand(argv: string[]): Promise<void> {
+  if (argv.length === 0) {
+    console.error(positionsUsage());
+    usage();
+  }
+  const config = await loadConfig();
+  await runPositions(config, argv);
 }
 
 async function runWalletCommand(argv: string[]): Promise<void> {

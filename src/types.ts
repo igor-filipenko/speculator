@@ -2,7 +2,10 @@
 
 export type SignalSide = "BUY" | "SELL" | "HOLD";
 
-export type PositionSide = "flat" | "long";
+export type PositionSide = "flat" | "long" | "short";
+
+/** What a command does to the single position. */
+export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-short";
 
 export type StrategyMode = "bollinger" | "grid" | "donchian";
 
@@ -192,13 +195,14 @@ export interface PortfolioSnapshot {
 export interface Command {
   pair: string;
   side: "BUY" | "SELL";
+  intent: OrderIntent;
   reason: string;
   at: Date;
   /** Mid/spot hint from the signal before exchange costs. */
   priceHint: number;
-  /** Quote (USDC) budget to spend on BUY. */
+  /** Quote budget for open-long and open-short. */
   quoteBudgetUsdc?: number;
-  /** Base size to sell on SELL. */
+  /** Base size for close-long and close-short. */
   baseSize?: number;
 }
 
@@ -221,6 +225,25 @@ export interface Order {
     slippageUsdcPerBase: number;
     poolFeeUsdcPerBase: number;
   };
+}
+
+export interface BalanceSource {
+  nativeSol(): number;
+  refresh(mints: readonly string[]): Promise<void>;
+  tokenUi(mint: string): number;
+}
+
+/**
+ * Short-only position (perps)
+ */
+export interface OpenPosition {
+  size: number;
+  entryPrice: number;
+  collateralUsd: number;
+}
+
+export interface PositionSource {
+  findOpenPosition(pair: PairConfig): Promise<OpenPosition | null>;
 }
 
 export interface Portfolio {
@@ -310,7 +333,7 @@ export interface StrategyManager {
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
-  execute(command: Command, pair: PairConfig): Promise<Order | null>;
+  execute(command: Command, pair: PairConfig): Promise<Order | Error>;
 }
 
 export interface ProgramState {
@@ -319,6 +342,14 @@ export interface ProgramState {
   readonly lastCandles: Map<string, Candle[]>;
   readonly lastMarketIndicators: Map<string, MarketIndicators>;
   readonly portfolios: Map<string, Portfolio>;
+}
+
+export interface Error {
+  readonly message: string;
+}
+
+export function isOrder(result: Order | Error): result is Order {
+  return "side" in result;
 }
 
 export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

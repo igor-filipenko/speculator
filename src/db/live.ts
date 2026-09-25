@@ -1,4 +1,4 @@
-import type { PersistedLivePortfolio, PersistedLiveTrade } from "../live/store.js";
+import type { PersistedLivePortfolio, PersistedLiveTrade } from "../portfolio/live/store.js";
 import { insertTrade, loadAllPortfolios, portfolioCount, upsertPortfolio } from "./bot.js";
 import { getBotId } from "./db.js";
 

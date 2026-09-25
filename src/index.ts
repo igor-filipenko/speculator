@@ -7,7 +7,7 @@ import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWallet, runWalletExport } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
-import { PaperPortfolio } from "./paper/portfolio.js";
+import { PaperPortfolio } from "./portfolio/paper/portfolio.js";
 import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
 import type {
   Candle,

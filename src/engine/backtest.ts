@@ -1,18 +1,20 @@
+import { assert } from "console";
 import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
-import { EmulatedExchange } from "../exchange/emulated-exchange.js";
-import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated-quote.js";
+import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
+import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated/emulated-quote.js";
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
-import { PaperPortfolio } from "../paper/portfolio.js";
-import type {
-  Candle,
-  MarketIndicators,
-  Order,
-  PairConfig,
-  Strategy,
-  StrategyManager,
-  Trade,
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import {
+  isOrder,
+  type Candle,
+  type MarketIndicators,
+  type Order,
+  type PairConfig,
+  type Strategy,
+  type StrategyManager,
+  type Trade,
 } from "../types.js";
 import { intraBarTicks } from "./intra-bar.js";
 import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
@@ -275,6 +277,10 @@ async function replayPair(args: {
         // Protective exits fill at the stop/trail level; cross signals use the tick price.
         exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : price);
         const order = await exchange.execute(command, pair);
+        assert(isOrder(order), "Expected order, got error");
+        if (!isOrder(order)) {
+          continue;
+        }
         const trade = portfolio.applyOrderSync(order);
         if (trade) {
           accumulateCosts(costs, trade, order);
@@ -503,7 +509,7 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     for (const t of trades) {
       const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
       const reason = t.reason ? ` — ${t.reason}` : "";
-      const endOfTrip = t.side === "SELL" ? "\n" : "";
+      const endOfTrip = t.realizedPnl !== undefined ? "\n" : "";
       console.log(
         `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}${endOfTrip}`,
       );

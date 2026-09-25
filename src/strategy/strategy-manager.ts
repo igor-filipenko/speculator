@@ -111,17 +111,19 @@ export class SimpleStrategyManager implements StrategyManager {
 }
 
 export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
+  const risk = strategy.getRiskParams();
   return match(trend)
-    .with("bearish", () => new HighRiskManager("trend is bearish", strategy.getRiskParams()))
-    .with("unknown", () => new HighRiskManager("trend is unknown", strategy.getRiskParams()))
-    .with("bullish", "flat", () => new GenericRiskManager(strategy.getRiskParams()))
+    .with("bearish", () => new HighRiskManager("trend is bearish", risk, true))
+    .with("unknown", () => new HighRiskManager("trend is unknown", risk, false))
+    .with("bullish", () => new GenericRiskManager(risk, { allowLong: true, allowShort: false }))
+    .with("flat", () => new GenericRiskManager(risk, { allowLong: true, allowShort: true }))
     .exhaustive();
 }
 
 /**
  * Create a strategy for `mode` tuned for HTF `trend` and 1h `volatility`.
- * Grid spacing / ATR, Bollinger ADX–RSI gates (no BUY in bear or 1h high vol),
- * and Donchian volume SMA multiplier scale with both.
+ * Grid spacing / ATR, Bollinger ADX–RSI gates (no long in bear or 1h high vol;
+ * short entries only in bear/flat), and Donchian volume SMA multiplier scale with both.
  */
 export function loadStrategy(mode: StrategyMode, trend: Trend, volatility: Volatility): Strategy {
   switch (mode) {

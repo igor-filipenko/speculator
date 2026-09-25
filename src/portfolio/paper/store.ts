@@ -1,9 +1,9 @@
-import { loadAllPaperPortfolios, paperPortfolioCount, syncPaperPortfolio } from "../db/paper.js";
+import { loadAllPaperPortfolios, paperPortfolioCount, syncPaperPortfolio } from "../../db/paper.js";
 
 /** Serializable position (dates as ISO strings). */
 export interface PersistedPosition {
   pair: string;
-  side: "flat" | "long";
+  side: "flat" | "long" | "short";
   size: number;
   entryPrice: number;
   openedAt?: string;

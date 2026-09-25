@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PaperPortfolio } from "../paper/portfolio.js";
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import type { Candle, Order, RiskParams, Signal } from "../types.js";
 import { evaluateProtectiveExit, GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 

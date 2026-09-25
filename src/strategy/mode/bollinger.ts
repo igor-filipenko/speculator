@@ -145,11 +145,28 @@ function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
 }
 
 /**
- * Mean-reversion is off in HTF bear/unknown and in 1h high vol.
- * Exits (close ≥ mid, ATR) still fire.
+ * Long entries are off in HTF bear/unknown and in 1h high vol.
+ * Exits still fire.
  */
 export function bollingerDoNotBuyReason(trend: Trend, volatility: Volatility): string | undefined {
   if (trend === "bearish" || trend === "unknown") {
+    return `HTF trend ${trend}`;
+  }
+  if (volatility === "high") {
+    return `1h volatility ${volatility}`;
+  }
+  return undefined;
+}
+
+/**
+ * Short entries are off in HTF bull/unknown and in 1h high vol.
+ * Exits still fire. Bearish and flat may short.
+ */
+export function bollingerDoNotShortReason(
+  trend: Trend,
+  volatility: Volatility,
+): string | undefined {
+  if (trend === "bullish" || trend === "unknown") {
     return `HTF trend ${trend}`;
   }
   if (volatility === "high") {
@@ -169,8 +186,14 @@ export interface BollingerInput {
   doNotBuy?: boolean;
   /** Extra text for the HOLD reason when {@link doNotBuy} is set. */
   doNotBuyReason?: string;
-  /** Open-long fill; required for mid-exit. Skipped when close is not above this after costs. */
+  /** When true, upper-band rejections are ignored. Exits still fire. */
+  doNotShort?: boolean;
+  /** Extra text for the HOLD reason when {@link doNotShort} is set. */
+  doNotShortReason?: string;
+  /** Open fill; required for mid-exit. */
   entryPrice?: number;
+  /** Which side `entryPrice` belongs to. */
+  positionSide?: "long" | "short";
 }
 
 /**
@@ -207,6 +230,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const bbUpper = bands.upper[i];
   const bbLower = bands.lower[i];
   const bbLowerPrev = prev >= 0 ? bands.lower[prev] : null;
+  const bbUpperPrev = prev >= 0 ? bands.upper[prev] : null;
   const atrNow = atrSeries[i];
   const adxNow = dmiNow.adx[i];
   const plusDi = dmiNow.plusDi[i];
@@ -243,6 +267,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     bbUpper == null ||
     bbLower == null ||
     bbLowerPrev == null ||
+    bbUpperPrev == null ||
     adxNow == null ||
     rsiNow == null ||
     lastBar == null ||
@@ -258,7 +283,9 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const close = closes[i]!;
   const closePrev = closes[prev]!;
   const entry = input.entryPrice;
-  const long = entry != null && entry > 0;
+  const openSide = input.positionSide;
+  const long = entry != null && entry > 0 && openSide !== "short";
+  const short = openSide === "short" && entry != null && entry > 0;
   let side: SignalSide = "HOLD";
 
   if (long) {
@@ -273,12 +300,21 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     return { ...base, side, reason };
   }
 
-  // no long position, looking for entry...
-  const roomToMid = Math.max(close, price) < bbMid;
-  if (!roomToMid) {
-    const reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+  if (short) {
+    const minExit = entry * (1 - strategy.minExitAboveEntryPct);
+    const profitablePrice = Math.min(bbMid, minExit);
+    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`;
+
+    if (price <= profitablePrice) {
+      side = "BUY";
+      reason = `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`;
+    }
     return { ...base, side, reason };
   }
+
+  const rsiShortMin = 100 - strategy.rsiBuyMax;
+  const belowMid = Math.max(close, price) < bbMid;
+  const aboveMid = Math.min(close, price) > bbMid;
 
   let reason = lastIsClosed
     ? `No BB signal (close=${fmt(close)}, lower=${fmt(bbLower)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}, ADX=${fmt(adxNow)}, RSI=${fmt(rsiNow)})`
@@ -287,7 +323,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const wickReclaim = lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
 
-  if (reclaimedLower) {
+  if (belowMid && reclaimedLower) {
     const bandWidth = bbMid - bbLower;
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
@@ -320,8 +356,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `Lower reclaim ignored: 15m drift down ` +
         `(ADX ${fmt(adxNow)} < ${strategy.workTrendAdxFlatMax} or EMAs not stacked oversold; ` +
         `+DI ${fmt(plusDi ?? 0)} −DI ${fmt(minusDi ?? 0)})`;
-    } else if (long) {
-      reason = `Lower reclaim ignored: already long`;
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
@@ -330,6 +364,57 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
+  }
+
+  if (side === "HOLD" && aboveMid) {
+    const closeReject = closePrev >= bbUpperPrev && close < bbUpper;
+    const wickReject = lastBar.high >= bbUpper && close < bbUpper && close < lastBar.open;
+    const rejectedUpper = closeReject || wickReject;
+    if (rejectedUpper) {
+      const bandWidth = bbUpper - bbMid;
+      const bandToMidPct = bandWidth / close;
+      const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
+      const blocked = input.doNotShort === true ? (input.doNotShortReason ?? "regime") : undefined;
+      if (blocked != null) {
+        reason = `Upper rejection ignored: ${blocked}`;
+      } else if (adxNow > strategy.adxMax) {
+        reason = `Upper rejection ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
+      } else if (bandToMidPct < strategy.minBandToMidPct) {
+        reason = `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
+      } else if (rejectDepth < strategy.minReclaimDepth) {
+        reason =
+          `Upper rejection ignored: depth ${pct(rejectDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
+          `(close ${fmt(close)} vs upper ${fmt(bbUpper)} → mid ${fmt(bbMid)})`;
+      } else if (rsiNow <= rsiShortMin) {
+        reason = `Upper rejection ignored: RSI ${fmt(rsiNow)} <= ${fmt(rsiShortMin)} (not overbought)`;
+      } else if (
+        isWorkDriftUp({
+          close,
+          emaFast: emaFastNow,
+          emaSlow: emaSlowNow,
+          adxNow,
+          plusDi,
+          minusDi,
+          adxFlatMax: strategy.workTrendAdxFlatMax,
+        })
+      ) {
+        reason =
+          `Upper rejection ignored: 15m drift up ` +
+          `(ADX ${fmt(adxNow)} < ${strategy.workTrendAdxFlatMax} or EMAs not stacked overbought; ` +
+          `+DI ${fmt(plusDi ?? 0)} −DI ${fmt(minusDi ?? 0)})`;
+      } else {
+        side = "SELL";
+        const how = wickReject ? "wick rejection" : "close rejection";
+        reason =
+          `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
+          `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
+          `depth ${pct(rejectDepth)}; RSI ${fmt(rsiNow)} > ${fmt(rsiShortMin)}`;
+      }
+    } else {
+      reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+    }
+  } else if (side === "HOLD" && !belowMid) {
+    reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
   }
 
   return { ...base, side, reason };
@@ -381,9 +466,12 @@ export class BollingerStrategy implements Strategy {
     portfolio?: PortfolioSnapshot,
   ): Signal {
     const blocked = bollingerDoNotBuyReason(market.trend, market.volatility);
+    const blockedShort = bollingerDoNotShortReason(market.trend, market.volatility);
     const position = portfolio?.position;
-    const entryPrice =
-      position?.side === "long" && position.entryPrice > 0 ? position.entryPrice : undefined;
+    const positioned =
+      (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
+        ? position
+        : undefined;
     return evaluateBollinger({
       pair,
       candles,
@@ -391,7 +479,10 @@ export class BollingerStrategy implements Strategy {
       price,
       at,
       ...(blocked != null ? { doNotBuy: true, doNotBuyReason: blocked } : {}),
-      ...(entryPrice != null ? { entryPrice } : {}),
+      ...(blockedShort != null ? { doNotShort: true, doNotShortReason: blockedShort } : {}),
+      ...(positioned?.side === "long" || positioned?.side === "short"
+        ? { entryPrice: positioned.entryPrice, positionSide: positioned.side }
+        : {}),
     });
   }
 
@@ -424,6 +515,28 @@ export function isWorkDriftDown(input: {
     return false;
   }
   return close < emaFast && (minusDi > plusDi || emaFast < emaSlow);
+}
+
+/** Mirror of {@link isWorkDriftDown} for upper-band shorts. */
+export function isWorkDriftUp(input: {
+  close: number;
+  emaFast: number | null | undefined;
+  emaSlow: number | null | undefined;
+  adxNow: number | null | undefined;
+  plusDi: number | null | undefined;
+  minusDi: number | null | undefined;
+  adxFlatMax: number;
+}): boolean {
+  const { close, emaFast, emaSlow, adxNow, plusDi, minusDi, adxFlatMax } = input;
+  if (emaFast == null || emaSlow == null || adxNow == null || plusDi == null || minusDi == null) {
+    return false;
+  }
+  const stackedOverbought =
+    close > emaFast && emaFast > emaSlow && plusDi > minusDi && adxNow >= adxFlatMax;
+  if (stackedOverbought) {
+    return false;
+  }
+  return close > emaFast && (plusDi > minusDi || emaFast > emaSlow);
 }
 
 function fmt(n: number): string {

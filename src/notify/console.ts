@@ -101,10 +101,7 @@ export function logTrade(trade: Trade): void {
 }
 
 export function logSnapshot(snapshot: PortfolioSnapshot): void {
-  const pos =
-    snapshot.position.side === "long"
-      ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-      : "flat";
+  const pos = formatOpenPosition(snapshot.position);
   const label = snapshot.simulated ? "paper" : "live";
   console.log(
     `  ${label} cash=${snapshot.cashUsdc.toFixed(4)} USDC | position=${pos} | equity=${snapshot.equity.toFixed(4)} | realizedPnl=${snapshot.realizedPnl.toFixed(4)}`,
@@ -113,10 +110,7 @@ export function logSnapshot(snapshot: PortfolioSnapshot): void {
 
 /** CLI report matching the Telegram `/portfolio` fields. */
 export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
-  const pos =
-    snapshot.position.side === "long"
-      ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-      : "flat";
+  const pos = formatOpenPosition(snapshot.position);
   console.log("");
   console.log(pair);
   console.log(`Cash ${snapshot.cashUsdc.toFixed(4)} USDC`);
@@ -129,6 +123,13 @@ export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
 /** Persist one signal to Timescale for later analysis. */
 export async function persistSignal(signal: Signal): Promise<void> {
   await insertSignal(signal);
+}
+
+function formatOpenPosition(position: { side: string; size: number; entryPrice: number }): string {
+  if (position.side === "flat") {
+    return "flat";
+  }
+  return `${position.side} ${position.size.toFixed(6)} @ ${position.entryPrice.toFixed(6)}`;
 }
 
 function fmt(n: number | undefined): string {

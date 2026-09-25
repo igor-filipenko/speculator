@@ -146,10 +146,10 @@ COMMENT ON COLUMN bot.portfolios.mode IS 'paper (simulated) or live (on-chain)';
 COMMENT ON COLUMN bot.portfolios.pair IS 'WATCHLIST pair (e.g. SOL/USDC)';
 COMMENT ON COLUMN bot.portfolios.cash_usdc IS 'Quote cash balance in USDC';
 COMMENT ON COLUMN bot.portfolios.realized_pnl IS 'Cumulative realized PnL in USDC';
-COMMENT ON COLUMN bot.portfolios.position_side IS 'flat or long';
-COMMENT ON COLUMN bot.portfolios.position_size IS 'Base size of the open long (0 if flat)';
-COMMENT ON COLUMN bot.portfolios.entry_price IS 'Average entry price of the open long';
-COMMENT ON COLUMN bot.portfolios.opened_at IS 'When the current long was opened (null if flat)';
+COMMENT ON COLUMN bot.portfolios.position_side IS 'flat, long, or short';
+COMMENT ON COLUMN bot.portfolios.position_size IS 'Base size of the open position (0 if flat)';
+COMMENT ON COLUMN bot.portfolios.entry_price IS 'Average entry price of the open position';
+COMMENT ON COLUMN bot.portfolios.opened_at IS 'When the current position was opened (null if flat)';
 COMMENT ON COLUMN bot.portfolios.updated_at IS 'Last ledger write time (UTC)';
 COMMENT ON CONSTRAINT portfolios_pkey ON bot.portfolios IS
   'One portfolio row per bot, mode, and pair';

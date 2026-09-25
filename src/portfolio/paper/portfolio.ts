@@ -1,6 +1,12 @@
-import { match } from "ts-pattern";
-import { insertPaperTrade, upsertPaperPortfolio } from "../db/paper.js";
-import type { Order, PairConfig, Portfolio, Position, PortfolioSnapshot, Trade } from "../types.js";
+import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
+import type {
+  Order,
+  PairConfig,
+  Portfolio,
+  Position,
+  PortfolioSnapshot,
+  Trade,
+} from "../../types.js";
 import {
   loadPaperState,
   type PersistedPortfolio,
@@ -53,9 +59,9 @@ export class PaperPortfolio implements Portfolio {
         portfolios.set(pair.symbol, portfolio);
         const snap = portfolio.toPersisted();
         const pos =
-          snap.position.side === "long"
-            ? `long ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`
-            : "flat";
+          snap.position.side === "flat"
+            ? "flat"
+            : `${snap.position.side} ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`;
         console.log(
           `Restored paper ${pair.symbol}: cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
         );
@@ -137,13 +143,12 @@ export class PaperPortfolio implements Portfolio {
   }
 
   getSnapshot(markPrice: number): PaperSnapshot {
-    const positionValue = this.position.side === "long" ? this.position.size * markPrice : 0;
     return {
       simulated: true,
       cashUsdc: this.cashUsdc,
       position: { ...this.position },
       realizedPnl: this.realizedPnl,
-      equity: this.cashUsdc + positionValue,
+      equity: markEquity(this.cashUsdc, this.position, markPrice),
       trades: [...this.trades],
     };
   }
@@ -157,10 +162,10 @@ export class PaperPortfolio implements Portfolio {
    * Apply a filled order without persisting (for backtests and unit tests).
    */
   applyOrderSync(order: Order): PaperTrade | null {
-    return match(order.side)
-      .with("BUY", () => this.openLong(order))
-      .with("SELL", () => this.closeLong(order))
-      .exhaustive();
+    if (order.side === "BUY") {
+      return this.position.side === "short" ? this.closeShort(order) : this.openLong(order);
+    }
+    return this.position.side === "long" ? this.closeLong(order) : this.openShort(order);
   }
 
   /**
@@ -245,4 +250,73 @@ export class PaperPortfolio implements Portfolio {
     this.trades.push(trade);
     return trade;
   }
+
+  private openShort(order: Order): PaperTrade | null {
+    if (this.position.side !== "flat") {
+      return null;
+    }
+    if (order.size <= 0 || order.price <= 0) {
+      return null;
+    }
+
+    const trade: PaperTrade = {
+      pair: order.pair,
+      side: "SELL",
+      price: order.price,
+      size: order.size,
+      at: order.at,
+      simulated: true,
+      reason: order.reason,
+    };
+
+    this.position = {
+      pair: order.pair,
+      side: "short",
+      size: order.size,
+      entryPrice: order.price,
+      openedAt: order.at,
+    };
+    this.trades.push(trade);
+    return trade;
+  }
+
+  private closeShort(order: Order): PaperTrade | null {
+    if (this.position.side !== "short" || this.position.size <= 0) {
+      return null;
+    }
+
+    const size = order.size;
+    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc;
+    const trade: PaperTrade = {
+      pair: order.pair,
+      side: "BUY",
+      price: order.price,
+      size,
+      realizedPnl: pnl,
+      at: order.at,
+      simulated: true,
+      reason: order.reason,
+    };
+
+    this.cashUsdc = Math.max(0, this.cashUsdc + pnl);
+    this.realizedPnl += pnl;
+    this.position = {
+      pair: order.pair,
+      side: "flat",
+      size: 0,
+      entryPrice: 0,
+    };
+    this.trades.push(trade);
+    return trade;
+  }
+}
+
+function markEquity(cashUsdc: number, position: Position, markPrice: number): number {
+  if (position.side === "long") {
+    return cashUsdc + position.size * markPrice;
+  }
+  if (position.side === "short") {
+    return cashUsdc + position.size * (position.entryPrice - markPrice);
+  }
+  return cashUsdc;
 }

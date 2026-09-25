@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
-import { resetSpeculatorDbCache, setBotId } from "../db/db.js";
+import { resetSpeculatorDbCache, setBotId } from "../../db/db.js";
 import { randomUUID } from "node:crypto";
-import { useTestDb } from "../db/test-db.js";
+import { useTestDb } from "../../db/test-db.js";
 
 describe("paper store", () => {
   before(async () => {

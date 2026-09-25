@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { Keypair, PublicKey } from "@solana/web3.js";
-import { resetSpeculatorDbCache } from "../db/db.js";
-import { loadAllLivePortfolios } from "../db/live.js";
-import { useTestDb } from "../db/test-db.js";
-import { WSOL_MINT } from "../exchange/amounts.js";
-import type { BalanceSource } from "../exchange/wallet.js";
-import type { Order, PairConfig } from "../types.js";
+import { resetSpeculatorDbCache } from "../../db/db.js";
+import { loadAllLivePortfolios } from "../../db/live.js";
+import { useTestDb } from "../../db/test-db.js";
+import { WSOL_MINT } from "../../exchange/jupiter/amounts.js";
+import type { BalanceSource, Order, PairConfig } from "../../types.js";
 import { LivePortfolio } from "./portfolio.js";
 
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -21,13 +19,8 @@ const PAIR: PairConfig = {
 };
 
 class FakeBalances implements BalanceSource {
-  readonly owner: PublicKey;
   native = 0.05;
   tokens = new Map<string, number>([[USDC, 100]]);
-
-  constructor() {
-    this.owner = Keypair.generate().publicKey;
-  }
 
   async refresh(_mints: readonly string[]): Promise<void> {
     /* no-op */

@@ -1,7 +1,7 @@
 /** Serializable live position (dates as ISO strings). */
 export interface PersistedLivePosition {
   pair: string;
-  side: "flat" | "long";
+  side: "flat" | "long" | "short";
   size: number;
   entryPrice: number;
   openedAt?: string;

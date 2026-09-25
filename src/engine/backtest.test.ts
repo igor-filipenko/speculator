@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
-import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
-import { PaperPortfolio } from "../paper/portfolio.js";
+import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
 import {
   evaluateMarketIndicators,

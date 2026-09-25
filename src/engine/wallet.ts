@@ -1,5 +1,5 @@
 import { assertTradeConfig, type AppConfig } from "../config.js";
-import { exportWalletSecrets, loadKeypairFromFile } from "../exchange/wallet.js";
+import { exportWalletSecrets, loadKeypairFromFile } from "../portfolio/wallet/wallet.js";
 import { logPortfolio } from "../notify/console.js";
 import { createLiveRuntime } from "./trade.js";
 

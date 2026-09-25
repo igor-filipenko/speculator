@@ -18,10 +18,10 @@ function formatUsdc(n: number): string {
 
 function PositionLine({ item }: { item: PortfolioItemDto }) {
   const { position } = item;
-  if (position.side === "long") {
+  if (position.side === "long" || position.side === "short") {
     return (
       <span>
-        long {position.size.toFixed(6)} @ {position.entryPrice.toFixed(6)}
+        {position.side} {position.size.toFixed(6)} @ {position.entryPrice.toFixed(6)}
       </span>
     );
   }

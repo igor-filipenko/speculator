@@ -10,16 +10,17 @@ import {
   persistSignal,
 } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
-import type {
-  Candle,
-  Exchange,
-  MarketIndicators,
-  PairConfig,
-  Portfolio,
-  ProgramState,
-  ShutdownCb,
-  Signal,
-  StrategyManager,
+import {
+  isOrder,
+  type Candle,
+  type Exchange,
+  type MarketIndicators,
+  type PairConfig,
+  type Portfolio,
+  type ProgramState,
+  type ShutdownCb,
+  type Signal,
+  type StrategyManager,
 } from "../types.js";
 
 export interface TradingLoopOptions {
@@ -69,6 +70,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[${pair.symbol}] tick failed: ${message}`);
+        await options.telegram.notify({ type: "error", pair: pair.symbol, message });
       }
     }
   };
@@ -199,8 +201,9 @@ export async function processPair(args: {
   const command = result.command;
 
   const order = await exchange.execute(command, pair);
-  if (!order) {
-    console.error(`[${pair.symbol}] no order, exchange returned null`);
+  if (!isOrder(order)) {
+    console.error(`[${pair.symbol}] ${order.message}`);
+    await telegram.notify({ type: "error", pair: pair.symbol, message: order.message });
     return;
   }
 

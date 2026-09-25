@@ -14,7 +14,7 @@ Build/run: [README.md](./README.md).
 - The Mini App server (`server/`) is **read-only** (health + portfolio). It must not place orders or call Jupiter.
 - Candle-replay **backtest** (`pnpm backtest`): Gecko OHLCV + Timescale `market.candles` cache + Jupiter-like fee/slippage emulation.
 - Candle-replay **regime** (`pnpm regime`): same HTF/1h close cadence as backtest; logs trend/vol switches and draws a CLI chart. No fills.
-- **Do not** add shorts, leverage, or multi-position sizing.
+- One position per pair: `long` or `short` or `flat`. No leverage multiplier and no multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended). Rust toolchain required for `server/`.
 - Comments and user-facing docs in this repo are **English**.
 - Format with **Prettier** (`pnpm format`); `pnpm check` includes `format:check`. Prefer the Prettier VS Code/Cursor extension (format on save is enabled in `.vscode/settings.json`).
@@ -39,10 +39,10 @@ src/ highlights:
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (portfolios, trades, signals, candles, tokens, pools)
   market/               # Gecko OHLCV + HTF/1h MarketIndicators
-  exchange/             # Jupiter paper/live + wallet + emulated fills
+  exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators + bollinger/grid/donchian + SVGs
   risk/risk-manager.ts
-  paper/ live/          # portfolio + store
+  portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
   engine/               # watch | paper | trade | wallet | backtest | regime
   chart/render-png.ts
@@ -54,7 +54,7 @@ src/ highlights:
 - Strategy knobs live on the mode `*Params` object (`gridParamsFor` / `bollingerParamsFor` / …). Do not add magic numbers inside `evaluate*`.
 - Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
-- One long position per pair: ignore BUY when already long; ignore SELL when flat.
+- One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
 - When changing strategy defaults, update `.env.example` (and README) together.
 - After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0`).
 - Keep TypeScript strict flags in `tsconfig.json` and type-aware rules in `eslint.config.js`; do not weaken them without discussion.

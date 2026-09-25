@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair } from "@solana/web3.js";
 import { WSOL_MINT } from "./amounts.js";
+import { ExchangeError } from "../error.js";
+import { isOrder, type BalanceSource, type Command, type PairConfig } from "../../types.js";
 import { JupiterSwapExchange } from "./jupiter-swap.js";
-import type { BalanceSource } from "./wallet.js";
-import type { Command, PairConfig } from "../types.js";
 
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -27,13 +27,8 @@ const TOKEN_PAIR: PairConfig = {
 };
 
 class FakeBalances implements BalanceSource {
-  readonly owner: PublicKey;
   native = 1;
   tokens = new Map<string, number>([[USDC, 10]]);
-
-  constructor() {
-    this.owner = Keypair.generate().publicKey;
-  }
 
   async refresh(_mints: readonly string[]): Promise<void> {
     /* no-op */
@@ -62,6 +57,7 @@ function buyCommand(pair = "SOL/USDC"): Command {
   return {
     pair,
     side: "BUY",
+    intent: "open-long",
     reason: "test",
     at: new Date("2026-08-20T00:00:00.000Z"),
     priceHint: 100,
@@ -73,6 +69,7 @@ function sellCommand(pair = "SOL/USDC"): Command {
   return {
     pair,
     side: "SELL",
+    intent: "close-long",
     reason: "test",
     at: new Date("2026-08-20T00:00:00.000Z"),
     priceHint: 100,
@@ -130,7 +127,7 @@ describe("JupiterSwapExchange.execute", () => {
     });
 
     const order = await exchange.execute(buyCommand(), PAIR);
-    assert.ok(order);
+    assert.ok(isOrder(order));
     assert.equal(order.simulated, false);
     assert.equal(order.txSignature, "Sig111");
     assert.equal(order.size, 0.01);
@@ -142,7 +139,7 @@ describe("JupiterSwapExchange.execute", () => {
     assert.ok(execute?.body?.includes("req-1"));
   });
 
-  it("returns null when /execute reports Failed", async () => {
+  it("returns an error when /execute reports Failed", async () => {
     const fetchImpl: typeof fetch = (input) => {
       const url = requestUrl(input);
       if (url.includes("/order")) {
@@ -162,7 +159,8 @@ describe("JupiterSwapExchange.execute", () => {
     });
 
     const order = await exchange.execute(buyCommand(), PAIR);
-    assert.equal(order, null);
+    assert.ok(!isOrder(order));
+    assert.match(order.message, /slippage/);
   });
 
   it("allows BUY SOL when native SOL is below the fee reserve", async () => {
@@ -197,7 +195,7 @@ describe("JupiterSwapExchange.execute", () => {
     });
 
     const order = await exchange.execute(buyCommand(), PAIR);
-    assert.ok(order);
+    assert.ok(isOrder(order));
     assert.equal(order.txSignature, "SigLowSol");
     assert.equal(fetched, true);
   });
@@ -214,7 +212,8 @@ describe("JupiterSwapExchange.execute", () => {
     });
 
     const order = await exchange.execute(buyCommand(TOKEN_PAIR.symbol), TOKEN_PAIR);
-    assert.equal(order, null);
+    assert.ok(!isOrder(order));
+    assert.match(order.message, /native SOL/);
     assert.equal(fetched.value, false);
   });
 
@@ -230,7 +229,64 @@ describe("JupiterSwapExchange.execute", () => {
     });
 
     const order = await exchange.execute(sellCommand(), PAIR);
-    assert.equal(order, null);
+    assert.ok(!isOrder(order));
+    assert.match(order.message, /native SOL/);
     assert.equal(fetched.value, false);
+  });
+
+  it("opens a short through jupiter perps", async () => {
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = (input, init) => {
+      const url = requestUrl(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("/positions/increase")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              serializedTxBase64: "dHh4",
+              quote: { averagePriceUsd: "100000000", sizeTokenDelta: "1000000000" },
+            }),
+          ),
+        );
+      }
+      if (url.includes("/transaction/execute")) {
+        return Promise.resolve(new Response(JSON.stringify({ txid: "PerpsSig" })));
+      }
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    };
+    const exchange = new JupiterSwapExchange({
+      keypair: Keypair.generate(),
+      balances: new FakeBalances(),
+      fetchImpl,
+      signTransaction: (tx) => tx,
+      perpsBaseUrl: "https://perps.test/v1",
+    });
+    const order = await exchange.execute(
+      { ...sellCommand(), intent: "open-short", quoteBudgetUsdc: 10 },
+      PAIR,
+    );
+    assert.ok(isOrder(order));
+    assert.equal(order.side, "SELL");
+    assert.equal(order.price, 100);
+    assert.equal(order.size, 1);
+    assert.equal(order.txSignature, "PerpsSig");
+    assert.ok(calls.some((call) => call.includes("/positions/increase")));
+  });
+
+  it("rejects a perps short on a market jupiter does not list", async () => {
+    const exchange = new JupiterSwapExchange({
+      keypair: Keypair.generate(),
+      balances: new FakeBalances(),
+      fetchImpl: () => {
+        throw new Error("network");
+      },
+      signTransaction: (tx) => tx,
+    });
+    const order = await exchange.execute(
+      { ...sellCommand(TOKEN_PAIR.symbol), intent: "open-short", quoteBudgetUsdc: 10 },
+      TOKEN_PAIR,
+    );
+    assert.ok(order instanceof ExchangeError);
+    assert.ok(order.message.includes("no market"));
   });
 });

@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config.js";
-import { JupiterExchange } from "../exchange/jupiter.js";
+import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
 import { fetchCandles } from "../market/gecko-terminal.js";
 import { refreshMarketIndicators } from "../market/htf-indicators.js";
 import { logMarket, logSignal, persistSignal } from "../notify/console.js";

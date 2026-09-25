@@ -28,8 +28,7 @@
     "web:dev": "pnpm --dir web dev",
     "web:build": "pnpm --dir web build",
     "server:build": "cargo build --release --manifest-path server/Cargo.toml",
-    "server:dev": "cargo run --manifest-path server/Cargo.toml",
-    "install-runtime": "node scripts/install-runtime.mjs"
+    "server:dev": "cargo run --manifest-path server/Cargo.toml"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

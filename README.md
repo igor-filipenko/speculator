@@ -356,10 +356,8 @@ src/
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters
-  exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
-  exchange/jupiter-swap.ts # live Swap API V2 order + execute
-  exchange/wallet.ts       # JSON keypair + RPC balances
-  exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
+  exchange/jupiter/        # spot long (Swap API V2) + perps short
+  exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
@@ -371,9 +369,9 @@ src/
   strategy/mode/grid-svg.ts      # grid SVG for /chart
   strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
-  paper/portfolio.ts
-  paper/store.ts           # paper load/save (Timescale bot.* mode=paper)
-  live/portfolio.ts        # on-chain cash/size + ledger
+  portfolio/paper/         # simulated cash book + Timescale mode=paper
+  portfolio/live/          # on-chain cash/size + ledger
+  portfolio/wallet/        # JSON keypair + RPC balances
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio
   engine/tick.ts           # shared paper/trade poll loop

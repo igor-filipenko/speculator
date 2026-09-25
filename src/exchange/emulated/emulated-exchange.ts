@@ -1,4 +1,5 @@
-import type { Command, Exchange, Order, PairConfig } from "../types.js";
+import { ExchangeError } from "../error.js";
+import type { Command, Error, Exchange, Order, PairConfig } from "../../types.js";
 import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 
 /**
@@ -19,9 +20,9 @@ export class EmulatedExchange implements Exchange {
     return Promise.resolve(this.mid);
   }
 
-  execute(command: Command, pair: PairConfig): Promise<Order> {
+  execute(command: Command, pair: PairConfig): Promise<Order | Error> {
     if (!(this.mid > 0)) {
-      return Promise.reject(new Error("EmulatedExchange: mid price not set"));
+      return Promise.resolve(new ExchangeError("EmulatedExchange: mid price not set"));
     }
 
     const tier = liquidityTierForPair(pair.symbol);
@@ -34,17 +35,18 @@ export class EmulatedExchange implements Exchange {
       poolFeeUsdcPerBase: breakdown.poolFeeUsdcPerBase,
     };
 
-    if (command.side === "BUY") {
+    const opens = command.intent === "open-long" || command.intent === "open-short";
+    if (opens) {
       const budget = command.quoteBudgetUsdc ?? 0;
       const spendable = budget - priorityFeeUsdc;
       if (spendable <= 0) {
-        return Promise.reject(
-          new Error("EmulatedExchange: BUY budget too small after priority fee"),
+        return Promise.resolve(
+          new ExchangeError("EmulatedExchange: open budget too small after priority fee"),
         );
       }
       return Promise.resolve({
         pair: command.pair,
-        side: "BUY",
+        side: command.side,
         price: fillPrice,
         size: spendable / fillPrice,
         at: command.at,
@@ -57,11 +59,11 @@ export class EmulatedExchange implements Exchange {
 
     const size = command.baseSize ?? 0;
     if (size <= 0) {
-      return Promise.reject(new Error("EmulatedExchange: SELL requires baseSize > 0"));
+      return Promise.resolve(new ExchangeError("EmulatedExchange: close requires baseSize > 0"));
     }
     return Promise.resolve({
       pair: command.pair,
-      side: "SELL",
+      side: command.side,
       price: fillPrice,
       size,
       at: command.at,

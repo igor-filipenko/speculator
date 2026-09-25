@@ -22,7 +22,8 @@ type TelegramInfo =
   | { type: "signal"; signal: Signal }
   | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade }
-  | { type: "market"; market: MarketIndicators; previous?: Trend };
+  | { type: "market"; market: MarketIndicators; previous?: Trend }
+  | { type: "error"; pair?: string; message: string };
 
 const PARSE_MODE = "MarkdownV2" as const;
 
@@ -88,6 +89,7 @@ async function notifyTelegram(
           ? formatMarketMessage(market, previous)
           : formatMarketMessage(market),
       )
+      .with({ type: "error" }, ({ pair, message }) => formatErrorMessage(pair, message))
       .exhaustive();
 
     if (text == null) {
@@ -420,6 +422,18 @@ export function formatMarketIndicatorsListMessage(
   return ["📡 *Market*", ...blocks].join("\n\n");
 }
 
+export function formatErrorMessage(pair: string | undefined, message: string): string {
+  const where = pair != null ? `*${escapeMd(pair)}* ` : "";
+  return [`⚠️ ${where}*ERROR*`, escapeMd(message)].join("\n");
+}
+
+function formatPosition(position: { side: string; size: number; entryPrice: number }): string {
+  if (position.side === "flat") {
+    return "flat";
+  }
+  return `${position.side} ${position.size.toFixed(6)} @ ${position.entryPrice.toFixed(6)}`;
+}
+
 function formatPortfolioMessage(
   portfolios: Map<string, Portfolio>,
   lastSignals: Map<string, Signal>,
@@ -432,10 +446,7 @@ function formatPortfolioMessage(
   for (const [pair, portfolio] of portfolios) {
     const markPrice = lastSignals.get(pair)?.price ?? 0;
     const snapshot = portfolio.getSnapshot(markPrice);
-    const pos =
-      snapshot.position.side === "long"
-        ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-        : "flat";
+    const pos = formatPosition(snapshot.position);
 
     blocks.push(
       "",

@@ -1,4 +1,5 @@
-import type { Command, Exchange, Order, PairConfig } from "../types.js";
+import { ExchangeError } from "../error.js";
+import type { Command, Error, Exchange, Order, PairConfig } from "../../types.js";
 
 export interface JupiterQuote {
   inputMint: string;
@@ -48,16 +49,22 @@ export class JupiterExchange implements Exchange {
    * Simulate a fill at the current Jupiter spot (paper trading).
    * Does not submit an on-chain swap.
    */
-  async execute(command: Command, pair: PairConfig): Promise<Order> {
-    const price = await this.spotPrice(pair);
+  async execute(command: Command, pair: PairConfig): Promise<Order | Error> {
+    let price: number;
+    try {
+      price = await this.spotPrice(pair);
+    } catch (err) {
+      const message = err instanceof globalThis.Error ? err.message : String(err);
+      return new ExchangeError(message);
+    }
     if (!(price > 0)) {
-      throw new Error(`JupiterExchange: invalid spot price ${price} for ${pair.symbol}`);
+      return new ExchangeError(`JupiterExchange: invalid spot price ${price} for ${pair.symbol}`);
     }
 
     if (command.side === "BUY") {
       const budget = command.quoteBudgetUsdc ?? 0;
       if (budget <= 0) {
-        throw new Error(`JupiterExchange: BUY requires quoteBudgetUsdc > 0`);
+        return new ExchangeError("JupiterExchange: BUY requires quoteBudgetUsdc > 0");
       }
       return {
         pair: command.pair,
@@ -73,7 +80,7 @@ export class JupiterExchange implements Exchange {
 
     const size = command.baseSize ?? 0;
     if (size <= 0) {
-      throw new Error(`JupiterExchange: SELL requires baseSize > 0`);
+      return new ExchangeError("JupiterExchange: SELL requires baseSize > 0");
     }
     return {
       pair: command.pair,

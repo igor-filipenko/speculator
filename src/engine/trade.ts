@@ -1,8 +1,8 @@
 import { Connection } from "@solana/web3.js";
 import { assertTradeConfig, isPublicSolanaRpc, type AppConfig } from "../config.js";
-import { JupiterSwapExchange } from "../exchange/jupiter-swap.js";
-import { loadKeypairFromFile, WalletBalances } from "../exchange/wallet.js";
-import { LivePortfolio } from "../live/portfolio.js";
+import { JupiterSwapExchange } from "../exchange/jupiter/jupiter-swap.js";
+import { LivePortfolio } from "../portfolio/live/portfolio.js";
+import { loadKeypairFromFile, WalletBalances } from "../portfolio/wallet/wallet.js";
 import { Telegram } from "../notify/telegram.js";
 import type { Exchange, Portfolio, ProgramState, ShutdownCb, StrategyManager } from "../types.js";
 import { runTradingLoop } from "./tick.js";
@@ -19,7 +19,7 @@ export interface TradeOptions {
 
 export interface LiveRuntime {
   portfolios: Map<string, Portfolio>;
-  exchange: JupiterSwapExchange;
+  exchange: Exchange;
   walletAddress: string;
 }
 
@@ -40,15 +40,16 @@ export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime>
     httpAgent: false,
   });
   const balances = new WalletBalances(connection, keypair.publicKey);
-  const portfolios = await LivePortfolio.load(config.pairs, balances, {
-    solReserve: config.liveSolReserveSol,
-  });
   const exchange = new JupiterSwapExchange({
     apiKey: config.jupiterApiKey,
     keypair,
     balances,
     slippageBps: config.slippageBps,
     solReserve: config.liveSolReserveSol,
+  });
+  const portfolios = await LivePortfolio.load(config.pairs, balances, {
+    solReserve: config.liveSolReserveSol,
+    positions: exchange,
   });
 
   return {

@@ -16,9 +16,9 @@ import {
   type StrategyManager,
   type Trade,
 } from "../types.js";
-import { intraBarTicks } from "./intra-bar.js";
-import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
-import { parseReplayDate, readFlagValue, resolveReplayWindow } from "./replay-window.js";
+import { intraBarTicks } from "../backtest/intra-bar.js";
+import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
+import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
 export { parseReplayDate as parseBacktestDate, resolveReplayWindow as resolveBacktestWindow };
 

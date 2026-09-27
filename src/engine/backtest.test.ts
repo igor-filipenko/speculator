@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
-import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager, HighRiskManager } from "../strategy/risk-manager.js";
 import {
   evaluateMarketIndicators,
   htfParamsFor,
@@ -26,7 +26,7 @@ import {
   runBacktest,
   computeBuyHoldEquity,
 } from "./backtest.js";
-import { intraBarPrices } from "./intra-bar.js";
+import { intraBarPrices } from "../backtest/intra-bar.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 

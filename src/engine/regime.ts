@@ -17,8 +17,8 @@ import type {
   Trend,
   Volatility,
 } from "../types.js";
-import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
-import { parseReplayDate, readFlagValue, resolveReplayWindow } from "./replay-window.js";
+import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
+import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
 export interface RegimeCliOptions {
   /** Lookback window in calendar days (0 = 90-day default, ignored when from/to set). */

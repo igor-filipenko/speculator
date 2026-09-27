@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 import type { Candle } from "../types.js";
 import {
   classifyHighLow,

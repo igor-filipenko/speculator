@@ -6,7 +6,7 @@ import {
   type HtfParams,
   type MtfParams,
 } from "../market/htf.js";
-import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 import type {
   Candle,
   HtfTimeframe,

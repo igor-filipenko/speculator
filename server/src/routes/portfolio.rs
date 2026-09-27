@@ -61,29 +61,33 @@ pub async fn portfolio(
     headers: HeaderMap,
     Query(query): Query<PortfolioQuery>,
 ) -> Result<Json<PortfolioResponse>, (StatusCode, Json<ErrorBody>)> {
-    let auth_header = match headers.get("authorization") {
-        None => None,
-        Some(value) => match value.to_str() {
-            Ok(s) => Some(s),
-            Err(err) => {
-                tracing::warn!(error = %err, "telegram Authorization header is not ASCII");
-                return Err(map_auth(AuthError::BadScheme));
-            }
-        },
-    };
-    tracing::debug!(
-        has_authorization = auth_header.is_some(),
-        header_names = ?headers.keys().map(|n| n.as_str()).collect::<Vec<_>>(),
-        "portfolio auth headers"
-    );
-    let init_data = extract_tma_init_data(auth_header).map_err(map_auth)?;
-    validate_init_data(
-        init_data,
-        &state.config.telegram_bot_token,
-        state.config.telegram_allowed_user_id,
-        state.config.init_data_max_age_secs,
-    )
-    .map_err(map_auth)?;
+    if state.config.skip_auth {
+        tracing::debug!("portfolio auth skipped (--dev)");
+    } else {
+        let auth_header = match headers.get("authorization") {
+            None => None,
+            Some(value) => match value.to_str() {
+                Ok(s) => Some(s),
+                Err(err) => {
+                    tracing::warn!(error = %err, "telegram Authorization header is not ASCII");
+                    return Err(map_auth(AuthError::BadScheme));
+                }
+            },
+        };
+        tracing::debug!(
+            has_authorization = auth_header.is_some(),
+            header_names = ?headers.keys().map(|n| n.as_str()).collect::<Vec<_>>(),
+            "portfolio auth headers"
+        );
+        let init_data = extract_tma_init_data(auth_header).map_err(map_auth)?;
+        validate_init_data(
+            init_data,
+            &state.config.telegram_bot_token,
+            state.config.telegram_allowed_user_id,
+            state.config.init_data_max_age_secs,
+        )
+        .map_err(map_auth)?;
+    }
 
     let mode = query.mode.trim().to_ascii_lowercase();
     if mode != "paper" && mode != "live" {

@@ -9,8 +9,10 @@ Axum + Tokio HTTP server for the Speculator Telegram Mini App.
 ```bash
 # from repo root
 pnpm web:build
-pnpm server:dev
+pnpm server:dev   # passes --dev (skips Telegram auth)
 ```
+
+`--dev` skips Telegram `initData` validation and makes `TELEGRAM_*` env optional. Use only for local testing; production (`pnpm server:build` / `miniapp.service`) must not pass `--dev`.
 
 Env: `DATABASE_URL`, `BOT_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID` (or `TELEGRAM_CHAT_ID`), `WEB_LISTEN`, `WEB_STATIC_DIR`.
 

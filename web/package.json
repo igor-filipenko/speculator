@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "VITE_SKIP_TELEGRAM_AUTH=1 vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

@@ -65,7 +65,7 @@ function PortfolioCard({ item }: { item: PortfolioItemDto }) {
 }
 
 export function PortfolioView() {
-  const [mode, setMode] = useState<PortfolioMode>("paper");
+  const [mode, setMode] = useState<PortfolioMode>("live");
   const [data, setData] = useState<PortfolioResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,14 +100,14 @@ export function PortfolioView() {
         <div className="flex gap-2">
           <Button
             size="sm"
-            variant={mode === "paper" ? "default" : "outline"}
+            variant={mode === "paper" ? "outline" : "default"}
             onClick={() => setMode("paper")}
           >
             Paper
           </Button>
           <Button
             size="sm"
-            variant={mode === "live" ? "default" : "outline"}
+            variant={mode === "live" ? "outline" : "default"}
             onClick={() => setMode("live")}
           >
             Live

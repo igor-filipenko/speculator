@@ -28,11 +28,14 @@ export async function fetchPortfolio(
   initData: string,
   mode: PortfolioMode,
 ): Promise<PortfolioResponse> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (initData) {
+    headers.Authorization = `tma ${initData}`;
+  }
   const res = await fetch(`/api/portfolio?mode=${encodeURIComponent(mode)}`, {
-    headers: {
-      Authorization: `tma ${initData}`,
-      Accept: "application/json",
-    },
+    headers,
   });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;

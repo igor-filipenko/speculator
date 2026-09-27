@@ -15,7 +15,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
+use crate::config::{parse_cli_args, Config};
 use crate::db::Db;
 use crate::routes::{health, portfolio};
 
@@ -33,11 +33,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .init();
 
+    let skip_auth = parse_cli_args()?;
     let _ = dotenvy::dotenv();
-    let config = Config::from_env()?;
+    let config = Config::from_env(skip_auth)?;
+    if config.skip_auth {
+        tracing::warn!("--dev: Telegram auth DISABLED (local testing only)");
+    }
     tracing::info!(
         listen = %config.listen,
         bot_id = %config.bot_id,
+        skip_auth = config.skip_auth,
         allowed_user_id = config.telegram_allowed_user_id,
         token_len = config.telegram_bot_token.len(),
         static_dir = %config.static_dir.display(),

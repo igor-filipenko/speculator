@@ -1,4 +1,4 @@
-//! Process config from environment.
+//! Process config from environment / CLI flags.
 
 use std::path::PathBuf;
 
@@ -12,23 +12,37 @@ pub struct Config {
     pub static_dir: PathBuf,
     /// Max age of Telegram `auth_date` in seconds (default 24h).
     pub init_data_max_age_secs: u64,
+    /// When true (`--dev`), skip Telegram `initData` auth (local testing only).
+    pub skip_auth: bool,
 }
 
 impl Config {
-    pub fn from_env() -> Result<Self, String> {
+    pub fn from_env(skip_auth: bool) -> Result<Self, String> {
         let database_url = normalize_database_url(&required("DATABASE_URL")?);
         let bot_id = env_or("BOT_ID", "local");
-        let telegram_bot_token = required("TELEGRAM_BOT_TOKEN")?;
-        let allowed = env_or("TELEGRAM_ALLOWED_USER_ID", "").trim().to_string();
-        let allowed = if allowed.is_empty() {
-            // Fall back to TELEGRAM_CHAT_ID (private chat id == user id).
-            required("TELEGRAM_CHAT_ID")?
+
+        let (telegram_bot_token, telegram_allowed_user_id) = if skip_auth {
+            // Telegram secrets are unused when auth is skipped.
+            let token = optional("TELEGRAM_BOT_TOKEN").unwrap_or_default();
+            let allowed = optional("TELEGRAM_ALLOWED_USER_ID")
+                .or_else(|| optional("TELEGRAM_CHAT_ID"))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            (token, allowed)
         } else {
-            allowed
+            let telegram_bot_token = required("TELEGRAM_BOT_TOKEN")?;
+            let allowed = env_or("TELEGRAM_ALLOWED_USER_ID", "").trim().to_string();
+            let allowed = if allowed.is_empty() {
+                // Fall back to TELEGRAM_CHAT_ID (private chat id == user id).
+                required("TELEGRAM_CHAT_ID")?
+            } else {
+                allowed
+            };
+            let telegram_allowed_user_id: i64 = allowed
+                .parse()
+                .map_err(|_| "TELEGRAM_ALLOWED_USER_ID / TELEGRAM_CHAT_ID must be an integer")?;
+            (telegram_bot_token, telegram_allowed_user_id)
         };
-        let telegram_allowed_user_id: i64 = allowed
-            .parse()
-            .map_err(|_| "TELEGRAM_ALLOWED_USER_ID / TELEGRAM_CHAT_ID must be an integer")?;
 
         let listen = env_or("WEB_LISTEN", "127.0.0.1:8787");
         let static_dir = PathBuf::from(env_or("WEB_STATIC_DIR", "web/dist"));
@@ -44,8 +58,29 @@ impl Config {
             listen,
             static_dir,
             init_data_max_age_secs,
+            skip_auth,
         })
     }
+}
+
+/// Parse CLI flags. Returns `true` when `--dev` is set.
+pub fn parse_cli_args() -> Result<bool, String> {
+    let mut skip_auth = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--dev" => skip_auth = true,
+            "-h" | "--help" => {
+                eprintln!(
+                    "Usage: speculator-web [--dev]\n\n\
+                     --dev   Skip Telegram initData auth (local testing only)\n\
+                     -h, --help   Show this help"
+                );
+                std::process::exit(0);
+            }
+            other => return Err(format!("unknown argument: {other}")),
+        }
+    }
+    Ok(skip_auth)
 }
 
 fn required(key: &str) -> Result<String, String> {

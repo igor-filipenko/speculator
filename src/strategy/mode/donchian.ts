@@ -135,7 +135,7 @@ export interface DonchianInput {
   /** When the long was opened; peak is max high of overlapping candles. */
   openedAt?: Date;
   /** When true, breakouts are ignored (HTF bearish/unknown). Exits still fire. */
-  doNotBuy?: boolean;
+  trend: Trend;
 }
 
 /**
@@ -221,30 +221,27 @@ export function evaluateDonchian(input: DonchianInput): Signal {
     ? `No Donchian signal (close=${fmt(close)}, upper=${fmt(entryUpperPrev)}, exitLow=${fmt(exitLowerPrev)}, vol=${fmt(volume)}, volSMA=${fmt(volumeSmaPrev)})`
     : `No Donchian signal (waiting for closed 15m breakout; close=${fmt(close)}, upper=${fmt(entryUpperPrev)}, exitLow=${fmt(exitLowerPrev)})`;
 
-  if (
-    input.entryPrice != null &&
-    input.entryPrice > 0 &&
-    strategy.givebackAtrMult > 0 &&
-    gaveBackFromPeak({
-      entryPrice: input.entryPrice,
-      openedAt: input.openedAt,
-      candles,
-      timeframe: strategy.timeframe,
-      atrNow,
-      givebackAtrMult: strategy.givebackAtrMult,
-      close,
-      price,
-    })
-  ) {
+  const gaveBack = input.entryPrice && gaveBackFromPeak({
+    entryPrice: input.entryPrice,
+    openedAt: input.openedAt,
+    candles,
+    timeframe: strategy.timeframe,
+    atrNow,
+    givebackAtrMult: strategy.givebackAtrMult,
+    close,
+    price
+  })
+
+  if (input.entryPrice && gaveBack) {
     const peak = holdPeak(input.entryPrice, input.openedAt, candles, strategy.timeframe);
     const level = peak - strategy.givebackAtrMult * atrNow;
     side = "SELL";
     reason = `Gave back ${strategy.givebackAtrMult}×ATR from peak ${fmt(peak)} (level ${fmt(level)}, ATR=${fmt(atrNow)})`;
-  } else if (brokeLower) {
+  } else if (input.entryPrice && brokeLower) {
     side = "SELL";
     reason = `Donchian exit: close broke prior ${strategy.exitPeriod}-bar low (prev ${fmt(closePrev)} ≥ ${fmt(exitLowerPrev)}, close ${fmt(close)} < ${fmt(exitLowerPrev)})`;
   } else if (brokeUpper) {
-    if (input.doNotBuy) {
+    if (input.trend !== "bullish" && input.trend !== "flat") {
       reason = `Breakout ignored: HTF trend not bullish or flat`;
     } else if (close <= entryUpperPrev + breakMargin) {
       reason =
@@ -324,7 +321,7 @@ export class DonchianStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      doNotBuy: market.trend !== "bullish" && market.trend !== "flat",
+      trend: market.trend,
       ...(entryPrice != null ? { entryPrice } : {}),
       ...(position?.openedAt != null ? { openedAt: position.openedAt } : {}),
     });
@@ -363,6 +360,10 @@ function gaveBackFromPeak(input: {
   close: number;
   price: number;
 }): boolean {
+  if (input.entryPrice <= 0 || input.givebackAtrMult <= 0) {
+    return false;
+  }
+
   const peak = holdPeak(input.entryPrice, input.openedAt, input.candles, input.timeframe);
   const level = peak - input.givebackAtrMult * input.atrNow;
   return input.close <= level || input.price <= level;

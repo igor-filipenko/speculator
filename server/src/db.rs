@@ -1,4 +1,4 @@
-//! Timescale / Postgres access for portfolio reads.
+//! Timescale / Postgres access for read-only Mini App queries.
 
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
@@ -20,6 +20,21 @@ pub struct PortfolioRow {
     pub opened_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub simulated: bool,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct SignalRow {
+    pub pair: String,
+    pub side: String,
+    pub price: f64,
+    pub reason: String,
+    pub at: DateTime<Utc>,
+    pub ema_fast: Option<f64>,
+    pub ema_slow: Option<f64>,
+    pub rsi: Option<f64>,
+    pub trend_ema: Option<f64>,
+    pub atr: Option<f64>,
+    pub adx: Option<f64>,
 }
 
 impl Db {
@@ -57,6 +72,33 @@ impl Db {
         .bind(bot_id)
         .bind(mode)
         .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Newest strategy signal for this bot (`market.signals`).
+    pub async fn latest_signal(&self, bot_id: &str) -> Result<Option<SignalRow>, sqlx::Error> {
+        sqlx::query_as::<_, SignalRow>(
+            r#"
+            SELECT
+              pair,
+              side,
+              price,
+              reason,
+              "at",
+              ema_fast,
+              ema_slow,
+              rsi,
+              trend_ema,
+              atr,
+              adx
+            FROM market.signals
+            WHERE bot_id = $1
+            ORDER BY "at" DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(bot_id)
+        .fetch_optional(&self.pool)
         .await
     }
 }

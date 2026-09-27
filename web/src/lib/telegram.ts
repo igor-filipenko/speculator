@@ -26,7 +26,7 @@ export function getInitData(): string {
 
 /** Local Vite only: set via `pnpm web:dev` (`VITE_SKIP_TELEGRAM_AUTH=1`). */
 export function skipTelegramAuth(): boolean {
-  return import.meta.env.VITE_SKIP_TELEGRAM_AUTH === "1";
+  return import.meta.env["VITE_SKIP_TELEGRAM_AUTH"] === "1";
 }
 
 /** True when opened inside Telegram with signed initData (or local skip). */

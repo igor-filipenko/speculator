@@ -28,6 +28,7 @@
     "build": "tsc -p tsconfig.build.json",
     "web:dev": "pnpm --dir web dev",
     "web:build": "pnpm --dir web build",
+    "web:check": "pnpm --dir web check",
     "server:build": "cargo build --release --manifest-path server/Cargo.toml",
     "server:dev": "cargo run --manifest-path server/Cargo.toml -- --dev"
   },

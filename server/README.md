@@ -3,6 +3,7 @@
 Axum + Tokio HTTP server for the Speculator Telegram Mini App.
 
 - `GET /api/health` — liveness (no auth)
+- `GET /api/signal` — newest `market.signals` row for `BOT_ID` (`Authorization: tma <initData>`)
 - `GET /api/portfolio?mode=paper|live` — portfolio for `BOT_ID` (`Authorization: tma <initData>`)
 - Serves static files from `WEB_STATIC_DIR` (default `web/dist`)
 

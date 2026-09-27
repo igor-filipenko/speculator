@@ -89,31 +89,23 @@ export function PortfolioView() {
   }, [load]);
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-lg flex-col gap-4 px-4 py-6">
-      <header className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Speculator
-          </p>
-          <h1 className="text-2xl font-semibold tracking-tight">Portfolio</h1>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant={mode === "paper" ? "outline" : "default"}
-            onClick={() => setMode("paper")}
-          >
-            Paper
-          </Button>
-          <Button
-            size="sm"
-            variant={mode === "live" ? "outline" : "default"}
-            onClick={() => setMode("live")}
-          >
-            Live
-          </Button>
-        </div>
-      </header>
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end gap-2">
+        <Button
+          size="sm"
+          variant={mode === "paper" ? "outline" : "default"}
+          onClick={() => setMode("paper")}
+        >
+          Paper
+        </Button>
+        <Button
+          size="sm"
+          variant={mode === "live" ? "outline" : "default"}
+          onClick={() => setMode("live")}
+        >
+          Live
+        </Button>
+      </div>
 
       {loading ? (
         <div className="space-y-3">
@@ -136,7 +128,7 @@ export function PortfolioView() {
         </Card>
       ) : null}
 
-      {!loading && !error && data && data.portfolios.length === 0 ? (
+      {!loading && !error && data?.portfolios.length === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">No portfolio yet</CardTitle>
@@ -150,6 +142,6 @@ export function PortfolioView() {
       {!loading && !error && data
         ? data.portfolios.map((item) => <PortfolioCard key={item.pair} item={item} />)
         : null}
-    </main>
+    </div>
   );
 }

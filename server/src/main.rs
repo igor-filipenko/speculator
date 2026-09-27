@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::{parse_cli_args, Config};
 use crate::db::Db;
-use crate::routes::{health, portfolio};
+use crate::routes::{health, portfolio, signal};
 
 pub struct AppState {
     pub config: Config,
@@ -60,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let api = Router::new()
         .route("/health", get(health::health))
+        .route("/signal", get(signal::signal))
         .route("/portfolio", get(portfolio::portfolio))
         .with_state(state);
 

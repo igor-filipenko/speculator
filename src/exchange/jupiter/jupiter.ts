@@ -326,7 +326,9 @@ export class JupiterExchange implements Exchange, PositionSource {
     const balances = this.requireBalances();
     if (!hasFeeSol(balances.nativeSol(), this.solReserve)) {
       const nativeSol = balances.nativeSol();
-      return new ExchangeError(`abort perps: native SOL ${nativeSol} below reserve ${this.solReserve}`);
+      return new ExchangeError(
+        `abort perps: native SOL ${nativeSol} below reserve ${this.solReserve}`,
+      );
     }
     const wallet = this.requireKeypair().publicKey.toBase58();
     if (command.intent === "open-short") {

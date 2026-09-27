@@ -125,6 +125,9 @@ export class JupiterExchange implements Exchange, PositionSource {
   }
 
   async execute(command: Command, pair: PairConfig): Promise<Order | Error> {
+    if (command.orderType !== "market") {
+      return new ExchangeError(`JupiterExchange: ${command.orderType} orders are not supported`);
+    }
     if (this.keypair === undefined || this.balances === undefined) {
       return this.executeSimulated(command, pair);
     }
@@ -216,14 +219,16 @@ export class JupiterExchange implements Exchange, PositionSource {
       return new ExchangeError(`JupiterExchange: invalid spot price ${price} for ${pair.symbol}`);
     }
 
-    if (command.side === "BUY") {
+    const opens = command.intent === "open-long" || command.intent === "open-short";
+    if (opens) {
       const budget = command.quoteBudgetUsdc ?? 0;
       if (budget <= 0) {
-        return new ExchangeError("JupiterExchange: BUY requires quoteBudgetUsdc > 0");
+        return new ExchangeError("JupiterExchange: open requires quoteBudgetUsdc > 0");
       }
       return {
         pair: command.pair,
-        side: "BUY",
+        type: "market",
+        intent: command.intent,
         price,
         size: budget / price,
         at: command.at,
@@ -235,11 +240,12 @@ export class JupiterExchange implements Exchange, PositionSource {
 
     const size = command.baseSize ?? 0;
     if (size <= 0) {
-      return new ExchangeError("JupiterExchange: SELL requires baseSize > 0");
+      return new ExchangeError("JupiterExchange: close requires baseSize > 0");
     }
     return {
       pair: command.pair,
-      side: "SELL",
+      type: "market",
+      intent: command.intent,
       price,
       size,
       at: command.at,
@@ -301,7 +307,8 @@ export class JupiterExchange implements Exchange, PositionSource {
 
     const filled: Order = {
       pair: command.pair,
-      side,
+      type: "market",
+      intent: command.intent,
       price: fill.price,
       size: fill.size,
       at: command.at,
@@ -364,7 +371,8 @@ export class JupiterExchange implements Exchange, PositionSource {
   ): Order {
     const filled: Order = {
       pair: command.pair,
-      side: command.side,
+      type: "market",
+      intent: command.intent,
       price,
       size,
       at: command.at,

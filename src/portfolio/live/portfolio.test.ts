@@ -38,7 +38,8 @@ class FakeBalances implements BalanceSource {
 function buyOrder(overrides: Partial<Order> = {}): Order {
   return {
     pair: "SOL/USDC",
-    side: "BUY",
+    type: "market",
+    intent: "open-long",
     reason: "test buy",
     price: 100,
     size: 0.5,

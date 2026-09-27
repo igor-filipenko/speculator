@@ -183,9 +183,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
 
   async applyOrder(order: Order): Promise<Trade | null> {
     const before = this.position.side;
-    const nextTrade = match(order.side)
-      .with("BUY", () => (before === "short" ? this.closeShort(order) : this.openLong(order)))
-      .with("SELL", () => (before === "long" ? this.closeLong(order) : this.openShort(order)))
+    const nextTrade = match(order.intent)
+      .with("open-long", () => this.openLong(order))
+      .with("close-long", () => this.closeLong(order))
+      .with("open-short", () => this.openShort(order))
+      .with("close-short", () => this.closeShort(order))
       .exhaustive();
 
     if (nextTrade == null) {
@@ -193,7 +195,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     }
 
     await this.overlayChain(order.price);
-    if (order.side === "BUY" && before === "flat" && this.position.side !== "long") {
+    if (order.intent === "open-long" && before === "flat" && this.position.side !== "long") {
       // RPC can lag the fill; keep the just-opened long until the next refresh.
       this.position = {
         pair: this.pairConfig.symbol,
@@ -203,7 +205,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
         openedAt: order.at,
       };
     }
-    if (order.side === "SELL" && before === "flat" && this.position.side !== "short") {
+    if (order.intent === "open-short" && before === "flat" && this.position.side !== "short") {
       this.shortCollateralUsd = 0;
       this.position = {
         pair: this.pairConfig.symbol,

@@ -592,7 +592,8 @@ describe("PaperPortfolio applyOrder", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const buyOrder: Order = {
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "test",
       price: 100,
       size: 9.9,
@@ -606,7 +607,8 @@ describe("PaperPortfolio applyOrder", () => {
 
     const sellOrder: Order = {
       pair: "SOL/USDC",
-      side: "SELL",
+      type: "market",
+      intent: "close-long",
       reason: "test",
       price: 110,
       size: 9.9,

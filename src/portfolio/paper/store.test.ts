@@ -19,7 +19,8 @@ describe("paper store", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const trade = portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "test buy",
       price: 100,
       size: 10,
@@ -48,7 +49,8 @@ describe("paper store", () => {
     const sol = new PaperPortfolio("SOL/USDC", 1000);
     sol.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "sol buy",
       price: 100,
       size: 10,
@@ -61,7 +63,8 @@ describe("paper store", () => {
     const other = new PaperPortfolio("BONK/USDC", 500);
     other.applyOrderSync({
       pair: "BONK/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "bonk buy",
       price: 0.00001,
       size: 50_000_000,

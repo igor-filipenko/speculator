@@ -164,8 +164,8 @@ function longProtectiveExit(
 
   return {
     pair: position.pair,
-    side: "SELL",
     intent: "close-long",
+    orderType: "market",
     reason,
     at: signal.at,
     priceHint: exitLevel,
@@ -208,8 +208,8 @@ function shortProtectiveExit(
 
   return {
     pair: position.pair,
-    side: "BUY",
     intent: "close-short",
+    orderType: "market",
     reason,
     at: signal.at,
     priceHint: exitLevel,
@@ -298,8 +298,8 @@ function checkDirected(
       }
       return asCommand({
         pair: signal.pair,
-        side: "BUY",
         intent: "close-short",
+        orderType: "market",
         reason: signal.reason,
         at: signal.at,
         priceHint: signal.price,
@@ -317,8 +317,8 @@ function checkDirected(
     }
     return asCommand({
       pair: signal.pair,
-      side: "BUY",
       intent: "open-long",
+      orderType: "market",
       reason: signal.reason,
       at: signal.at,
       priceHint: signal.price,
@@ -339,8 +339,8 @@ function checkDirected(
       }
       return asCommand({
         pair: signal.pair,
-        side: "SELL",
         intent: "close-long",
+        orderType: "market",
         reason: signal.reason,
         at: signal.at,
         priceHint: signal.price,
@@ -358,8 +358,8 @@ function checkDirected(
     }
     return asCommand({
       pair: signal.pair,
-      side: "SELL",
       intent: "open-short",
+      orderType: "market",
       reason: signal.reason,
       at: signal.at,
       priceHint: signal.price,

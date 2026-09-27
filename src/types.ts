@@ -7,6 +7,8 @@ export type PositionSide = "flat" | "long" | "short";
 /** What a command does to the single position. */
 export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-short";
 
+export type OrderType = "market" | "limit";
+
 export type StrategyMode = "bollinger" | "grid" | "donchian";
 
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
@@ -194,8 +196,9 @@ export interface PortfolioSnapshot {
 /** Intent to trade after risk checks (not yet filled). */
 export interface Command {
   pair: string;
-  side: "BUY" | "SELL";
   intent: OrderIntent;
+  /** Only `market` is executed today. */
+  orderType: OrderType;
   reason: string;
   at: Date;
   /** Mid/spot hint from the signal before exchange costs. */
@@ -209,7 +212,8 @@ export interface Command {
 /** Fill returned by an exchange (simulated paper/backtest or live on-chain). */
 export interface Order {
   pair: string;
-  side: "BUY" | "SELL";
+  type: OrderType;
+  intent: OrderIntent;
   price: number;
   size: number;
   at: Date;
@@ -349,7 +353,7 @@ export interface Error {
 }
 
 export function isOrder(result: Order | Error): result is Order {
-  return "side" in result;
+  return "intent" in result;
 }
 
 export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

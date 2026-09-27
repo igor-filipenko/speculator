@@ -56,8 +56,8 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function buyCommand(pair = "SOL/USDC"): Command {
   return {
     pair,
-    side: "BUY",
     intent: "open-long",
+    orderType: "market",
     reason: "test",
     at: new Date("2026-08-20T00:00:00.000Z"),
     priceHint: 100,
@@ -68,8 +68,8 @@ function buyCommand(pair = "SOL/USDC"): Command {
 function sellCommand(pair = "SOL/USDC"): Command {
   return {
     pair,
-    side: "SELL",
     intent: "close-long",
+    orderType: "market",
     reason: "test",
     at: new Date("2026-08-20T00:00:00.000Z"),
     priceHint: 100,
@@ -266,7 +266,7 @@ describe("JupiterExchange.execute", () => {
       PAIR,
     );
     assert.ok(isOrder(order));
-    assert.equal(order.side, "SELL");
+    assert.equal(order.intent, "open-short");
     assert.equal(order.price, 100);
     assert.equal(order.size, 1);
     assert.equal(order.txSignature, "PerpsSig");

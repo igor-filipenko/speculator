@@ -162,10 +162,16 @@ export class PaperPortfolio implements Portfolio {
    * Apply a filled order without persisting (for backtests and unit tests).
    */
   applyOrderSync(order: Order): PaperTrade | null {
-    if (order.side === "BUY") {
-      return this.position.side === "short" ? this.closeShort(order) : this.openLong(order);
+    switch (order.intent) {
+      case "open-long":
+        return this.openLong(order);
+      case "close-long":
+        return this.closeLong(order);
+      case "open-short":
+        return this.openShort(order);
+      case "close-short":
+        return this.closeShort(order);
     }
-    return this.position.side === "long" ? this.closeLong(order) : this.openShort(order);
   }
 
   /**

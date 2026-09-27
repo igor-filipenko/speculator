@@ -1,5 +1,5 @@
 import { ExchangeError } from "../error.js";
-import type { Command, Error, Exchange, Order, PairConfig } from "../../types.js";
+import type { Command, Error, Exchange, Order, OrderIntent, PairConfig } from "../../types.js";
 import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 
 /**
@@ -21,12 +21,17 @@ export class EmulatedExchange implements Exchange {
   }
 
   execute(command: Command, pair: PairConfig): Promise<Order | Error> {
+    if (command.orderType !== "market") {
+      return Promise.resolve(
+        new ExchangeError(`EmulatedExchange: ${command.orderType} orders are not supported`),
+      );
+    }
     if (!(this.mid > 0)) {
       return Promise.resolve(new ExchangeError("EmulatedExchange: mid price not set"));
     }
 
     const tier = liquidityTierForPair(pair.symbol);
-    const emulated = emulateFillPrice({ side: command.side, close: this.mid, tier });
+    const emulated = emulateFillPrice({ side: fillSide(command.intent), close: this.mid, tier });
     const { fillPrice, priorityFeeUsdc, breakdown } = emulated;
 
     const fillCosts = {
@@ -46,7 +51,8 @@ export class EmulatedExchange implements Exchange {
       }
       return Promise.resolve({
         pair: command.pair,
-        side: command.side,
+        type: "market",
+        intent: command.intent,
         price: fillPrice,
         size: spendable / fillPrice,
         at: command.at,
@@ -63,7 +69,8 @@ export class EmulatedExchange implements Exchange {
     }
     return Promise.resolve({
       pair: command.pair,
-      side: command.side,
+      type: "market",
+      intent: command.intent,
       price: fillPrice,
       size,
       at: command.at,
@@ -73,4 +80,9 @@ export class EmulatedExchange implements Exchange {
       fillCosts,
     });
   }
+}
+
+/** Slippage model still prices a buy and a sell differently. */
+function fillSide(intent: OrderIntent): "BUY" | "SELL" {
+  return intent === "open-long" || intent === "close-short" ? "BUY" : "SELL";
 }

@@ -83,7 +83,7 @@ export async function runPositions(config: AppConfig, argv: string[]): Promise<v
   }
   const tx = order.txSignature !== undefined ? ` ${order.txSignature}` : "";
   console.log(
-    `${order.simulated ? "simulated" : "LIVE"} ${order.side} ${pair.symbol} size ${order.size} @ ${order.price}${tx}`,
+    `${order.simulated ? "simulated" : "LIVE"} ${order.intent} ${pair.symbol} size ${order.size} @ ${order.price}${tx}`,
   );
 }
 
@@ -98,8 +98,8 @@ function toCommand(
     case "open-long":
       return {
         pair: pair.symbol,
-        side: "BUY",
         intent: "open-long",
+        orderType: "market",
         reason: "positions open long",
         at,
         priceHint: mark,
@@ -111,8 +111,8 @@ function toCommand(
       }
       return {
         pair: pair.symbol,
-        side: "SELL",
         intent: "close-long",
+        orderType: "market",
         reason: "positions close long",
         at,
         priceHint: mark,
@@ -122,8 +122,8 @@ function toCommand(
     case "open-short":
       return {
         pair: pair.symbol,
-        side: "SELL",
         intent: "open-short",
+        orderType: "market",
         reason: "positions open short",
         at,
         priceHint: mark,
@@ -135,8 +135,8 @@ function toCommand(
       }
       return {
         pair: pair.symbol,
-        side: "BUY",
         intent: "close-short",
+        orderType: "market",
         reason: "positions close short",
         at,
         priceHint: mark,

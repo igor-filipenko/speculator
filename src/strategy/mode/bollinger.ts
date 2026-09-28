@@ -125,10 +125,10 @@ export function bollingerParamsFor(
     adxMax: ADX_MAX[trend][volatility],
     minBandToMidPct: MIN_BAND_TO_MID[trend][volatility],
     minReclaimDepth: MIN_RECLAIM_DEPTH[trend][volatility],
-    minExitAboveEntryPct: 0.002,
+    minExitAboveEntryPct: 0.001,
     workTrendEmaFast: 20,
     workTrendEmaSlow: 50,
-    workTrendAdxFlatMax: 18,
+    workTrendAdxFlatMax: 20,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
   };
@@ -144,37 +144,6 @@ function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
   };
 }
 
-/**
- * Long entries are off in HTF bear/unknown and in 1h high vol.
- * Exits still fire.
- */
-export function bollingerDoNotBuyReason(trend: Trend, volatility: Volatility): string | undefined {
-  if (trend === "bearish" || trend === "unknown") {
-    return `HTF trend ${trend}`;
-  }
-  if (volatility === "high") {
-    return `1h volatility ${volatility}`;
-  }
-  return undefined;
-}
-
-/**
- * Short entries are off in HTF bull/unknown and in 1h high vol.
- * Exits still fire. Bearish and flat may short.
- */
-export function bollingerDoNotShortReason(
-  trend: Trend,
-  volatility: Volatility,
-): string | undefined {
-  if (trend === "bullish" || trend === "unknown") {
-    return `HTF trend ${trend}`;
-  }
-  if (volatility === "high") {
-    return `1h volatility ${volatility}`;
-  }
-  return undefined;
-}
-
 export interface BollingerInput {
   pair: string;
   candles: Candle[];
@@ -182,18 +151,12 @@ export interface BollingerInput {
   /** Spot price used in the signal (usually exchange quote). */
   price: number;
   at?: Date;
-  /** When true, lower-band reclaims are ignored. Exits still fire. */
-  doNotBuy?: boolean;
-  /** Extra text for the HOLD reason when {@link doNotBuy} is set. */
-  doNotBuyReason?: string;
-  /** When true, upper-band rejections are ignored. Exits still fire. */
-  doNotShort?: boolean;
-  /** Extra text for the HOLD reason when {@link doNotShort} is set. */
-  doNotShortReason?: string;
   /** Open fill; required for mid-exit. */
   entryPrice?: number;
   /** Which side `entryPrice` belongs to. */
   positionSide?: "long" | "short";
+  /** 1h volatility. */
+  volatility: Volatility;
 }
 
 /**
@@ -322,12 +285,12 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const closeReclaim = closePrev <= bbLowerPrev && close > bbLower;
   const wickReclaim = lastBar.low <= bbLower && close > bbLower && close > lastBar.open;
   const reclaimedLower = closeReclaim || wickReclaim;
+  const blocked = input.volatility === "high" ? "1h volatility high" : undefined;
 
   if (belowMid && reclaimedLower) {
     const bandWidth = bbMid - bbLower;
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
-    const blocked = input.doNotBuy === true ? (input.doNotBuyReason ?? "regime") : undefined;
 
     if (blocked != null) {
       reason = `Lower reclaim ignored: ${blocked}`;
@@ -374,7 +337,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const bandWidth = bbUpper - bbMid;
       const bandToMidPct = bandWidth / close;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
-      const blocked = input.doNotShort === true ? (input.doNotShortReason ?? "regime") : undefined;
       if (blocked != null) {
         reason = `Upper rejection ignored: ${blocked}`;
       } else if (adxNow > strategy.adxMax) {
@@ -424,20 +386,15 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
   private readonly risk: RiskParams;
-  private readonly trend: Trend;
-  private readonly volatility: Volatility;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low") {
-    this.trend = trend;
-    this.volatility = volatility;
     this.params = bollingerParamsFor(trend, volatility);
     this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
     const { timeframe, period, stdDev, adxMax, rsiBuyMax } = this.params;
-    const gate = bollingerDoNotBuyReason(this.trend, this.volatility) == null ? "mr" : "no-buy";
-    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax} ${gate})`;
+    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax})`;
   }
 
   getMode(): "bollinger" {
@@ -465,8 +422,6 @@ export class BollingerStrategy implements Strategy {
     at: Date,
     portfolio?: PortfolioSnapshot,
   ): Signal {
-    const blocked = bollingerDoNotBuyReason(market.trend, market.volatility);
-    const blockedShort = bollingerDoNotShortReason(market.trend, market.volatility);
     const position = portfolio?.position;
     const positioned =
       (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
@@ -478,8 +433,7 @@ export class BollingerStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      ...(blocked != null ? { doNotBuy: true, doNotBuyReason: blocked } : {}),
-      ...(blockedShort != null ? { doNotShort: true, doNotShortReason: blockedShort } : {}),
+      volatility: market.volatility,
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? { entryPrice: positioned.entryPrice, positionSide: positioned.side }
         : {}),

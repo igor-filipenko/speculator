@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, MarketIndicators, Volatility } from "../../types.js";
+import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
 import {
   evaluateBollinger,
   BollingerStrategy,
@@ -110,8 +110,13 @@ function marketState(
   return { pair: "SOL/USDC", price, trend, volatility };
 }
 
-function evalBb(input: Omit<BollingerInput, "volatility"> & { volatility?: Volatility }) {
-  return evaluateBollinger({ volatility: "low", ...input });
+function evalBb(
+  input: Omit<BollingerInput, "trend" | "volatility"> & {
+    trend?: Trend;
+    volatility?: Volatility;
+  },
+) {
+  return evaluateBollinger({ trend: "flat", volatility: "low", ...input });
 }
 
 describe("evaluateBollinger filters", () => {

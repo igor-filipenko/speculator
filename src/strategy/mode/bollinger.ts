@@ -293,7 +293,10 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const bandWidth = bbMid - bbLower;
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
-    const blockedLong = input.volatility == "squeeze" && input.trend != "bullish" ? "waiting for breakout down" : undefined;
+    const blockedLong =
+      input.volatility == "squeeze" && input.trend != "bullish"
+        ? "waiting for breakout down"
+        : undefined;
 
     if (blocked != null) {
       reason = `Lower reclaim ignored: ${blocked}`;
@@ -338,7 +341,10 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const closeReject = closePrev >= bbUpperPrev && close < bbUpper;
     const wickReject = lastBar.high >= bbUpper && close < bbUpper && close < lastBar.open;
     const rejectedUpper = closeReject || wickReject;
-    const blockedShort = input.volatility == "squeeze" && input.trend != "bearish" ? "waiting for breakout up" : undefined;
+    const blockedShort =
+      input.volatility == "squeeze" && input.trend != "bearish"
+        ? "waiting for breakout up"
+        : undefined;
 
     if (rejectedUpper) {
       const bandWidth = bbUpper - bbMid;

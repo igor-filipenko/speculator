@@ -388,10 +388,16 @@ export function evaluateBollinger(input: BollingerInput): Signal {
           `depth ${pct(rejectDepth)}; RSI ${fmt(rsiNow)} > ${fmt(rsiShortMin)}`;
       }
     } else {
-      reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+      reason =
+        `Above mid, no upper rejection ` +
+        `(close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}, upper=${fmt(bbUpper)}); ` +
+        `BUY needs below mid, SELL needs upper reject`;
     }
   } else if (side === "HOLD" && !belowMid) {
-    reason = `No room to mid: close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}`;
+    reason =
+      `Price straddles mid ` +
+      `(close=${fmt(close)}, price=${fmt(price)}, mid=${fmt(bbMid)}); ` +
+      `BUY needs both below mid, SELL needs both above mid + upper reject`;
   }
 
   return { ...base, side, reason };

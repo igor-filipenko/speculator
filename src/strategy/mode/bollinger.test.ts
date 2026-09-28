@@ -219,7 +219,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.bbMid != null);
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /No room/);
+    assert.match(signal.reason, /Above mid, no upper rejection/);
   });
 
   it("holds a mid cross when price is still below minExit", () => {

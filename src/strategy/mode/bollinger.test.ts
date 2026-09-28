@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Candle, MarketIndicators } from "../../types.js";
+import type { Candle, MarketIndicators, Volatility } from "../../types.js";
 import {
   evaluateBollinger,
   BollingerStrategy,
-  bollingerDoNotBuyReason,
   bollingerParamsFor,
   isWorkDriftDown,
+  type BollingerInput,
   type BollingerParams,
 } from "./bollinger.js";
 import { rsi } from "../indicators.js";
@@ -110,11 +110,15 @@ function marketState(
   return { pair: "SOL/USDC", price, trend, volatility };
 }
 
+function evalBb(input: Omit<BollingerInput, "volatility"> & { volatility?: Volatility }) {
+  return evaluateBollinger({ volatility: "low", ...input });
+}
+
 describe("evaluateBollinger filters", () => {
   it("emits BUY on lower-band reclaim when filters pass", () => {
     const candles = reclaimLowerBand();
     const strategy = looseFilters();
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy,
@@ -130,7 +134,7 @@ describe("evaluateBollinger filters", () => {
   it("does not pyramid when already long below mid", () => {
     const candles = reclaimLowerBand();
     const last = candles[candles.length - 1]!;
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
@@ -146,7 +150,7 @@ describe("evaluateBollinger filters", () => {
   it("does not BUY while still below lower (no reclaim)", () => {
     const candles = stuckBelowLower();
     const strategy = looseFilters();
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy,
@@ -158,7 +162,7 @@ describe("evaluateBollinger filters", () => {
   it("ignores reclaim when ADX exceeds adxMax", () => {
     const candles = reclaimLowerBand();
     const strategy = looseFilters({ adxMax: 0 });
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy,
@@ -171,7 +175,7 @@ describe("evaluateBollinger filters", () => {
   it("ignores reclaim when band→mid distance is too small", () => {
     const candles = reclaimLowerBand();
     const strategy = looseFilters({ minBandToMidPct: 0.5 });
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy,
@@ -185,7 +189,7 @@ describe("evaluateBollinger filters", () => {
     const candles = reboundToMid();
     const strategy = looseFilters();
     const last = candles[candles.length - 1]!;
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy,
@@ -201,7 +205,7 @@ describe("evaluateBollinger filters", () => {
   it("holds mid when flat (no long)", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
@@ -216,7 +220,7 @@ describe("evaluateBollinger filters", () => {
   it("holds a mid cross when price is still below minExit", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
@@ -238,7 +242,7 @@ describe("evaluateBollinger filters", () => {
       rsiPeriod,
     ).at(-1);
     assert.ok(rsiNow != null);
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters({ rsiPeriod, rsiBuyMax: rsiNow }),
@@ -251,7 +255,7 @@ describe("evaluateBollinger filters", () => {
 
   it("emits BUY on a same-bar wick reclaim (green close back inside)", () => {
     const candles = wickReclaimLower();
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
@@ -266,7 +270,7 @@ describe("evaluateBollinger filters", () => {
     const last = candles[candles.length - 1]!;
     const forming = { ...last, close: last.high };
     const at = new Date((last.time + 7 * 60) * 1000);
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles: [...candles.slice(0, -1), forming],
       strategy: looseFilters(),
@@ -290,7 +294,7 @@ describe("evaluateBollinger filters", () => {
       volume: 10,
     };
     const at = new Date((next.time + 60) * 1000);
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles: [...candles, next],
       strategy: looseFilters(),
@@ -301,31 +305,29 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /wick reclaim/i);
   });
 
-  it("ignores reclaim when doNotBuy is set (bear / high vol)", () => {
+  it("ignores reclaim when 1h volatility is high", () => {
     const candles = reclaimLowerBand();
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
       price: candles[candles.length - 1]!.close,
-      doNotBuy: true,
-      doNotBuyReason: "HTF trend bearish",
+      volatility: "high",
     });
     assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /HTF trend bearish/);
+    assert.match(signal.reason, /1h volatility high/);
   });
 
-  it("still emits SELL at mid when long and doNotBuy is set", () => {
+  it("still emits SELL at mid when long and 1h volatility is high", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters(),
       price: last.close,
       entryPrice: last.close * 0.98,
-      doNotBuy: true,
-      doNotBuyReason: "1h volatility high",
+      volatility: "high",
     });
     assert.equal(signal.side, "SELL");
     assert.match(signal.reason, /Price .+ profitable price/);
@@ -339,7 +341,7 @@ describe("evaluateBollinger filters", () => {
       rsiPeriod,
     ).at(-1);
     assert.ok(rsiNow != null);
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters({ rsiPeriod, rsiBuyMax: rsiNow + 1 }),
@@ -351,7 +353,7 @@ describe("evaluateBollinger filters", () => {
 
   it("ignores reclaim when depth is below minReclaimDepth", () => {
     const candles = reclaimLowerBand();
-    const signal = evaluateBollinger({
+    const signal = evalBb({
       pair: "SOL/USDC",
       candles,
       strategy: looseFilters({ minReclaimDepth: 0.9 }),
@@ -369,10 +371,10 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 50);
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
     assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
-    assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.002);
+    assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
-    assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 18);
+    assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
     assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
     assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
     assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
@@ -424,34 +426,13 @@ describe("isWorkDriftDown", () => {
   });
 });
 
-describe("bollingerDoNotBuyReason", () => {
-  it("blocks bearish/unknown HTF and 1h high vol", () => {
-    assert.equal(bollingerDoNotBuyReason("bearish", "low"), "HTF trend bearish");
-    assert.equal(bollingerDoNotBuyReason("unknown", "squeeze"), "HTF trend unknown");
-    assert.equal(bollingerDoNotBuyReason("bullish", "high"), "1h volatility high");
-    assert.equal(bollingerDoNotBuyReason("flat", "high"), "1h volatility high");
-    assert.equal(bollingerDoNotBuyReason("bullish", "low"), undefined);
-    assert.equal(bollingerDoNotBuyReason("flat", "squeeze"), undefined);
-  });
-});
-
-describe("BollingerStrategy regime gate", () => {
-  it("holds a reclaim when HTF is bearish or 1h vol is high", () => {
+describe("BollingerStrategy high-vol gate", () => {
+  it("holds a reclaim when 1h vol is high", () => {
     const candles = reclaimLowerBand();
     const last = candles[candles.length - 1]!;
     const price = last.close;
     const at = new Date((last.time + 15 * 60) * 1000);
     const strategy = new BollingerStrategy("bullish", "low");
-    const blockedBear = strategy.evaluateSignal(
-      "SOL/USDC",
-      candles,
-      marketState("bearish", "low", price),
-      price,
-      at,
-    );
-    assert.equal(blockedBear.side, "HOLD", blockedBear.reason);
-    assert.match(blockedBear.reason, /bearish/);
-
     const blockedHigh = strategy.evaluateSignal(
       "SOL/USDC",
       candles,
@@ -463,9 +444,10 @@ describe("BollingerStrategy regime gate", () => {
     assert.match(blockedHigh.reason, /volatility high/);
   });
 
-  it("labels display name no-buy in bear or high vol", () => {
-    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), / mr\)$/);
-    assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), / no-buy\)$/);
-    assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), / no-buy\)$/);
+  it("names BB params in the display name", () => {
+    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
+    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB14/);
+    assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), /bollinger/);
+    assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), /bollinger/);
   });
 });

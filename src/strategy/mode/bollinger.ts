@@ -155,6 +155,8 @@ export interface BollingerInput {
   entryPrice?: number;
   /** Which side `entryPrice` belongs to. */
   positionSide?: "long" | "short";
+  /** HTF trend. */
+  trend: Trend;
   /** 1h volatility. */
   volatility: Volatility;
 }
@@ -291,9 +293,12 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const bandWidth = bbMid - bbLower;
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
+    const blockedLong = input.volatility == "squeeze" && input.trend != "bullish" ? "waiting for breakout down" : undefined;
 
     if (blocked != null) {
       reason = `Lower reclaim ignored: ${blocked}`;
+    } else if (blockedLong) {
+      reason = `Lower reclaim ignored: ${blockedLong}`;
     } else if (adxNow > strategy.adxMax) {
       reason = `Lower reclaim ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
     } else if (bandToMidPct < strategy.minBandToMidPct) {
@@ -333,12 +338,16 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const closeReject = closePrev >= bbUpperPrev && close < bbUpper;
     const wickReject = lastBar.high >= bbUpper && close < bbUpper && close < lastBar.open;
     const rejectedUpper = closeReject || wickReject;
+    const blockedShort = input.volatility == "squeeze" && input.trend != "bearish" ? "waiting for breakout up" : undefined;
+
     if (rejectedUpper) {
       const bandWidth = bbUpper - bbMid;
       const bandToMidPct = bandWidth / close;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
       if (blocked != null) {
         reason = `Upper rejection ignored: ${blocked}`;
+      } else if (blockedShort) {
+        reason = `Upper rejection ignored: ${blockedShort}`;
       } else if (adxNow > strategy.adxMax) {
         reason = `Upper rejection ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
       } else if (bandToMidPct < strategy.minBandToMidPct) {
@@ -433,6 +442,7 @@ export class BollingerStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
+      trend: market.trend,
       volatility: market.volatility,
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? { entryPrice: positioned.entryPrice, positionSide: positioned.side }

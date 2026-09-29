@@ -52,10 +52,12 @@ export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime>
     keypair,
     balances,
     slippageBps: config.slippageBps,
-    solReserve: config.liveSolReserveSol,
+    solReserveMin: config.solReserveMin,
+    solReserveMax: config.solReserveMax,
   });
   const portfolios = await LivePortfolio.load(config.pairs, balances, {
-    solReserve: config.liveSolReserveSol,
+    solReserveMin: config.solReserveMin,
+    solReserveMax: config.solReserveMax,
     positions: exchange,
   });
 

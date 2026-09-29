@@ -30,6 +30,10 @@ export class EmulatedExchange implements Exchange {
       return Promise.resolve(new ExchangeError("EmulatedExchange: mid price not set"));
     }
 
+    if (command.intent === "buy-sol") {
+      return Promise.resolve(new ExchangeError("EmulatedExchange: buy-sol is live only"));
+    }
+
     const tier = liquidityTierForPair(pair.symbol);
     const emulated = emulateFillPrice({ side: fillSide(command.intent), close: this.mid, tier });
     const { fillPrice, priorityFeeUsdc, breakdown } = emulated;

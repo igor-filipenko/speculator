@@ -275,6 +275,18 @@ function checkDirected(
   config: RiskParams,
   direction: RiskDirection,
 ): RiskOrCommand {
+  if (snapshot.position.side === "flat" && snapshot.insufficientSol > 0) {
+    return asCommand({
+      pair: signal.pair,
+      intent: "buy-sol",
+      orderType: "market",
+      reason: "native SOL below reserve minimum",
+      at: signal.at,
+      priceHint: signal.price,
+      baseSize: snapshot.insufficientSol,
+    });
+  }
+
   const interval = candleIntervalSeconds(config.timeframe);
   const peak = peakSinceOpen(snapshot, candles, signal, interval);
   const trough = troughSinceOpen(snapshot, candles, signal, interval);

@@ -189,7 +189,7 @@ describe("JupiterExchange.execute", () => {
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
-      solReserve: 0.05,
+      solReserveMin: 0.05,
       fetchImpl,
       signTransaction: (tx) => tx,
     });
@@ -206,7 +206,7 @@ describe("JupiterExchange.execute", () => {
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
-      solReserve: 0.05,
+      solReserveMin: 0.05,
       fetchImpl,
       signTransaction: (tx) => tx,
     });
@@ -223,7 +223,7 @@ describe("JupiterExchange.execute", () => {
       apiKey: "test-key",
       keypair: Keypair.generate(),
       balances: belowReserveBalances(),
-      solReserve: 0.05,
+      solReserveMin: 0.05,
       fetchImpl,
       signTransaction: (tx) => tx,
     });
@@ -288,5 +288,140 @@ describe("JupiterExchange.execute", () => {
     );
     assert.ok(order instanceof ExchangeError);
     assert.ok(order.message.includes("no market"));
+  });
+
+  it("buys SOL for the shortfall using quote as exact-in", async () => {
+    const urls: string[] = [];
+    const fetchImpl: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      urls.push(url);
+      if (url.includes("/swap/v1/quote")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              inputMint: WSOL_MINT,
+              outputMint: USDC,
+              inAmount: "1000000000",
+              outAmount: "100000000",
+            }),
+          ),
+        );
+      }
+      if (url.includes("/swap/v2/order")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ transaction: "dGVzdA==", requestId: "req-sol" })),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "Success",
+            signature: "TopUpSig",
+            inputAmountResult: "2000000",
+            outputAmountResult: "20000000",
+          }),
+        ),
+      );
+    };
+
+    const exchange = new JupiterExchange({
+      apiKey: "test-key",
+      keypair: Keypair.generate(),
+      balances: belowReserveBalances(),
+      solReserveMin: 0.03,
+      solReserveMax: 0.05,
+      fetchImpl,
+      signTransaction: (tx) => tx,
+    });
+
+    const order = await exchange.execute(
+      { ...buyCommand(), intent: "buy-sol", baseSize: 0.02 },
+      PAIR,
+    );
+    assert.ok(isOrder(order));
+    assert.equal(order.intent, "buy-sol");
+    assert.equal(order.txSignature, "TopUpSig");
+    assert.equal(order.size, 0.02);
+    const orderUrl = urls.find((url) => url.includes("/swap/v2/order"));
+    assert.ok(orderUrl);
+    const params = new URL(orderUrl).searchParams;
+    assert.equal(params.get("inputMint"), USDC);
+    assert.equal(params.get("outputMint"), WSOL_MINT);
+    assert.equal(params.get("amount"), "2000000");
+  });
+
+  it("caps buy-sol at the quote balance", async () => {
+    const urls: string[] = [];
+    const fetchImpl: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      urls.push(url);
+      if (url.includes("/swap/v1/quote")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              inputMint: WSOL_MINT,
+              outputMint: USDC,
+              inAmount: "1000000000",
+              outAmount: "100000000",
+            }),
+          ),
+        );
+      }
+      if (url.includes("/swap/v2/order")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ transaction: "dGVzdA==", requestId: "req-sol" })),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "Success",
+            signature: "TopUpCap",
+            inputAmountResult: "1000000",
+            outputAmountResult: "10000000",
+          }),
+        ),
+      );
+    };
+
+    const balances = belowReserveBalances();
+    balances.tokens.set(USDC, 1);
+    const exchange = new JupiterExchange({
+      apiKey: "test-key",
+      keypair: Keypair.generate(),
+      balances,
+      fetchImpl,
+      signTransaction: (tx) => tx,
+    });
+
+    const order = await exchange.execute(
+      { ...buyCommand(), intent: "buy-sol", baseSize: 0.02 },
+      PAIR,
+    );
+    assert.ok(isOrder(order));
+    assert.equal(order.size, 0.01);
+    const orderUrl = urls.find((url) => url.includes("/swap/v2/order"));
+    assert.ok(orderUrl);
+    assert.equal(new URL(orderUrl).searchParams.get("amount"), "1000000");
+  });
+
+  it("aborts buy-sol when native SOL is zero", async () => {
+    const balances = new FakeBalances();
+    balances.native = 0;
+    const exchange = new JupiterExchange({
+      apiKey: "test-key",
+      keypair: Keypair.generate(),
+      balances,
+      fetchImpl: () => {
+        throw new Error("should not quote");
+      },
+      signTransaction: (tx) => tx,
+    });
+    const order = await exchange.execute(
+      { ...buyCommand(), intent: "buy-sol", baseSize: 0.05 },
+      PAIR,
+    );
+    assert.ok(!isOrder(order));
+    assert.match(order.message, /native SOL is 0/);
   });
 });

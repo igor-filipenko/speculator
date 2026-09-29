@@ -50,7 +50,8 @@ Edit `.env`:
 | `WALLET_KEYPAIR_PATH`                 | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
 | `SOLANA_RPC_URL`                      | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
 | `SLIPPAGE_BPS`                        | Jupiter swap slippage (default `50`)                                                  |
-| `LIVE_SOL_RESERVE_SOL`                | Native SOL to keep for fees; not sold (default `0.05`)                                |
+| `SOL_RESERVE_MIN`                     | Refill native SOL when below this (default `0.03`)                                    |
+| `SOL_RESERVE_MAX`                     | Target after refill; SOL below this is not sold (default `0.05`)                      |
 | `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
 | `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                              |
 | `TELEGRAM_ALLOWED_USER_ID`            | Mini App allowlist (defaults to `TELEGRAM_CHAT_ID`)                                   |
@@ -150,7 +151,7 @@ Live trading (on-chain Jupiter swaps; spends real tokens):
 pnpm trade
 ```
 
-Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature.
+Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. When the position is flat and native SOL is below `SOL_RESERVE_MIN`, the bot buys SOL up to `SOL_RESERVE_MAX`. Other swaps abort below the minimum so the wallet can still pay fees. For `SOL/USDC`, only SOL above `SOL_RESERVE_MAX` is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature. A SOL reserve top-up is not stored as a strategy trade.
 
 Print on-chain live portfolio (sync + snapshot, no swaps):
 

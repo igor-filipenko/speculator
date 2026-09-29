@@ -19,7 +19,8 @@ function makeConfig(): AppConfig {
     botId: "test",
     solanaRpcUrl: "https://api.mainnet-beta.solana.com",
     slippageBps: 50,
-    liveSolReserveSol: 0.05,
+    solReserveMin: 0.03,
+    solReserveMax: 0.05,
     pairs: [
       {
         symbol: "SOL/USDC",

@@ -20,7 +20,8 @@ import type {
 const DUST = 1e-9;
 
 export interface LivePortfolioOptions {
-  solReserve: number;
+  solReserveMin: number;
+  solReserveMax: number;
   positions?: PositionSource;
 }
 
@@ -35,14 +36,16 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private readonly trades: Trade[] = [];
   private readonly pairConfig: PairConfig;
   private readonly balances: BalanceSource;
-  private readonly solReserve: number;
+  private readonly solReserveMin: number;
+  private readonly solReserveMax: number;
   private readonly positions: PositionSource | undefined;
   private shortCollateralUsd = 0;
 
   constructor(pair: PairConfig, balances: BalanceSource, options: LivePortfolioOptions) {
     this.pairConfig = pair;
     this.balances = balances;
-    this.solReserve = options.solReserve;
+    this.solReserveMin = options.solReserveMin;
+    this.solReserveMax = options.solReserveMax;
     this.positions = options.positions;
     this.position = {
       pair: pair.symbol,
@@ -163,6 +166,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
         : this.position.side === "short"
           ? this.shortCollateralUsd + this.position.size * (this.position.entryPrice - markPrice)
           : 0;
+    const nativeSol = this.balances.nativeSol();
     return {
       simulated: false,
       cashUsdc: this.cashUsdc,
@@ -170,6 +174,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       realizedPnl: this.realizedPnl,
       equity: this.cashUsdc + positionValue,
       trades: [...this.trades],
+      nativeSol,
+      insufficientSol: calcInsufficientSol(nativeSol, this.solReserveMin, this.solReserveMax),
     };
   }
 
@@ -182,6 +188,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   }
 
   async applyOrder(order: Order): Promise<Trade | null> {
+    if (order.intent === "buy-sol") {
+      await this.overlayChain(order.price);
+      return null;
+    }
+
     const before = this.position.side;
     const nextTrade = match(order.intent)
       .with("open-long", () => this.openLong(order))
@@ -232,7 +243,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       baseMint: this.pairConfig.baseMint,
       tokenUi: this.balances.tokenUi(this.pairConfig.baseMint),
       nativeSol: this.balances.nativeSol(),
-      reserveSol: this.solReserve,
+      reserveSol: this.solReserveMax,
     });
 
     if (short != null && size > DUST) {
@@ -418,4 +429,16 @@ function snapshotKey(portfolio: LivePortfolio): string {
     entry: persisted.position.entryPrice,
     pnl: persisted.realizedPnl,
   });
+}
+
+/**
+ * SOL to buy so native balance reaches `max` after falling below `min`.
+ * At or above `min`, no top-up.
+ */
+function calcInsufficientSol(
+  nativeSol: number,
+  solReserveMin: number,
+  solReserveMax: number,
+): number {
+  return nativeSol < solReserveMin ? solReserveMax - nativeSol : 0;
 }

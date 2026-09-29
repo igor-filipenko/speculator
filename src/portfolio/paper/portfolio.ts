@@ -150,6 +150,8 @@ export class PaperPortfolio implements Portfolio {
       realizedPnl: this.realizedPnl,
       equity: markEquity(this.cashUsdc, this.position, markPrice),
       trades: [...this.trades],
+      nativeSol: 0,
+      insufficientSol: 0,
     };
   }
 
@@ -171,6 +173,8 @@ export class PaperPortfolio implements Portfolio {
         return this.openShort(order);
       case "close-short":
         return this.closeShort(order);
+      case "buy-sol":
+        return null;
     }
   }
 

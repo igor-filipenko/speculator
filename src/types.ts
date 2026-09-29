@@ -5,7 +5,7 @@ export type SignalSide = "BUY" | "SELL" | "HOLD";
 export type PositionSide = "flat" | "long" | "short";
 
 /** What a command does to the single position. */
-export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-short";
+export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-short" | "buy-sol";
 
 export type OrderType = "market" | "limit";
 
@@ -190,6 +190,8 @@ export interface PortfolioSnapshot {
   /** Mark-to-market equity = cash + position * markPrice. */
   equity: number;
   trades: Trade[];
+  nativeSol: number;
+  insufficientSol: number;
   simulated: boolean;
 }
 
@@ -205,7 +207,7 @@ export interface Command {
   priceHint: number;
   /** Quote budget for open-long and open-short. */
   quoteBudgetUsdc?: number;
-  /** Base size for close-long and close-short. */
+  /** Base size for close-long, close-short, and buy-sol (SOL to buy). */
   baseSize?: number;
 }
 

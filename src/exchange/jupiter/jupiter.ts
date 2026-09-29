@@ -54,7 +54,10 @@ export interface JupiterExchangeOptions {
   keypair?: Keypair;
   balances?: BalanceSource;
   slippageBps?: number;
-  solReserve?: number;
+  /** Abort other swaps and perps when native SOL is below this. */
+  solReserveMin?: number;
+  /** SOL below this is not sold. Tradable size subtracts it. */
+  solReserveMax?: number;
   fetchImpl?: typeof fetch;
   perpsBaseUrl?: string;
   /** Override signing so tests need not deserialize a real transaction. */
@@ -65,7 +68,8 @@ const DEFAULT_BASE = "https://api.jup.ag";
 
 /**
  * Jupiter exchange. Without a keypair, `execute` is a simulated quote fill.
- * With a keypair: `open-long` buys spot, `close-long` sells spot, shorts use Jupiter Perps.
+ * With a keypair: `open-long` buys spot, `close-long` sells spot, shorts use Jupiter Perps,
+ * and `buy-sol` tops up native SOL from the pair quote.
  */
 export class JupiterExchange implements Exchange, PositionSource {
   private readonly apiKey: string;
@@ -73,7 +77,8 @@ export class JupiterExchange implements Exchange, PositionSource {
   private readonly keypair: Keypair | undefined;
   private readonly balances: BalanceSource | undefined;
   private readonly slippageBps: number;
-  private readonly solReserve: number;
+  private readonly solReserveMin: number;
+  private readonly solReserveMax: number;
   private readonly fetchImpl: typeof fetch;
   private readonly signTransaction: ((txBase64: string) => string) | undefined;
   private readonly perps: JupiterPerpsClient;
@@ -84,7 +89,8 @@ export class JupiterExchange implements Exchange, PositionSource {
     this.keypair = options.keypair;
     this.balances = options.balances;
     this.slippageBps = options.slippageBps ?? 50;
-    this.solReserve = options.solReserve ?? 0.05;
+    this.solReserveMin = options.solReserveMin ?? 0.03;
+    this.solReserveMax = options.solReserveMax ?? 0.05;
     this.fetchImpl = options.fetchImpl ?? fetch;
     if (options.keypair !== undefined) {
       const keypair = options.keypair;
@@ -140,6 +146,8 @@ export class JupiterExchange implements Exchange, PositionSource {
         case "open-short":
         case "close-short":
           return await this.executeShort(command, pair);
+        case "buy-sol":
+          return await this.executeBuySol(command, pair);
       }
     } catch (err) {
       const message = err instanceof globalThis.Error ? err.message : String(err);
@@ -208,6 +216,10 @@ export class JupiterExchange implements Exchange, PositionSource {
 
   /** Simulate a fill at the current Jupiter spot. Does not submit an on-chain swap. */
   private async executeSimulated(command: Command, pair: PairConfig): Promise<Order | Error> {
+    if (command.intent === "buy-sol") {
+      return new ExchangeError("JupiterExchange: buy-sol is live only");
+    }
+
     let price: number;
     try {
       price = await this.spotPrice(pair);
@@ -263,8 +275,8 @@ export class JupiterExchange implements Exchange, PositionSource {
     const balances = this.requireBalances();
     await balances.refresh([pair.baseMint, pair.quoteMint]);
     const buyingSol = side === "BUY" && pair.baseMint === WSOL_MINT;
-    if (!buyingSol && !hasFeeSol(balances.nativeSol(), this.solReserve)) {
-      return new ExchangeError(`abort swap: native SOL below reserve ${this.solReserve}`);
+    if (!buyingSol && !hasFeeSol(balances.nativeSol(), this.solReserveMin)) {
+      return new ExchangeError(`abort swap: native SOL below reserve ${this.solReserveMin}`);
     }
 
     const amount = this.atomicInAmount(command, pair, side);
@@ -272,12 +284,78 @@ export class JupiterExchange implements Exchange, PositionSource {
       return new ExchangeError("abort swap: atomic amount is 0");
     }
 
-    const inputMint = side === "BUY" ? pair.quoteMint : pair.baseMint;
-    const outputMint = side === "BUY" ? pair.baseMint : pair.quoteMint;
-    const order = await this.fetchOrder({
-      inputMint,
-      outputMint,
+    return this.submitSwap({
+      command,
+      side,
+      inputMint: side === "BUY" ? pair.quoteMint : pair.baseMint,
+      outputMint: side === "BUY" ? pair.baseMint : pair.quoteMint,
       amount,
+      baseDecimals: pair.baseDecimals,
+      quoteDecimals: pair.quoteDecimals,
+    });
+  }
+
+  /**
+   * Buy native SOL with the pair quote so the fee reserve reaches the target.
+   * Skips the minimum-reserve abort; still needs dust SOL to pay the fee.
+   */
+  private async executeBuySol(command: Command, pair: PairConfig): Promise<Order | Error> {
+    const balances = this.requireBalances();
+    await balances.refresh([WSOL_MINT, pair.quoteMint]);
+    if (!(balances.nativeSol() > 0)) {
+      return new ExchangeError("abort buy-sol: native SOL is 0, cannot pay transaction fee");
+    }
+
+    const solSize = command.baseSize ?? 0;
+    if (!(solSize > 0)) {
+      return new ExchangeError("abort buy-sol: baseSize must be > 0");
+    }
+
+    const quoted = await this.quote({
+      inputMint: WSOL_MINT,
+      outputMint: pair.quoteMint,
+      amount: 10n ** 9n,
+      inputDecimals: 9,
+      outputDecimals: pair.quoteDecimals,
+    });
+    if (!(quoted.price > 0)) {
+      return new ExchangeError("abort buy-sol: SOL price is 0");
+    }
+
+    const available = balances.tokenUi(pair.quoteMint);
+    if (!(available > 0)) {
+      return new ExchangeError("abort buy-sol: quote balance is 0");
+    }
+
+    const amount = toAtomic(Math.min(solSize * quoted.price, available), pair.quoteDecimals);
+    if (amount <= 0n) {
+      return new ExchangeError("abort buy-sol: quote amount is 0");
+    }
+
+    return this.submitSwap({
+      command,
+      side: "BUY",
+      inputMint: pair.quoteMint,
+      outputMint: WSOL_MINT,
+      amount,
+      baseDecimals: 9,
+      quoteDecimals: pair.quoteDecimals,
+    });
+  }
+
+  private async submitSwap(params: {
+    command: Command;
+    side: "BUY" | "SELL";
+    inputMint: string;
+    outputMint: string;
+    amount: bigint;
+    baseDecimals: number;
+    quoteDecimals: number;
+  }): Promise<Order | Error> {
+    const order = await this.fetchOrder({
+      inputMint: params.inputMint,
+      outputMint: params.outputMint,
+      amount: params.amount,
       taker: this.requireKeypair().publicKey.toBase58(),
     });
     if (!order.transaction) {
@@ -295,25 +373,25 @@ export class JupiterExchange implements Exchange, PositionSource {
     const inputAmount = parseAmount(result.inputAmountResult ?? result.totalInputAmount);
     const outputAmount = parseAmount(result.outputAmountResult ?? result.totalOutputAmount);
     const fill = fillFromSwapAmounts({
-      side,
+      side: params.side,
       inputAmount,
       outputAmount,
-      baseDecimals: pair.baseDecimals,
-      quoteDecimals: pair.quoteDecimals,
+      baseDecimals: params.baseDecimals,
+      quoteDecimals: params.quoteDecimals,
     });
     if (!fill) {
       return new ExchangeError("Jupiter execute returned unusable fill amounts");
     }
 
     const filled: Order = {
-      pair: command.pair,
+      pair: params.command.pair,
       type: "market",
-      intent: command.intent,
+      intent: params.command.intent,
       price: fill.price,
       size: fill.size,
-      at: command.at,
+      at: params.command.at,
       simulated: false,
-      reason: command.reason,
+      reason: params.command.reason,
       priorityFeeUsdc: 0,
     };
     if (result.signature !== undefined && result.signature.length > 0) {
@@ -324,10 +402,10 @@ export class JupiterExchange implements Exchange, PositionSource {
 
   private async executeShort(command: Command, pair: PairConfig): Promise<Order | Error> {
     const balances = this.requireBalances();
-    if (!hasFeeSol(balances.nativeSol(), this.solReserve)) {
+    if (!hasFeeSol(balances.nativeSol(), this.solReserveMin)) {
       const nativeSol = balances.nativeSol();
       return new ExchangeError(
-        `abort perps: native SOL ${nativeSol} below reserve ${this.solReserve}`,
+        `abort perps: native SOL ${nativeSol} below reserve ${this.solReserveMin}`,
       );
     }
     const wallet = this.requireKeypair().publicKey.toBase58();
@@ -398,7 +476,7 @@ export class JupiterExchange implements Exchange, PositionSource {
       baseMint: pair.baseMint,
       tokenUi: balances.tokenUi(pair.baseMint),
       nativeSol: balances.nativeSol(),
-      reserveSol: this.solReserve,
+      reserveSol: this.solReserveMax,
     });
     return toAtomic(Math.min(requested, tradable), pair.baseDecimals);
   }

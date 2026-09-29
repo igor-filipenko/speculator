@@ -6,6 +6,7 @@ import {
   logRisk,
   logSignal,
   logSnapshot,
+  logSolTopUp,
   logTrade,
   persistSignal,
 } from "../notify/console.js";
@@ -204,6 +205,13 @@ export async function processPair(args: {
   if (!isOrder(order)) {
     console.error(`[${pair.symbol}] ${order.message}`);
     await telegram.notify({ type: "error", pair: pair.symbol, message: order.message });
+    return;
+  }
+
+  if (order.intent === "buy-sol") {
+    await portfolio.applyOrder(order);
+    logSolTopUp(order);
+    logSnapshot(portfolio.getSnapshot(price));
     return;
   }
 

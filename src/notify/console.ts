@@ -2,6 +2,7 @@ import { insertSignal } from "../db/signals.js";
 import type {
   MarketIndicators,
   MtfSnapshot,
+  Order,
   Risk,
   Signal,
   PortfolioSnapshot,
@@ -100,6 +101,13 @@ export function logTrade(trade: Trade): void {
   );
 }
 
+export function logSolTopUp(order: Order): void {
+  const sig = order.txSignature != null ? ` sig=${order.txSignature}` : "";
+  console.log(
+    `  → LIVE buy-sol size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)}${sig} — ${order.reason}`,
+  );
+}
+
 export function logSnapshot(snapshot: PortfolioSnapshot): void {
   const pos = formatOpenPosition(snapshot.position);
   const label = snapshot.simulated ? "paper" : "live";
@@ -117,6 +125,10 @@ export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
   console.log(`Position ${pos}`);
   console.log(`Equity ${snapshot.equity.toFixed(4)}`);
   console.log(`Realized P&L ${snapshot.realizedPnl.toFixed(4)}`);
+  console.log(`Native SOL ${snapshot.nativeSol.toFixed(6)}`);
+  if (snapshot.insufficientSol > 0) {
+    console.log(`SOL shortfall ${snapshot.insufficientSol.toFixed(6)}`);
+  }
   console.log(snapshot.simulated ? "simulated" : "live");
 }
 

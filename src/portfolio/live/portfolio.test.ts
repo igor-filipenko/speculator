@@ -68,7 +68,10 @@ describe("LivePortfolio", () => {
     balances.tokens.set(USDC, 0);
     balances.tokens.set(WSOL_MINT, 0);
 
-    const portfolio = new LivePortfolio(PAIR, balances, { solReserve: 0.05 });
+    const portfolio = new LivePortfolio(PAIR, balances, {
+      solReserveMin: 0.03,
+      solReserveMax: 0.05,
+    });
     const trade = await portfolio.applyOrder(buyOrder());
     assert.ok(trade);
     assert.equal(trade.simulated, false);
@@ -92,7 +95,7 @@ describe("LivePortfolio", () => {
     const extra = new FakeBalances();
     extra.native = 1.05;
     extra.tokens.set(USDC, 0);
-    const portfolio = new LivePortfolio(PAIR, extra, { solReserve: 0.05 });
+    const portfolio = new LivePortfolio(PAIR, extra, { solReserveMin: 0.03, solReserveMax: 0.05 });
     await portfolio.syncFromChain(200);
     const snap = portfolio.getSnapshot(200);
     assert.equal(snap.position.side, "long");
@@ -104,10 +107,33 @@ describe("LivePortfolio", () => {
     const reserved = new FakeBalances();
     reserved.native = 0.05;
     reserved.tokens.set(USDC, 50);
-    const portfolio = new LivePortfolio(PAIR, reserved, { solReserve: 0.05 });
+    const portfolio = new LivePortfolio(PAIR, reserved, {
+      solReserveMin: 0.03,
+      solReserveMax: 0.05,
+    });
     await portfolio.syncFromChain(150);
     const snap = portfolio.getSnapshot(150);
     assert.equal(snap.position.side, "flat");
     assert.equal(snap.cashUsdc, 50);
+    assert.equal(snap.nativeSol, 0.05);
+    assert.equal(snap.insufficientSol, 0);
+  });
+
+  it("sets insufficientSol when native SOL is below the minimum", () => {
+    const low = new FakeBalances();
+    low.native = 0.01;
+    const portfolio = new LivePortfolio(PAIR, low, { solReserveMin: 0.03, solReserveMax: 0.05 });
+    const snap = portfolio.getSnapshot(100);
+    assert.equal(snap.nativeSol, 0.01);
+    assert.equal(snap.insufficientSol, 0.04);
+  });
+
+  it("sets insufficientSol to 0 when native SOL is at or above the minimum", () => {
+    const ok = new FakeBalances();
+    ok.native = 0.04;
+    const portfolio = new LivePortfolio(PAIR, ok, { solReserveMin: 0.03, solReserveMax: 0.05 });
+    const snap = portfolio.getSnapshot(100);
+    assert.equal(snap.nativeSol, 0.04);
+    assert.equal(snap.insufficientSol, 0);
   });
 });

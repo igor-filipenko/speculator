@@ -6,7 +6,7 @@ import {
   logRisk,
   logSignal,
   logSnapshot,
-  logSolTopUp,
+  logOrder,
   logTrade,
   persistSignal,
 } from "../notify/console.js";
@@ -210,7 +210,7 @@ export async function processPair(args: {
 
   if (order.intent === "buy-sol") {
     await portfolio.applyOrder(order);
-    logSolTopUp(order);
+    logOrder(order);
     logSnapshot(portfolio.getSnapshot(price));
     return;
   }

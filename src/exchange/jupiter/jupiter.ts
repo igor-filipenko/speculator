@@ -214,12 +214,12 @@ export class JupiterExchange implements Exchange, PositionSource {
     };
   }
 
-  /** Simulate a fill at the current Jupiter spot. Does not submit an on-chain swap. */
+  /** 
+   * Simulate a fill at the current Jupiter spot. 
+   * Does not submit an on-chain swap.
+   * Used only in paper mode.
+   */
   private async executeSimulated(command: Command, pair: PairConfig): Promise<Order | Error> {
-    if (command.intent === "buy-sol") {
-      return new ExchangeError("JupiterExchange: buy-sol is live only");
-    }
-
     let price: number;
     try {
       price = await this.spotPrice(pair);
@@ -231,8 +231,7 @@ export class JupiterExchange implements Exchange, PositionSource {
       return new ExchangeError(`JupiterExchange: invalid spot price ${price} for ${pair.symbol}`);
     }
 
-    const opens = command.intent === "open-long" || command.intent === "open-short";
-    if (opens) {
+    if (command.intent === "open-long" || command.intent === "open-short") {
       const budget = command.quoteBudgetUsdc ?? 0;
       if (budget <= 0) {
         return new ExchangeError("JupiterExchange: open requires quoteBudgetUsdc > 0");
@@ -248,6 +247,10 @@ export class JupiterExchange implements Exchange, PositionSource {
         reason: command.reason,
         priorityFeeUsdc: 0,
       };
+    }
+
+    if (command.intent !== "close-long" && command.intent !== "close-short") {
+      return new ExchangeError(`JupiterExchange: ${command.intent} is live only`);
     }
 
     const size = command.baseSize ?? 0;

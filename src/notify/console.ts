@@ -101,10 +101,17 @@ export function logTrade(trade: Trade): void {
   );
 }
 
-export function logSolTopUp(order: Order): void {
+export function logOrder(order: Order): void {
+  const reason = order.reason ? ` — ${order.reason}` : "";
   const sig = order.txSignature != null ? ` sig=${order.txSignature}` : "";
+  if (order.simulated) {
+    console.log(
+      `  → PAPER ${order.intent} size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)} (simulated)${sig}${reason}`,
+    );
+    return;
+  }
   console.log(
-    `  → LIVE buy-sol size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)}${sig} — ${order.reason}`,
+    `  → LIVE ${order.intent} size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)}${sig}${reason}`,
   );
 }
 

@@ -153,11 +153,14 @@ pnpm trade
 
 Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. When the position is flat and native SOL is below `SOL_RESERVE_MIN`, the bot buys SOL up to `SOL_RESERVE_MAX`. Other swaps abort below the minimum so the wallet can still pay fees. For `SOL/USDC`, only SOL above `SOL_RESERVE_MAX` is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature. A SOL reserve top-up is not stored as a strategy trade.
 
-Print on-chain live portfolio (sync + snapshot, no swaps):
+Print on-chain live portfolio (sync + snapshot, no swaps). Each pair includes native SOL. When native SOL is below `SOL_RESERVE_MIN`, the report warns with the shortfall up to `SOL_RESERVE_MAX`.
 
 ```bash
 pnpm wallet
+pnpm wallet -- --buy-sol
 ```
+
+`--buy-sol` swaps the first `WATCHLIST` pair's quote into SOL to clear that shortfall, then prints the portfolio.
 
 Export the Phantom-importable private key from `WALLET_KEYPAIR_PATH` (stdout — treat as highly sensitive). A Solana CLI keypair has no recoverable Phantom seed phrase; import via **Import Private Key** in Phantom.
 

@@ -26,14 +26,14 @@ function usage(): never {
   pnpm watch          # signal recommendations only
   pnpm paper          # recommendations + virtual portfolio
   pnpm trade          # recommendations + live Jupiter swaps
-  pnpm wallet         # sync live portfolio from chain and print balances
+  pnpm wallet         # live portfolio; --buy-sol tops up the SOL reserve
   pnpm positions      # list or open/close the live long or short
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
   pnpm regime         # Replay HTF/1h market-indicator switches (no fills)
   pnpm migrate        # dbmate up (TimescaleDB)
 
   tsx src/index.ts watch|paper|trade [--once]
-  tsx src/index.ts wallet
+  tsx src/index.ts wallet [--buy-sol]
   tsx src/index.ts positions list
   tsx src/index.ts positions open long <usdc>
   tsx src/index.ts positions close long
@@ -44,6 +44,7 @@ function usage(): never {
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
+  --buy-sol         Buy SOL up to SOL_RESERVE_MAX when below SOL_RESERVE_MIN (wallet)
   --days <n>        Replay lookback in days (default: 90)
   --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Replay range end inclusive (default: now; requires --from)
@@ -234,13 +235,19 @@ async function runPositionsCommand(argv: string[]): Promise<void> {
 }
 
 async function runWalletCommand(argv: string[]): Promise<void> {
-  const sub = argv[0];
+  const buySol = argv.includes("--buy-sol");
+  const rest = argv.filter((arg) => arg !== "--buy-sol");
+  const sub = rest[0];
   if (sub !== undefined && sub !== "export") {
     console.error(`Unknown wallet subcommand "${sub}". Expected: wallet | wallet export`);
     usage();
   }
-  if (argv.length > 1) {
-    console.error("Too many arguments for wallet. Expected: wallet | wallet export");
+  if (rest.length > 1) {
+    console.error("Too many arguments for wallet. Expected: wallet | wallet export [--buy-sol]");
+    usage();
+  }
+  if (buySol && sub === "export") {
+    console.error("--buy-sol cannot be combined with wallet export");
     usage();
   }
 
@@ -249,7 +256,7 @@ async function runWalletCommand(argv: string[]): Promise<void> {
     await runWalletExport(config);
     return;
   }
-  await runWallet(config);
+  await runWallet(config, { buySol });
 }
 
 const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid", "donchian"];

@@ -214,8 +214,8 @@ export class JupiterExchange implements Exchange, PositionSource {
     };
   }
 
-  /** 
-   * Simulate a fill at the current Jupiter spot. 
+  /**
+   * Simulate a fill at the current Jupiter spot.
    * Does not submit an on-chain swap.
    * Used only in paper mode.
    */

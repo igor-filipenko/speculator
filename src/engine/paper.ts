@@ -2,7 +2,7 @@ import type { AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
 import type { ProgramState, ShutdownCb, StrategyManager } from "../types.js";
 import { Telegram } from "../notify/telegram.js";
-import { runTradingLoop } from "./tick.js";
+import { runTradingLoop } from "./trade.js";
 
 export interface PaperOptions {
   config: AppConfig;

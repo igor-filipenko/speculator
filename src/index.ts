@@ -141,7 +141,6 @@ async function runWatchCommand(argv: string[]): Promise<void> {
 
   await runWatch({
     config,
-    strategy,
     strategyManager,
     state: programState,
     telegram,

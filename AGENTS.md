@@ -44,7 +44,7 @@ src/ highlights:
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
-  engine/               # watch | paper | trade | wallet | backtest | regime
+  engine/               # watch | paper | trade (shared loop) | wallet | backtest | regime
   chart/render-png.ts
 ```
 

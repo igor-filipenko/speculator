@@ -117,7 +117,7 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(90),
       [],
     );
-    assert.equal(holdThroughStop.kind, "command");
+    assert.equal(holdThroughStop.kind, "protective-command");
     assert.equal(holdThroughStop.command.intent, "close-long");
     assert.match(holdThroughStop.command.reason, /ATR/);
 
@@ -133,7 +133,7 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(90),
       [],
     );
-    assert.equal(stopCmd.kind, "command");
+    assert.equal(stopCmd.kind, "protective-command");
     assert.equal(stopCmd.command.intent, "close-long");
     assert.match(stopCmd.command.reason, /ATR/);
   });
@@ -175,7 +175,7 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(115),
       candles,
     );
-    assert.equal(result.kind, "command");
+    assert.equal(result.kind, "protective-command");
     assert.match(result.command.reason, /ATR trail/);
   });
 });
@@ -390,8 +390,8 @@ describe("HighRiskManager", () => {
     };
     const risk = new HighRiskManager("trend is bearish", riskParams({ atrStopMult: 2 }));
     const result = risk.check(hold, portfolio.getSnapshot(95), []);
-    assert.equal(result.kind, "command");
-    if (result.kind === "command") {
+    assert.equal(result.kind, "protective-command");
+    if (result.kind === "protective-command") {
       assert.equal(result.command.intent, "close-long");
       assert.match(result.command.reason, /ATR stop/);
     }

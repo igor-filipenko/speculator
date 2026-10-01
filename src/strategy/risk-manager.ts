@@ -4,6 +4,7 @@ import type {
   ClearRisk,
   Command,
   NoCommand,
+  ProtectiveCommand,
   RequiredCommand,
   RiskManager,
   RiskOrCommand,
@@ -46,6 +47,10 @@ export class GenericRiskManager implements RiskManager {
 
 function asCommand(command: Command): RequiredCommand {
   return { kind: "command", command };
+}
+
+function asProtectiveCommand(command: Command): ProtectiveCommand {
+  return { kind: "protective-command", command };
 }
 
 function blocked(signal: Signal, reason: string): ClearRisk {
@@ -321,7 +326,7 @@ function checkDirected(
   const trough = troughSinceOpen(snapshot, candles, signal, interval);
   const stopExit = evaluateProtectiveExit(signal, snapshot, config, peak, trough);
   if (stopExit) {
-    return asCommand(stopExit);
+    return asProtectiveCommand(stopExit);
   }
 
   const position = snapshot.position.side;

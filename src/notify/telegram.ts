@@ -22,6 +22,7 @@ type TelegramInfo =
   | { type: "signal"; signal: Signal }
   | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade }
+  | { type: "protective"; trade: Trade }
   | { type: "market"; market: MarketIndicators; previous?: Trend }
   | { type: "error"; pair?: string; message: string };
 
@@ -84,6 +85,7 @@ async function notifyTelegram(
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
       .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
+      .with({ type: "protective" }, ({ trade }) => formatProtectiveMessage(trade))
       .with({ type: "market" }, ({ market, previous }) =>
         previous !== undefined
           ? formatMarketMessage(market, previous)
@@ -208,6 +210,30 @@ function formatTradeMessage(trade: Trade): string {
     `*${escapeMd(trade.pair)}*`,
     `Size ${code(trade.size.toFixed(6))} @ ${code(trade.price.toFixed(6))}`,
   ];
+  if (trade.simulated) {
+    lines.push(`_simulated_`);
+  }
+  if (trade.txSignature != null) {
+    lines.push(`Sig ${code(trade.txSignature)}`);
+  }
+  if (trade.realizedPnl != null) {
+    lines.push(`Realized P&L ${code(`${trade.realizedPnl.toFixed(4)} USDC`)}`);
+  }
+  return lines.join("\n");
+}
+
+function formatProtectiveMessage(trade: Trade): string {
+  const heading = trade.simulated
+    ? `🛡️ *PAPER STOP ${escapeMd(trade.side)}*`
+    : `🛡️ *LIVE STOP ${escapeMd(trade.side)}*`;
+  const lines = [
+    heading,
+    `*${escapeMd(trade.pair)}*`,
+    `Size ${code(trade.size.toFixed(6))} @ ${code(trade.price.toFixed(6))}`,
+  ];
+  if (trade.reason) {
+    lines.push("", `_${escapeMd(trade.reason)}_`);
+  }
   if (trade.simulated) {
     lines.push(`_simulated_`);
   }

@@ -274,7 +274,7 @@ async function replayPair(args: {
       );
 
       const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
-      if (result.kind === "command") {
+      if (result.kind === "command" || result.kind === "protective-command") {
         const command = result.command;
         // Protective exits fill at the stop/trail level; cross signals use the tick price.
         exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : price);

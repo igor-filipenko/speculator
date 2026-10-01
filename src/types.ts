@@ -296,12 +296,17 @@ export interface RequiredCommand {
   command: Command;
 }
 
+export interface ProtectiveCommand {
+  kind: "protective-command";
+  command: Command;
+}
+
 export interface NoCommand {
   kind: "no-command";
 }
 
-/** Tagged result of {@link RiskManager.check}: fill, blocked signal, or HOLD / no-op. */
-export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
+/** Tagged result of {@link RiskManager.check}: fill, protective exit, blocked signal, or HOLD / no-op. */
+export type RiskOrCommand = ClearRisk | RequiredCommand | ProtectiveCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {

@@ -312,6 +312,7 @@ async function processSignal(
     return true;
   }
   const command = result.command;
+  const protective = result.kind === "protective-command";
 
   const order = await exchange.execute(command, pair);
   if (!isOrder(order)) {
@@ -335,7 +336,7 @@ async function processSignal(
   }
 
   logTrade(trade);
-  await telegram.notify({ type: "trade", trade });
+  await telegram.notify(protective ? { type: "protective", trade } : { type: "trade", trade });
   return true;
 }
 

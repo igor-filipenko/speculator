@@ -143,11 +143,21 @@ function longProtectiveExit(
   }
 
   const stopPrice = position.entryPrice - config.atrStopMult * atrNow;
-  const peakClose = peak ?? Math.max(position.entryPrice, signal.meta?.barHigh ?? signal.price);
+  const barHigh = signal.meta?.barHigh ?? signal.price;
+  const peakClose = peak ?? Math.max(position.entryPrice, barHigh);
   const trailPrice = peakClose - config.atrTrailMult * atrNow;
   const exitLevel = Math.max(stopPrice, trailPrice);
 
-  if (barLow > exitLevel) {
+  // Intra-bar high tick: the trail may have just ratcheted off this print.
+  // An earlier low in the forming bar is not a fill of that new level.
+  // A bar-close evaluation (timestamp on the boundary) still uses the wick.
+  const printingHigh =
+    signal.price >= barHigh && barHigh > barLow && !isBarBoundary(signal, config);
+  if (printingHigh) {
+    if (signal.price > exitLevel) {
+      return null;
+    }
+  } else if (barLow > exitLevel) {
     return null;
   }
 
@@ -187,11 +197,20 @@ function shortProtectiveExit(
   }
 
   const stopPrice = position.entryPrice + config.atrStopMult * atrNow;
-  const troughClose = trough ?? Math.min(position.entryPrice, signal.meta?.barLow ?? signal.price);
+  const barLow = signal.meta?.barLow ?? signal.price;
+  const troughClose = trough ?? Math.min(position.entryPrice, barLow);
   const trailPrice = troughClose + config.atrTrailMult * atrNow;
   const exitLevel = Math.min(stopPrice, trailPrice);
 
-  if (barHigh < exitLevel) {
+  // Intra-bar low tick: the trail may have just tightened off this print.
+  // An earlier high in the forming bar is not a fill of that new level.
+  // A bar-close evaluation (timestamp on the boundary) still uses the wick.
+  const printingLow = signal.price <= barLow && barLow < barHigh && !isBarBoundary(signal, config);
+  if (printingLow) {
+    if (signal.price < exitLevel) {
+      return null;
+    }
+  } else if (barHigh < exitLevel) {
     return null;
   }
 
@@ -215,6 +234,16 @@ function shortProtectiveExit(
     priceHint: exitLevel,
     baseSize: position.size,
   };
+}
+
+/** True when `signal.at` sits on a timeframe boundary (bar open, or a close-only replay). */
+function isBarBoundary(signal: Signal, config: RiskParams): boolean {
+  const intervalSec = candleIntervalSeconds(config.timeframe);
+  if (!(intervalSec > 0)) {
+    return false;
+  }
+  const atSec = Math.round(signal.at.getTime() / 1000);
+  return atSec % intervalSec === 0;
 }
 
 function inCooldown(trades: Trade[], at: Date, config: RiskParams): boolean {

@@ -225,6 +225,98 @@ describe("evaluateProtectiveExit", () => {
     assert.equal(cmd.intent, "close-long");
     assert.match(cmd.reason, /ATR stop/);
   });
+
+  it("still stops on a bar-close wick when the close is the high", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 123.3333,
+      at: new Date("2026-01-01T00:15:00.000Z"),
+      meta: { atr: 0.87, barLow: 118.777, barHigh: 123.3333 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(123.3333),
+      riskParams({ atrStopMult: 50, atrTrailMult: 3 }),
+      123.3333,
+    );
+    assert.ok(cmd);
+    assert.match(cmd.reason, /ATR trail/);
+  });
+
+  it("does not trail-exit a long on the high tick because an earlier low is under the new trail", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 123.3333,
+      at: new Date("2026-01-01T00:07:30.000Z"),
+      meta: { atr: 0.87, barLow: 118.777, barHigh: 123.3333 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(123.3333),
+      riskParams({ atrStopMult: 50, atrTrailMult: 3 }),
+      123.3333,
+    );
+    assert.equal(cmd, null);
+  });
+
+  it("still trail-exits a long when the low tick itself is through the trail", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 115,
+      at: new Date("2026-01-01T00:03:45.000Z"),
+      meta: { atr: 1, barLow: 115, barHigh: 119 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(115),
+      riskParams({ atrStopMult: 50, atrTrailMult: 2 }),
+      120,
+    );
+    assert.ok(cmd);
+    assert.match(cmd.reason, /ATR trail/);
+  });
 });
 
 describe("HighRiskManager", () => {

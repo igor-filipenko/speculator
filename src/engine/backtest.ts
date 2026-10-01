@@ -105,8 +105,9 @@ export interface RunBacktestOptions {
 
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
- * By default each signal-timeframe bar is walked as a forming candle (open/high/low/close,
- * green vs red path) so `evaluateSignal` sees the same incomplete last bar as live.
+ * By default each signal-timeframe bar is walked as a forming candle so `evaluateSignal`
+ * sees the same incomplete last bar as live. The path is fixed from the position at the
+ * bar open: long visits the high last, short visits the low last, flat follows candle color.
  * Pass {@link RunBacktestOptions.noIntrabar} to evaluate once per bar at close.
  * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
  */
@@ -227,9 +228,10 @@ async function replayPair(args: {
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
+    const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks = noIntrabar
       ? [{ price: candle.close, atSec: candle.time + barIntervalSec, forming: candle }]
-      : intraBarTicks(candle, barIntervalSec);
+      : intraBarTicks(candle, barIntervalSec, positionSide);
 
     for (const tick of ticks) {
       const window = closed.concat(tick.forming);

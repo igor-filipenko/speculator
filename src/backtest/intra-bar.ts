@@ -1,4 +1,4 @@
-import type { Candle } from "../types.js";
+import type { Candle, PositionSide } from "../types.js";
 
 export interface IntraBarTick {
   /** Spot price at this step. */
@@ -10,14 +10,27 @@ export interface IntraBarTick {
 }
 
 /**
- * Intra-bar trade path from OHLC.
- * Green (`close >= open`): open → low → high → close (dip then rally).
- * Red (`close < open`): open → high → low → close (rally then dump).
- * Consecutive duplicate prices are dropped.
+ * Intra-bar trade path from OHLC. Consecutive duplicate prices are dropped.
+ *
+ * An open position walks the adverse extreme first so a stop can fire before
+ * this bar's favorable extreme ratchets the trail:
+ * - long: open → low → close → high (high last)
+ * - short: open → high → close → low (low last)
+ *
+ * Flat keeps the candle-color path (no position to punish):
+ * - green (`close >= open`): open → low → high → close
+ * - red (`close < open`): open → high → low → close
  */
-export function intraBarPrices(candle: Candle): number[] {
+export function intraBarPrices(candle: Candle, side: PositionSide = "flat"): number[] {
   const { open, high, low, close } = candle;
-  const ordered = close >= open ? [open, low, high, close] : [open, high, low, close];
+  const ordered =
+    side === "long"
+      ? [open, low, close, high]
+      : side === "short"
+        ? [open, high, close, low]
+        : close >= open
+          ? [open, low, high, close]
+          : [open, high, low, close];
   const prices: number[] = [];
   for (const price of ordered) {
     if (prices.length === 0 || prices[prices.length - 1] !== price) {
@@ -55,8 +68,12 @@ export function formingCandle(closed: Candle, pricesSeen: readonly number[]): Ca
 }
 
 /** OHLC ticks for one bar, with a forming last candle at each step (like live). */
-export function intraBarTicks(candle: Candle, intervalSec: number): IntraBarTick[] {
-  const prices = intraBarPrices(candle);
+export function intraBarTicks(
+  candle: Candle,
+  intervalSec: number,
+  side: PositionSide = "flat",
+): IntraBarTick[] {
+  const prices = intraBarPrices(candle, side);
   const n = prices.length;
   const ticks: IntraBarTick[] = [];
   const seen: number[] = [];

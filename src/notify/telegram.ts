@@ -173,6 +173,8 @@ const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
   bbLower: "BB lower",
   donchianUpper: "DC upper",
   donchianLower: "DC lower",
+  donchianMid: "DC mid",
+  shortStopPrice: "Short stop",
   volumeSma: "Vol SMA",
   barLow: "Bar low",
   barHigh: "Bar high",

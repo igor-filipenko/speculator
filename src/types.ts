@@ -9,7 +9,7 @@ export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-sho
 
 export type OrderType = "market" | "limit";
 
-export type StrategyMode = "bollinger" | "grid" | "donchian";
+export type StrategyMode = "bollinger" | "grid" | "donchian" | "donchian-fakeout";
 
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
@@ -125,6 +125,13 @@ export interface Signal {
     donchianUpper?: number;
     /** Prior Donchian exit-channel low. */
     donchianLower?: number;
+    /** Donchian entry-channel midline (mean-reversion target). */
+    donchianMid?: number;
+    /**
+     * Strategy-owned hard stop for an open short (price above entry). When set, the risk
+     * manager uses it instead of the entry + atrStopMult×ATR stop.
+     */
+    shortStopPrice?: number;
     /** Prior-bar SMA of volume (breakout filter baseline). */
     volumeSma?: number;
     /** Last bar low (for ATR stop checks in risk). */

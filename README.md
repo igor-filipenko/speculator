@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default), `grid`, or `donchian`                                          |
+| `STRATEGY`                            | `bollinger` (default), `grid`, `donchian`, or `donchian-fakeout`                      |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
@@ -347,6 +347,14 @@ Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or fl
 
 ATR stop is 3×; trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak, and at the current price on a 1-bar time stop when no close reaches breakout high − ATR. Cooldown 8 bars (2h), minHold 0. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
+### Donchian fakeout (`donchian-fakeout`)
+
+Counter-trend, **short only**, on 15m. Fades a failed 20-bar breakout. Setup on two **closed** bars: bar B **closes above the prior 20-bar high** on volume above `1.2 × SMA(volume 20)` (a real push that traps longs), then the next bar C **closes back under that level** on volume of at least `1.0 × SMA`. `SELL` opens the short on the next tick (a forming bar is ignored). Entries are skipped when price is already at or below the pre-breakout channel midline, or when the stop is closer than 0.3×ATR or farther than 3×ATR.
+
+**Stop:** just above the local maximum of the breakout (highest high of B and C) plus 0.1×ATR, passed to the risk manager as `meta.shortStopPrice` and rebuilt from `openedAt` while the short is open, so it does not drift. The usual ATR stop is only a fallback. **Exit:** `BUY` (cover) at the pre-breakout channel midline (filled at the midline in replay), or a 16-bar (4h) time stop; the 2.5×ATR trail from the trough still applies. Cooldown 8 bars.
+
+HTF trend does **not** gate this strategy (it is counter-trend by design), so shorts are allowed in bullish markets too; `--ignore-trend` still skips HTF loading. Backtest it with `pnpm backtest -- --from 01-09-2026 --to 01-10-2026 --strategy donchian-fakeout`.
+
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks by default (or candle close with `--no-intrabar`; stop level for ATR exits).
 
 ## Project layout
@@ -377,6 +385,7 @@ src/
   strategy/mode/bollinger.ts
   strategy/mode/grid.ts
   strategy/mode/donchian.ts
+  strategy/mode/donchian-fakeout.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart

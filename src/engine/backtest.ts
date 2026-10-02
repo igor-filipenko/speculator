@@ -306,9 +306,10 @@ async function replayPair(args: {
   const firstClose = candles[0]!.close;
   const lastClose = candles[candles.length - 1]!.close;
   const snap = portfolio.getSnapshot(lastClose);
-  const sells = snap.trades.filter((t) => t.side === "SELL");
-  const wins = sells.filter((t) => (t.realizedPnl ?? 0) > 0).length;
-  const roundTrips = sells.length;
+  // Closing fills carry realizedPnl: SELL closes a long, BUY covers a short.
+  const exits = snap.trades.filter((t) => t.realizedPnl !== undefined);
+  const wins = exits.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const roundTrips = exits.length;
   const totalReturnPct =
     startingCashUsdc > 0 ? ((snap.equity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
   const holdEquity = computeBuyHoldEquity(startingCashUsdc, firstClose, lastClose, pair.symbol);

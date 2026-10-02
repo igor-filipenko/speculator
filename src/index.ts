@@ -258,7 +258,7 @@ async function runWalletCommand(argv: string[]): Promise<void> {
   await runWallet(config, { buySol });
 }
 
-const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid", "donchian"];
+const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid", "donchian", "donchian-fakeout"];
 
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);

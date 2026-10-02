@@ -21,6 +21,7 @@ import type {
 } from "../types.js";
 import { BollingerStrategy } from "./mode/bollinger.js";
 import { DonchianStrategy } from "./mode/donchian.js";
+import { DonchianFakeoutStrategy } from "./mode/donchian-fakeout.js";
 import { GridStrategy } from "./mode/grid.js";
 
 export {
@@ -54,7 +55,10 @@ export class SimpleStrategyManager implements StrategyManager {
   constructor(options: SimpleStrategyManagerOptions) {
     this.strategyMode = options.strategyMode;
     this.strategy = loadStrategy(options.strategyMode, "flat", "low");
-    this.riskManager = new GenericRiskManager(this.strategy.getRiskParams());
+    this.riskManager =
+      options.strategyMode === "donchian-fakeout"
+        ? createRiskManager("flat", this.strategy)
+        : new GenericRiskManager(this.strategy.getRiskParams());
     this.params = htfParamsFor(options.htf);
     this.mtfParams = mtfParamsFor();
   }
@@ -112,6 +116,10 @@ export class SimpleStrategyManager implements StrategyManager {
 
 export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
   const risk = strategy.getRiskParams();
+  // Counter-trend fakeout fades breakouts, so HTF trend must not veto its shorts.
+  if (strategy.getMode() === "donchian-fakeout") {
+    return new GenericRiskManager(risk, { allowLong: false, allowShort: true });
+  }
   return match(trend)
     .with("bearish", () => new HighRiskManager("trend is bearish", risk, true))
     .with("unknown", () => new HighRiskManager("trend is unknown", risk, false))
@@ -133,5 +141,7 @@ export function loadStrategy(mode: StrategyMode, trend: Trend, volatility: Volat
       return new GridStrategy(trend, volatility);
     case "donchian":
       return new DonchianStrategy(trend, volatility);
+    case "donchian-fakeout":
+      return new DonchianFakeoutStrategy(trend, volatility);
   }
 }

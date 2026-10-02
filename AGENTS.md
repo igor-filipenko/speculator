@@ -40,7 +40,7 @@ src/ highlights:
   db/                   # Timescale access (portfolios, trades, signals, candles, tokens, pools)
   market/               # Gecko OHLCV + HTF/1h MarketIndicators
   exchange/             # emulated, or jupiter (spot long + perps short)
-  strategy/             # indicators + bollinger/grid/donchian + SVGs
+  strategy/             # indicators + bollinger/grid/donchian/donchian-fakeout + SVGs
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY

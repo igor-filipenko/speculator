@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
-import type { Candle } from "../types.js";
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import type { Candle, Signal } from "../types.js";
 import {
   classifyHighLow,
   confirmLabel,
@@ -218,6 +219,35 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.6"));
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+  });
+});
+
+describe("donchian-fakeout risk direction", () => {
+  it("allows shorts regardless of HTF trend (counter-trend)", () => {
+    const manager = new SimpleStrategyManager({ strategyMode: "donchian-fakeout", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getMode(), "donchian-fakeout");
+    const bullish = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    assert.equal(bullish.trend, "bullish");
+    manager.applyMarketIndicators(bullish);
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "SELL",
+      reason: "fakeout",
+      price: 100,
+      at,
+    };
+    const snapshot = new PaperPortfolio("SOL/USDC", 1000).getSnapshot(100);
+    const result = manager.getActiveRiskManager().check(signal, snapshot, []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-short");
+    }
   });
 });
 

@@ -5,7 +5,10 @@ import type { DonchianParams } from "./donchian.js";
 export interface DonchianChartInput {
   pair: string;
   candles: Candle[];
-  strategy: DonchianParams;
+  strategy: Pick<
+    DonchianParams,
+    "timeframe" | "entryPeriod" | "exitPeriod" | "volumeSmaPeriod" | "volumeSmaMult"
+  >;
   width?: number;
   height?: number;
 }

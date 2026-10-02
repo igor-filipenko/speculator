@@ -201,7 +201,11 @@ function shortProtectiveExit(
     return null;
   }
 
-  const stopPrice = position.entryPrice + config.atrStopMult * atrNow;
+  const structureStop = signal.meta?.shortStopPrice;
+  const hasStructureStop = structureStop != null && structureStop > 0;
+  const stopPrice = hasStructureStop
+    ? structureStop
+    : position.entryPrice + config.atrStopMult * atrNow;
   const barLow = signal.meta?.barLow ?? signal.price;
   const troughClose = trough ?? Math.min(position.entryPrice, barLow);
   const trailPrice = troughClose + config.atrTrailMult * atrNow;
@@ -224,6 +228,8 @@ function shortProtectiveExit(
   let reason: string;
   if (hitStop && hitTrail) {
     reason = `ATR stop/trail hit (level ${exitLevel.toFixed(4)}, ATR=${atrNow.toFixed(4)})`;
+  } else if (hitStop && hasStructureStop) {
+    reason = `Structure stop hit (${stopPrice.toFixed(4)}; above breakout high)`;
   } else if (hitStop) {
     reason = `ATR stop hit (${stopPrice.toFixed(4)}; entry ${position.entryPrice.toFixed(4)} + ${config.atrStopMult}×ATR)`;
   } else {

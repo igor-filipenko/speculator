@@ -128,7 +128,7 @@ export interface DonchianInput {
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * SELL when a closed close crosses below the prior (longer) exit-period low, when
  * price gives back givebackAtrMult × ATR from the hold's peak (does not widen with HTF),
- * or when timeStopBars pass without a close at breakoutHigh + followThroughAtrMult×ATR
+ * or when timeStopBars pass without a close at breakoutHigh − ATR
  * (false breakout; wicks alone do not count). The time stop sells at the current price.
  * Volume / EMA / trend do not block exits. ATR stop/trail still use the forming range.
  */
@@ -272,7 +272,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m Donchian breakout: closed-bar 20-bar high + SMA volume + EMA50; HTF bullish or flat; exit at 40/55-bar low, 3×ATR giveback, or time stop without close follow-through. */
+/** 15m Donchian breakout: closed-bar 20-bar high + SMA volume + EMA50; HTF bullish or flat; exit at 40-bar low, 3×ATR giveback, or time stop without close follow-through. */
 export class DonchianStrategy implements Strategy {
   private readonly params: DonchianParams;
   private readonly risk: RiskParams;
@@ -366,7 +366,7 @@ function holdPeak(
 
 /**
  * False breakout: after `timeStopBars`, no later **close** has reached
- * breakoutHigh + followThroughAtrMult×ATR. Wicks above the level do not count.
+ * breakoutHigh − ATR. Wicks above the level do not count.
  * The breakout bar is the last candle that closed at or before the fill.
  */
 function stalledBreakout(input: {

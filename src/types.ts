@@ -173,8 +173,10 @@ export interface Trade {
   side: "BUY" | "SELL";
   price: number;
   size: number;
-  /** Realized P&L in quote currency (set on SELL). */
+  /** Realized P&L in quote currency (set on a closing fill). */
   realizedPnl?: number;
+  /** Jupiter perps open + close + borrow charged on this fill (backtest shorts). */
+  perpsFeeUsdc?: number;
   at: Date;
   simulated: boolean;
   /** On-chain transaction signature (live fills only). */
@@ -211,6 +213,17 @@ export interface Command {
   baseSize?: number;
 }
 
+/**
+ * Jupiter Perps JLP-market fee schedule (fractions of notional).
+ * `openFeePct` is pool-info `openFeePercent`; `closeFeePct` is the same 6 bps
+ * (`decreasePositionBps`); `borrowFeePctPerHour` is pool-info `shortBorrowRatePercent`.
+ */
+export interface JupiterPerpsFeeSchedule {
+  openFeePct: number;
+  closeFeePct: number;
+  borrowFeePctPerHour: number;
+}
+
 /** Fill returned by an exchange (simulated paper/backtest or live on-chain). */
 export interface Order {
   pair: string;
@@ -230,6 +243,8 @@ export interface Order {
     mid: number;
     slippageUsdcPerBase: number;
     poolFeeUsdcPerBase: number;
+    /** Jupiter perps schedule. Set on short opens and covers; spot fills omit it. */
+    perps?: JupiterPerpsFeeSchedule;
   };
 }
 

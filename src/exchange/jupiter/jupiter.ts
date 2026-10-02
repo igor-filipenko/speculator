@@ -8,6 +8,7 @@ import type {
   OpenPosition,
   Order,
   PairConfig,
+  PerpsFees,
   PositionSource,
 } from "../../types.js";
 import {
@@ -65,6 +66,13 @@ export interface JupiterExchangeOptions {
 }
 
 const DEFAULT_BASE = "https://api.jup.ag";
+/** How long a pool-info schedule is reused before the next tick refetches it. */
+const PERPS_FEE_TTL_MS = 60 * 60 * 1000;
+
+interface CachedPerpsFees {
+  expiresAt: number;
+  schedule: Promise<PerpsFees>;
+}
 
 /**
  * Jupiter exchange. Without a keypair, `execute` is a simulated quote fill.
@@ -82,6 +90,8 @@ export class JupiterExchange implements Exchange, PositionSource {
   private readonly fetchImpl: typeof fetch;
   private readonly signTransaction: ((txBase64: string) => string) | undefined;
   private readonly perps: JupiterPerpsClient;
+  /** Mint → in-flight or settled pool-info schedule. Expires after {@link PERPS_FEE_TTL_MS}. */
+  private readonly perpsFeeCache = new Map<string, CachedPerpsFees>();
 
   constructor(options: JupiterExchangeOptions = {}) {
     this.apiKey = options.apiKey ?? "";
@@ -108,6 +118,27 @@ export class JupiterExchange implements Exchange, PositionSource {
     if (options.keypair !== undefined && options.balances === undefined) {
       throw new Error("JupiterExchange live mode requires balances");
     }
+  }
+
+  /**
+   * Cached perps rates. The first call for a mint GETs /pool-info; later ticks reuse it
+   * until the entry is an hour old.
+   */
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees> {
+    const mint = pair.baseMint;
+    const cached = this.perpsFeeCache.get(mint);
+    if (cached !== undefined && cached.expiresAt > Date.now()) {
+      return cached.schedule;
+    }
+    const pending = this.perps.fetchFeeSchedule(pair).catch((err: unknown) => {
+      const current = this.perpsFeeCache.get(mint);
+      if (current?.schedule === pending) {
+        this.perpsFeeCache.delete(mint);
+      }
+      throw err;
+    });
+    this.perpsFeeCache.set(mint, { expiresAt: Date.now() + PERPS_FEE_TTL_MS, schedule: pending });
+    return pending;
   }
 
   async spotPrice(pair: PairConfig): Promise<number> {

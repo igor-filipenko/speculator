@@ -1,8 +1,9 @@
-import { JUPITER_PERPS_FEES, shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import { isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
+  PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
   RiskParams,
@@ -56,12 +57,6 @@ export interface BollingerParams {
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
   rsiBuyMax: number;
-  /** Jupiter perps open fee as a fraction of short notional. */
-  shortOpenFeePct: number;
-  /** Jupiter perps close fee as a fraction of short notional. */
-  shortCloseFeePct: number;
-  /** Jupiter perps short borrow fee per hour as a fraction of notional. */
-  shortBorrowFeePctPerHour: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -138,9 +133,6 @@ export function bollingerParamsFor(
     workTrendAdxFlatMax: 20,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
-    shortOpenFeePct: JUPITER_PERPS_FEES.openFeePct,
-    shortCloseFeePct: JUPITER_PERPS_FEES.closeFeePct,
-    shortBorrowFeePctPerHour: JUPITER_PERPS_FEES.borrowFeePctPerHour,
   };
 }
 
@@ -167,6 +159,11 @@ export interface BollingerInput {
   positionSide?: "long" | "short";
   /** When the open short was filled. Borrow fee accrues from here. */
   openedAt?: Date;
+  /**
+   * Perps open/close/borrow rates from the exchange cache.
+   * Missing rates block a new short and keep an open short on HOLD.
+   */
+  perpsFees?: PerpsFees;
   /** HTF trend. */
   trend: Trend;
   /** 1h volatility. */
@@ -181,9 +178,10 @@ export interface BollingerInput {
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
  * **and** close is above the open fill after costs. Flat → HOLD on mid.
- * Already short → BUY when price is at or below the mid **and** below entry by
- * the Jupiter perps open fee, close fee, and hourly borrow accrued since `openedAt`.
- * Upper-band shorts also need band→mid to cover the open+close fee.
+ * Already short → BUY when perps fees are present, price is at or below the mid,
+ * **and** price is below entry by the open fee, close fee, and hourly borrow since `openedAt`.
+ * Missing fees keep the short on HOLD. An upper-band short is not opened without that schedule,
+ * and band→mid must still cover the open+close fee.
  * Regime / ADX / RSI do not block exits.
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
@@ -281,11 +279,19 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
 
   if (short) {
+    const fees = input.perpsFees;
+    if (fees == null) {
+      return {
+        ...base,
+        side: "HOLD",
+        reason: "Short cover held: perps fee schedule missing",
+      };
+    }
     const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
     const feePct = shortPositionFeePct({
-      openFeePct: strategy.shortOpenFeePct,
-      closeFeePct: strategy.shortCloseFeePct,
-      borrowFeePctPerHour: strategy.shortBorrowFeePctPerHour,
+      openFeePct: fees.openFeePct,
+      closeFeePct: fees.closeFeePct,
+      borrowFeePctPerHour: fees.borrowFeePctPerHour,
       heldMs,
     });
     const minExit = entry * (1 - feePct);
@@ -368,11 +374,14 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         ? "waiting for breakout up"
         : undefined;
 
-    if (rejectedUpper) {
+    const fees = input.perpsFees;
+    if (rejectedUpper && fees == null) {
+      reason = "Upper rejection ignored: perps fee schedule missing";
+    } else if (rejectedUpper && fees != null) {
       const bandWidth = bbUpper - bbMid;
       const bandToMidPct = bandWidth / close;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
-      const shortRoundTripPct = strategy.shortOpenFeePct + strategy.shortCloseFeePct;
+      const shortRoundTripPct = fees.openFeePct + fees.closeFeePct;
       const minShortBand = Math.max(strategy.minBandToMidPct, shortRoundTripPct);
       if (blocked != null) {
         reason = `Upper rejection ignored: ${blocked}`;
@@ -469,6 +478,7 @@ export class BollingerStrategy implements Strategy {
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
+    perpsFees?: PerpsFees,
   ): Signal {
     const position = portfolio?.position;
     const positioned =
@@ -483,6 +493,7 @@ export class BollingerStrategy implements Strategy {
       at,
       trend: market.trend,
       volatility: market.volatility,
+      ...(perpsFees !== undefined ? { perpsFees } : {}),
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? {
             entryPrice: positioned.entryPrice,

@@ -205,7 +205,7 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 | Liquid (`SOL/USDC`) | 0.05%    | 0.04%    | 0.0001 SOL → USDC via close |
 | Meme (future pairs) | 0.80%    | 0.25%    | same                        |
 
-Short opens and covers skip the spot pool fee. They pay the [Jupiter Perps](https://perps-api.jup.ag/v1/pool-info) schedule instead: **0.06%** open, **0.06%** close (`openFeePercent` / `decreasePositionBps`), plus the hourly short borrow rate (**0.0007%** per hour, `shortBorrowRatePercent` on the SOL market as of 2026-10-02) on entry notional for the time the short is open. Price impact is not charged; pool-info only publishes its cap.
+Short opens and covers skip the spot pool fee. They pay a perps schedule instead: open and close base fees plus hourly short borrow on entry notional for the time the short is open. Watch, paper, and trade load that schedule from [Jupiter pool-info](https://perps-api.jup.ag/v1/pool-info) (`openFeePercent`, `shortBorrowRatePercent`; close uses the same base rate) and reuse it for one hour. Backtest uses the offline snapshot (0.06% open, 0.06% close, 0.0007% per hour as of 2026-10-02) and does not call Jupiter. Price impact is not charged; pool-info only publishes its cap.
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
 
@@ -335,7 +335,7 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 | flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
 | bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
-Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). A short covers only when price is at or below the mid **and** below entry by the Jupiter perps open fee, close fee, and hourly borrow accrued since the fill. An upper-band short is skipped when `(upper − mid) / close` cannot cover the 0.12% open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Grid (`grid`)
 

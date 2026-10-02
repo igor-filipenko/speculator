@@ -221,6 +221,7 @@ async function replayPair(args: {
     strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
   );
 
+  const perpsFees = await exchange.perpsFeeSchedule(pair);
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
@@ -274,6 +275,7 @@ async function replayPair(args: {
         price,
         new Date(tick.atSec * 1000),
         portfolio.getSnapshot(price),
+        perpsFees,
       );
 
       const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
@@ -310,7 +312,7 @@ async function replayPair(args: {
   const lastClose = candles[candles.length - 1]!.close;
   const snap = portfolio.getSnapshot(lastClose);
   const sells = snap.trades.filter((t) => t.side === "SELL");
-  const wins = sells.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
   const roundTrips = sells.length;
   const totalReturnPct =
     startingCashUsdc > 0 ? ((snap.equity - startingCashUsdc) / startingCashUsdc) * 100 : 0;

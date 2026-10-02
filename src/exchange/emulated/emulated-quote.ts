@@ -6,7 +6,7 @@
  */
 
 import { JUPITER_PERPS_FEES } from "../jupiter/perps-fees.js";
-import type { JupiterPerpsFeeSchedule } from "../../types.js";
+import type { PerpsFees } from "../../types.js";
 
 export type LiquidityTier = "liquid" | "meme";
 
@@ -53,7 +53,7 @@ export interface EmulatedFillBreakdown {
   /** Pool fee in USDC per 1 base unit at mid (informational). */
   poolFeeUsdcPerBase: number;
   /** Present for perps short fills. */
-  perps?: JupiterPerpsFeeSchedule;
+  perps?: PerpsFees;
 }
 
 export interface EmulatedFill {

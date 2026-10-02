@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { Keypair } from "@solana/web3.js";
 import { WSOL_MINT } from "./amounts.js";
 import { ExchangeError } from "../error.js";
@@ -232,6 +232,85 @@ describe("JupiterExchange.execute", () => {
     assert.ok(!isOrder(order));
     assert.match(order.message, /native SOL/);
     assert.equal(fetched.value, false);
+  });
+
+  it("loads perps fees once per mint and reuses the cache", async () => {
+    let poolInfoCalls = 0;
+    const fetchImpl: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/pool-info")) {
+        poolInfoCalls += 1;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              openFeePercent: "0.06",
+              shortBorrowRatePercent: "0.0012",
+            }),
+          ),
+        );
+      }
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    };
+    const exchange = new JupiterExchange({
+      fetchImpl,
+      perpsBaseUrl: "https://perps.test/v1",
+    });
+    const first = await exchange.perpsFeeSchedule(PAIR);
+    const second = await exchange.perpsFeeSchedule(PAIR);
+    assert.equal(poolInfoCalls, 1);
+    assert.equal(first, second);
+    assert.equal(first.openFeePct, Number("0.06") / 100);
+    assert.equal(first.closeFeePct, first.openFeePct);
+    assert.equal(first.borrowFeePctPerHour, Number("0.0012") / 100);
+  });
+
+  it("refetches perps fees after one hour", async () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-01-01T00:00:00.000Z") });
+    try {
+      let poolInfoCalls = 0;
+      const fetchImpl: typeof fetch = (input) => {
+        const url = requestUrl(input);
+        if (url.includes("/pool-info")) {
+          poolInfoCalls += 1;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                openFeePercent: "0.06",
+                shortBorrowRatePercent: "0.0012",
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(new Response("unexpected", { status: 500 }));
+      };
+      const exchange = new JupiterExchange({
+        fetchImpl,
+        perpsBaseUrl: "https://perps.test/v1",
+      });
+      await exchange.perpsFeeSchedule(PAIR);
+      mock.timers.tick(60 * 60 * 1000 - 1);
+      await exchange.perpsFeeSchedule(PAIR);
+      assert.equal(poolInfoCalls, 1);
+      mock.timers.tick(1);
+      await exchange.perpsFeeSchedule(PAIR);
+      assert.equal(poolInfoCalls, 2);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("does not request pool-info for a market jupiter perps does not list", async () => {
+    let called = false;
+    const exchange = new JupiterExchange({
+      fetchImpl: () => {
+        called = true;
+        return Promise.resolve(new Response("no", { status: 500 }));
+      },
+    });
+    const fees = await exchange.perpsFeeSchedule(TOKEN_PAIR);
+    assert.equal(called, false);
+    assert.equal(fees.openFeePct, 0.0006);
+    assert.equal(fees.borrowFeePctPerHour, 0.000007);
   });
 
   it("opens a short through jupiter perps", async () => {

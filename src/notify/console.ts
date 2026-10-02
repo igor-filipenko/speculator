@@ -3,6 +3,7 @@ import type {
   MarketIndicators,
   MtfSnapshot,
   Order,
+  PerpsFees,
   Risk,
   Signal,
   PortfolioSnapshot,
@@ -67,6 +68,13 @@ function band(label: string, lower?: number, mid?: number, upper?: number): stri
     parts.push(`hi=${fmt(upper)}`);
   }
   return ` ${label} ${parts.join(" ")}`;
+}
+
+export function logPerpsFees(pair: string, fees: PerpsFees): void {
+  console.log(
+    `[${pair}] perps fees open=${pct(fees.openFeePct)} close=${pct(fees.closeFeePct)} ` +
+      `borrow=${pct(fees.borrowFeePctPerHour)}/h`,
+  );
 }
 
 export function logSignal(signal: Signal): void {
@@ -149,6 +157,10 @@ function formatOpenPosition(position: { side: string; size: number; entryPrice: 
     return "flat";
   }
   return `${position.side} ${position.size.toFixed(6)} @ ${position.entryPrice.toFixed(6)}`;
+}
+
+function pct(fraction: number): string {
+  return `${(fraction * 100).toFixed(4)}%`;
 }
 
 function fmt(n: number | undefined): string {

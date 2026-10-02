@@ -214,11 +214,11 @@ export interface Command {
 }
 
 /**
- * Jupiter Perps JLP-market fee schedule (fractions of notional).
- * `openFeePct` is pool-info `openFeePercent`; `closeFeePct` is the same 6 bps
- * (`decreasePositionBps`); `borrowFeePctPerHour` is pool-info `shortBorrowRatePercent`.
+ * Perps fee schedule as fractions of notional.
+ * Open and borrow come from the venue's pool-info rates. Close matches the open
+ * base fee when the venue publishes one rate for both.
  */
-export interface JupiterPerpsFeeSchedule {
+export interface PerpsFees {
   openFeePct: number;
   closeFeePct: number;
   borrowFeePctPerHour: number;
@@ -243,8 +243,8 @@ export interface Order {
     mid: number;
     slippageUsdcPerBase: number;
     poolFeeUsdcPerBase: number;
-    /** Jupiter perps schedule. Set on short opens and covers; spot fills omit it. */
-    perps?: JupiterPerpsFeeSchedule;
+    /** Perps schedule. Set on short opens and covers; spot fills omit it. */
+    perps?: PerpsFees;
   };
 }
 
@@ -291,6 +291,8 @@ export interface Strategy {
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
+    /** Live perps rates from {@link Exchange.perpsFeeSchedule}. Omitted in unit tests. */
+    perpsFees?: PerpsFees,
   ): Signal;
   /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
@@ -360,6 +362,11 @@ export interface StrategyManager {
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
   execute(command: Command, pair: PairConfig): Promise<Order | Error>;
+  /**
+   * Open, close, and hourly short-borrow rates for this pair.
+   * Implementations cache the result; callers may invoke this every tick.
+   */
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees>;
 }
 
 export interface ProgramState {

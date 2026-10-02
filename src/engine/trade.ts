@@ -5,6 +5,7 @@ import { candleIntervalSeconds, fetchCandles } from "../market/gecko-terminal.js
 import { refreshMarketIndicators } from "../market/htf-indicators.js";
 import {
   logMarket,
+  logPerpsFees,
   logRisk,
   logSignal,
   logSnapshot,
@@ -244,6 +245,8 @@ async function processPair(args: {
     trend: "unknown" as const,
     volatility: "unknown" as const,
   };
+  const perpsFees = await exchange.perpsFeeSchedule(pair);
+  logPerpsFees(pair.symbol, perpsFees);
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
@@ -251,6 +254,7 @@ async function processPair(args: {
     price,
     new Date(candles[candles.length - 1]!.time * 1000),
     portfolio?.getSnapshot(price),
+    perpsFees,
   );
 
   lastCandles.set(pair.symbol, candles);

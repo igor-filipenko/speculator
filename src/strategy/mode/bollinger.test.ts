@@ -70,6 +70,20 @@ function stuckBelowLower(): Candle[] {
   return candles;
 }
 
+/** Flat range, pierce upper, then reject still above a typical mid. */
+function rejectUpperBand(): Candle[] {
+  const start = 1_700_000_000;
+  const candles: Candle[] = [];
+  for (let i = 0; i < 50; i++) {
+    const price = 100 + ((i % 6) - 2.5) * 0.35;
+    candles.push(bar(start + i * INTERVAL, price, 0.25));
+  }
+  const t = start + 50 * INTERVAL;
+  candles.push(bar(t, 103.5, 0.5));
+  candles.push(bar(t + INTERVAL, 101.0, 0.3));
+  return candles;
+}
+
 /** Flat series ending near/above the middle of the band. */
 function reboundToMid(): Candle[] {
   const start = 1_700_000_000;
@@ -227,20 +241,21 @@ describe("evaluateBollinger filters", () => {
     const last = candles[candles.length - 1]!;
     const at = new Date(last.time * 1000);
     const openedAt = new Date(at.getTime() - 2 * 60 * 60 * 1000);
-    const strategy = looseFilters({
-      shortOpenFeePct: 0.01,
-      shortCloseFeePct: 0.01,
-      shortBorrowFeePctPerHour: 0.005,
-    });
+    const perpsFees = {
+      openFeePct: 0.01,
+      closeFeePct: 0.01,
+      borrowFeePctPerHour: 0.005,
+    };
     const held = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy,
+      strategy: looseFilters(),
       price: last.close,
       entryPrice: last.close,
       positionSide: "short",
       openedAt,
       at,
+      perpsFees,
     });
     assert.equal(held.side, "HOLD");
     assert.match(held.reason, /perpsFee=3\.00%/);
@@ -248,15 +263,53 @@ describe("evaluateBollinger filters", () => {
     const covered = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy,
+      strategy: looseFilters(),
       price: last.close * 0.96,
       entryPrice: last.close,
       positionSide: "short",
       openedAt,
       at,
+      perpsFees,
     });
     assert.equal(covered.side, "BUY", covered.reason);
     assert.match(covered.reason, /profitable price/);
+  });
+
+  it("holds a short cover when the perps fee schedule is missing", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close * 0.5,
+      entryPrice: last.close,
+      positionSide: "short",
+    });
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /perps fee schedule missing/);
+  });
+
+  it("does not open a short when the perps fee schedule is missing", () => {
+    const candles = rejectUpperBand();
+    const last = candles[candles.length - 1]!;
+    const withFees = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+    });
+    assert.equal(withFees.side, "SELL", withFees.reason);
+
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+    });
+    assert.equal(signal.side, "HOLD");
+    assert.match(signal.reason, /perps fee schedule missing/);
   });
 
   it("holds a mid cross when price is still below minExit", () => {
@@ -414,9 +467,6 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
     assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
-    assert.equal(bollingerParamsFor("flat", "low").shortOpenFeePct, 0.0006);
-    assert.equal(bollingerParamsFor("flat", "low").shortCloseFeePct, 0.0006);
-    assert.equal(bollingerParamsFor("flat", "low").shortBorrowFeePctPerHour, 0.000007);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);

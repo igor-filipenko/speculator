@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ExchangeError } from "../error.js";
 import { fromAtomic } from "./amounts.js";
-import type { OpenPosition, PairConfig } from "../../types.js";
+import { JUPITER_PERPS_FEES } from "./perps-fees.js";
+import type { OpenPosition, PairConfig, PerpsFees } from "../../types.js";
 
 /** Jupiter Perps markets. https://perps-api.jup.ag/v1 */
 type PerpsAsset = "SOL" | "ETH" | "BTC";
@@ -54,6 +55,11 @@ const positionSchema = z.object({
 
 const positionsSchema = z.object({
   dataList: z.array(positionSchema),
+});
+
+const poolInfoSchema = z.object({
+  openFeePercent: z.string(),
+  shortBorrowRatePercent: z.string(),
 });
 
 /** One open Jupiter Perps position, amounts in UI units. */
@@ -137,6 +143,27 @@ export class JupiterPerpsClient {
       pnlUsd: usd(parsed.quote?.pnlAfterFeesUsd),
       sizeUsd: usd(parsed.quote?.sizeUsdDelta),
       transferUsd: usd(parsed.quote?.transferAmountUsd),
+    };
+  }
+
+  /**
+   * Open fee and hourly short borrow from GET /pool-info.
+   * Close uses the same base rate as open. Markets Jupiter does not list
+   * keep the offline snapshot and do not hit the network.
+   */
+  async fetchFeeSchedule(pair: PairConfig): Promise<PerpsFees> {
+    if (assetFromMint(pair.baseMint) === undefined) {
+      return JUPITER_PERPS_FEES;
+    }
+    const url = new URL(`${this.baseUrl}/pool-info`);
+    url.searchParams.set("mint", pair.baseMint);
+    const body = await this.send(url, { method: "GET" });
+    const parsed = poolInfoSchema.parse(body);
+    const openFeePct = percentFraction(parsed.openFeePercent);
+    return {
+      openFeePct,
+      closeFeePct: openFeePct,
+      borrowFeePctPerHour: percentFraction(parsed.shortBorrowRatePercent),
     };
   }
 
@@ -301,6 +328,14 @@ function decimalsForAsset(asset: string): number {
     return 8;
   }
   return 0;
+}
+
+function percentFraction(raw: string): number {
+  const percent = Number(raw);
+  if (!Number.isFinite(percent) || percent < 0) {
+    throw new ExchangeError(`jupiter perps pool-info rate is not a percent: ${raw}`);
+  }
+  return percent / 100;
 }
 
 function usd(raw: string | undefined): number {

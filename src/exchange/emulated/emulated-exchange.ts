@@ -1,5 +1,14 @@
 import { ExchangeError } from "../error.js";
-import type { Command, Error, Exchange, Order, OrderIntent, PairConfig } from "../../types.js";
+import type {
+  Command,
+  Error,
+  Exchange,
+  Order,
+  OrderIntent,
+  PairConfig,
+  PerpsFees,
+} from "../../types.js";
+import { JUPITER_PERPS_FEES } from "../jupiter/perps-fees.js";
 import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 
 /**
@@ -11,6 +20,11 @@ export class EmulatedExchange implements Exchange {
 
   setMidPrice(mid: number): void {
     this.mid = mid;
+  }
+
+  /** Offline snapshot. Backtest does not call Jupiter. */
+  perpsFeeSchedule(_pair: PairConfig): Promise<PerpsFees> {
+    return Promise.resolve(JUPITER_PERPS_FEES);
   }
 
   spotPrice(_pair: PairConfig): Promise<number> {

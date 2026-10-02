@@ -45,6 +45,8 @@ export interface BacktestCostTotals {
   poolFeeUsdc: number;
   /** Sum of priority fees in USDC. */
   priorityFeeUsdc: number;
+  /** Jupiter perps open + close + borrow on short round-trips. */
+  perpsFeeUsdc: number;
 }
 
 export interface BacktestMetrics {
@@ -213,6 +215,7 @@ async function replayPair(args: {
     slippageUsdc: 0,
     poolFeeUsdc: 0,
     priorityFeeUsdc: 0,
+    perpsFeeUsdc: 0,
   };
   const barIntervalSec = candleIntervalSeconds(
     strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
@@ -379,6 +382,7 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
   totals.slippageUsdc += trade.size * fillCosts.slippageUsdcPerBase;
   totals.poolFeeUsdc += trade.size * fillCosts.poolFeeUsdcPerBase;
   totals.priorityFeeUsdc += order.priorityFeeUsdc;
+  totals.perpsFeeUsdc += trade.perpsFeeUsdc ?? 0;
 }
 
 /** Parse CLI flags for `backtest`. */
@@ -496,7 +500,8 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
   console.log(`Max drawdown: ${metrics.maxDrawdownPct.toFixed(2)}%`);
   console.log(
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
-      `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} USDC`,
+      `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} | ` +
+      `perps: ${costs.perpsFeeUsdc.toFixed(4)} USDC`,
   );
   console.log(
     metrics.intrabar

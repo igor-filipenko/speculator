@@ -222,6 +222,43 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /Above mid, no upper rejection/);
   });
 
+  it("holds a short until price clears Jupiter perps open, close, and borrow", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const at = new Date(last.time * 1000);
+    const openedAt = new Date(at.getTime() - 2 * 60 * 60 * 1000);
+    const strategy = looseFilters({
+      shortOpenFeePct: 0.01,
+      shortCloseFeePct: 0.01,
+      shortBorrowFeePctPerHour: 0.005,
+    });
+    const held = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: last.close,
+      entryPrice: last.close,
+      positionSide: "short",
+      openedAt,
+      at,
+    });
+    assert.equal(held.side, "HOLD");
+    assert.match(held.reason, /perpsFee=3\.00%/);
+
+    const covered = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: last.close * 0.96,
+      entryPrice: last.close,
+      positionSide: "short",
+      openedAt,
+      at,
+    });
+    assert.equal(covered.side, "BUY", covered.reason);
+    assert.match(covered.reason, /profitable price/);
+  });
+
   it("holds a mid cross when price is still below minExit", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
@@ -377,6 +414,9 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
     assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
+    assert.equal(bollingerParamsFor("flat", "low").shortOpenFeePct, 0.0006);
+    assert.equal(bollingerParamsFor("flat", "low").shortCloseFeePct, 0.0006);
+    assert.equal(bollingerParamsFor("flat", "low").shortBorrowFeePctPerHour, 0.000007);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);

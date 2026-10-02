@@ -1,4 +1,5 @@
 import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
+import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import type {
   Order,
   PairConfig,
@@ -296,7 +297,13 @@ export class PaperPortfolio implements Portfolio {
     }
 
     const size = order.size;
-    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc;
+    const notional = size * this.position.entryPrice;
+    const heldMs =
+      this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
+    const perps = order.fillCosts?.perps;
+    const perpsFeeUsdc = perps != null ? notional * shortPositionFeePct({ ...perps, heldMs }) : 0;
+    const pnl =
+      size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc - perpsFeeUsdc;
     const trade: PaperTrade = {
       pair: order.pair,
       side: "BUY",
@@ -306,6 +313,7 @@ export class PaperPortfolio implements Portfolio {
       at: order.at,
       simulated: true,
       reason: order.reason,
+      ...(perpsFeeUsdc > 0 ? { perpsFeeUsdc } : {}),
     };
 
     this.cashUsdc = Math.max(0, this.cashUsdc + pnl);

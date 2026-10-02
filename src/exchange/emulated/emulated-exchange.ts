@@ -35,13 +35,20 @@ export class EmulatedExchange implements Exchange {
     }
 
     const tier = liquidityTierForPair(pair.symbol);
-    const emulated = emulateFillPrice({ side: fillSide(command.intent), close: this.mid, tier });
+    const perps = command.intent === "open-short" || command.intent === "close-short";
+    const emulated = emulateFillPrice({
+      side: fillSide(command.intent),
+      close: this.mid,
+      tier,
+      ...(perps ? { venue: "perps" as const } : {}),
+    });
     const { fillPrice, priorityFeeUsdc, breakdown } = emulated;
 
     const fillCosts = {
       mid: breakdown.mid,
       slippageUsdcPerBase: breakdown.slippageUsdcPerBase,
       poolFeeUsdcPerBase: breakdown.poolFeeUsdcPerBase,
+      ...(breakdown.perps != null ? { perps: breakdown.perps } : {}),
     };
 
     const opens = command.intent === "open-long" || command.intent === "open-short";

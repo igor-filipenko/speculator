@@ -34,6 +34,16 @@ describe("emulateFillPrice", () => {
     assert.equal(buy.breakdown.poolFee, TIER_COSTS.meme.poolFee);
   });
 
+  it("drops the spot pool fee on perps shorts and attaches the borrow schedule", () => {
+    const close = 100;
+    const fill = emulateFillPrice({ side: "SELL", close, tier: "liquid", venue: "perps" });
+    assert.equal(fill.fillPrice, close * (1 - TIER_COSTS.liquid.slippage));
+    assert.equal(fill.breakdown.poolFee, 0);
+    assert.equal(fill.breakdown.perps?.openFeePct, 0.0006);
+    assert.equal(fill.breakdown.perps?.closeFeePct, 0.0006);
+    assert.equal(fill.breakdown.perps?.borrowFeePctPerHour, 0.000007);
+  });
+
   it("rejects non-positive close", () => {
     assert.throws(() => emulateFillPrice({ side: "BUY", close: 0 }), /invalid close/);
   });

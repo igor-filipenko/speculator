@@ -1,3 +1,4 @@
+import { JUPITER_PERPS_FEES, shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import { isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
@@ -12,8 +13,8 @@ import type {
   Trend,
   Volatility,
 } from "../../types.js";
-import { buildBollingerSvg } from "./bollinger-svg.js";
 import { atr, bollinger, dmi, ema, rsi } from "../indicators.js";
+import { buildBollingerSvg } from "./bollinger-svg.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;
@@ -55,6 +56,12 @@ export interface BollingerParams {
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
   rsiBuyMax: number;
+  /** Jupiter perps open fee as a fraction of short notional. */
+  shortOpenFeePct: number;
+  /** Jupiter perps close fee as a fraction of short notional. */
+  shortCloseFeePct: number;
+  /** Jupiter perps short borrow fee per hour as a fraction of notional. */
+  shortBorrowFeePctPerHour: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -131,6 +138,9 @@ export function bollingerParamsFor(
     workTrendAdxFlatMax: 20,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
+    shortOpenFeePct: JUPITER_PERPS_FEES.openFeePct,
+    shortCloseFeePct: JUPITER_PERPS_FEES.closeFeePct,
+    shortBorrowFeePctPerHour: JUPITER_PERPS_FEES.borrowFeePctPerHour,
   };
 }
 
@@ -155,6 +165,8 @@ export interface BollingerInput {
   entryPrice?: number;
   /** Which side `entryPrice` belongs to. */
   positionSide?: "long" | "short";
+  /** When the open short was filled. Borrow fee accrues from here. */
+  openedAt?: Date;
   /** HTF trend. */
   trend: Trend;
   /** 1h volatility. */
@@ -169,6 +181,9 @@ export interface BollingerInput {
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
  * **and** close is above the open fill after costs. Flat → HOLD on mid.
+ * Already short → BUY when price is at or below the mid **and** below entry by
+ * the Jupiter perps open fee, close fee, and hourly borrow accrued since `openedAt`.
+ * Upper-band shorts also need band→mid to cover the open+close fee.
  * Regime / ADX / RSI do not block exits.
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
@@ -266,13 +281,20 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
 
   if (short) {
-    const minExit = entry * (1 - strategy.minExitAboveEntryPct);
+    const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
+    const feePct = shortPositionFeePct({
+      openFeePct: strategy.shortOpenFeePct,
+      closeFeePct: strategy.shortCloseFeePct,
+      borrowFeePctPerHour: strategy.shortBorrowFeePctPerHour,
+      heldMs,
+    });
+    const minExit = entry * (1 - feePct);
     const profitablePrice = Math.min(bbMid, minExit);
-    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`;
+    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`;
 
     if (price <= profitablePrice) {
       side = "BUY";
-      reason = `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`;
+      reason = `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`;
     }
     return { ...base, side, reason };
   }
@@ -350,14 +372,19 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const bandWidth = bbUpper - bbMid;
       const bandToMidPct = bandWidth / close;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
+      const shortRoundTripPct = strategy.shortOpenFeePct + strategy.shortCloseFeePct;
+      const minShortBand = Math.max(strategy.minBandToMidPct, shortRoundTripPct);
       if (blocked != null) {
         reason = `Upper rejection ignored: ${blocked}`;
       } else if (blockedShort) {
         reason = `Upper rejection ignored: ${blockedShort}`;
       } else if (adxNow > strategy.adxMax) {
         reason = `Upper rejection ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
-      } else if (bandToMidPct < strategy.minBandToMidPct) {
-        reason = `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
+      } else if (bandToMidPct < minShortBand) {
+        reason =
+          shortRoundTripPct > strategy.minBandToMidPct
+            ? `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < perps open+close ${pct(shortRoundTripPct)}`
+            : `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
       } else if (rejectDepth < strategy.minReclaimDepth) {
         reason =
           `Upper rejection ignored: depth ${pct(rejectDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
@@ -457,7 +484,11 @@ export class BollingerStrategy implements Strategy {
       trend: market.trend,
       volatility: market.volatility,
       ...(positioned?.side === "long" || positioned?.side === "short"
-        ? { entryPrice: positioned.entryPrice, positionSide: positioned.side }
+        ? {
+            entryPrice: positioned.entryPrice,
+            positionSide: positioned.side,
+            ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
+          }
         : {}),
     });
   }

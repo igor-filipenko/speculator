@@ -24,8 +24,17 @@ export function getInitData(): string {
   return telegramWebApp()?.initData ?? "";
 }
 
-/** True when opened inside Telegram with signed initData. */
+/** Local Vite only: set via `pnpm web:dev` (`VITE_SKIP_TELEGRAM_AUTH=1`). */
+export function skipTelegramAuth(): boolean {
+  return import.meta.env["VITE_SKIP_TELEGRAM_AUTH"] === "1";
+}
+
+/** True when opened inside Telegram with signed initData (or local skip). */
 export function hasTelegramAuth(): boolean {
+  if (skipTelegramAuth()) {
+    console.info("[telegram] auth skipped (VITE_SKIP_TELEGRAM_AUTH=1)");
+    return true;
+  }
   const data = getInitData();
   console.info("[telegram] initData length", data.length);
   return data.length > 0;

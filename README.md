@@ -84,12 +84,13 @@ Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [gra
 
 ### Telegram Mini App (optional)
 
-Read-only portfolio UI served by a separate Rust HTTP process (`server/`) and React SPA (`web/`).
+Read-only UI served by a separate Rust HTTP process (`server/`) and React SPA (`web/`). The Mini App opens on the latest strategy signal; portfolio is a second tab.
 
-| Endpoint                              | Auth                            | Purpose                         |
-| ------------------------------------- | ------------------------------- | ------------------------------- |
-| `GET /api/health`                     | none                            | Liveness                        |
-| `GET /api/portfolio?mode=paper\|live` | `Authorization: tma <initData>` | Portfolio snapshot for `BOT_ID` |
+| Endpoint                              | Auth                            | Purpose                                  |
+| ------------------------------------- | ------------------------------- | ---------------------------------------- |
+| `GET /api/health`                     | none                            | Liveness                                 |
+| `GET /api/signal`                     | `Authorization: tma <initData>` | Newest `market.signals` row for `BOT_ID` |
+| `GET /api/portfolio?mode=paper\|live` | `Authorization: tma <initData>` | Portfolio snapshot for `BOT_ID`          |
 
 Local development:
 
@@ -104,7 +105,7 @@ Production unit: [deploy/miniapp.service](./deploy/miniapp.service) (`User=minia
 
 ## Build
 
-Typecheck + type-aware ESLint (zero warnings allowed):
+Typecheck + type-aware ESLint (zero warnings allowed) + Prettier check + tests + `web` check:
 
 ```bash
 pnpm check
@@ -115,6 +116,8 @@ Or separately:
 ```bash
 pnpm typecheck
 pnpm lint
+pnpm format:check
+pnpm web:check
 ```
 
 Compile to `dist/`:
@@ -123,7 +126,7 @@ Compile to `dist/`:
 pnpm build
 ```
 
-Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `trade` / `backtest`). Strict compile settings live in `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked).
+Day-to-day development uses `tsx` (no build required for `watch` / `paper` / `trade` / `backtest`). Strict compile settings live in `tsconfig.base.json` / `tsconfig.json` (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, …) and `eslint.config.js` (typescript-eslint recommendedTypeChecked). The Mini App (`web/`) shares the same base tsconfig flags, ESLint rules, and Prettier config (`pnpm web:check`).
 
 ## Run
 

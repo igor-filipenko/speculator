@@ -18,6 +18,7 @@ Build/run: [README.md](./README.md).
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended). Rust toolchain required for `server/`.
 - Comments and user-facing docs in this repo are **English**.
 - Format with **Prettier** (`pnpm format`); `pnpm check` includes `format:check`. Prefer the Prettier VS Code/Cursor extension (format on save is enabled in `.vscode/settings.json`).
+- Shared TypeScript strict flags live in `tsconfig.base.json` (root CLI and `web/` both extend it). Prefer Prettier + type-aware ESLint over alternate formatters/linters in `web/` too (`pnpm --dir web check`).
 - Keep the dependency surface small: prefer `fetch` + zod + tsx + `pg`; `dbmate` is allowed for SQL migrations; `grammy` is allowed for optional Telegram notify/commands; `@solana/web3.js` is allowed for live keypair signing and RPC balances. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`. Mini App UI uses React + shadcn under `web/`; API uses Axum under `server/`.
 - Never commit secrets (`.env`, private keys, keypair JSON). Use `.env.example` only.
 
@@ -56,8 +57,8 @@ src/ highlights:
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
 - When changing strategy defaults, update `.env.example` (and README) together.
-- After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0`).
-- Keep TypeScript strict flags in `tsconfig.json` and type-aware rules in `eslint.config.js`; do not weaken them without discussion.
+- After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0` + `web` check).
+- Keep TypeScript strict flags in `tsconfig.base.json` / `tsconfig.json` and type-aware rules in `eslint.config.js` (and `web/eslint.config.js`); do not weaken them without discussion.
 
 ## Security
 

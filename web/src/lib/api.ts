@@ -24,16 +24,33 @@ export interface PortfolioResponse {
   portfolios: PortfolioItemDto[];
 }
 
-export async function fetchPortfolio(
-  initData: string,
-  mode: PortfolioMode,
-): Promise<PortfolioResponse> {
-  const res = await fetch(`/api/portfolio?mode=${encodeURIComponent(mode)}`, {
-    headers: {
-      Authorization: `tma ${initData}`,
-      Accept: "application/json",
-    },
-  });
+export interface SignalDto {
+  pair: string;
+  side: string;
+  price: number;
+  reason: string;
+  at: string;
+  emaFast?: number;
+  emaSlow?: number;
+  rsi?: number;
+  trendEma?: number;
+  atr?: number;
+  adx?: number;
+}
+
+export interface SignalResponse {
+  botId: string;
+  signal: SignalDto | null;
+}
+
+async function getJson<T>(path: string, initData: string): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (initData) {
+    headers["Authorization"] = `tma ${initData}`;
+  }
+  const res = await fetch(path, { headers });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
@@ -46,5 +63,13 @@ export async function fetchPortfolio(
     }
     throw new Error(message);
   }
-  return (await res.json()) as PortfolioResponse;
+  return (await res.json()) as T;
+}
+
+export function fetchPortfolio(initData: string, mode: PortfolioMode): Promise<PortfolioResponse> {
+  return getJson(`/api/portfolio?mode=${encodeURIComponent(mode)}`, initData);
+}
+
+export function fetchSignal(initData: string): Promise<SignalResponse> {
+  return getJson("/api/signal", initData);
 }

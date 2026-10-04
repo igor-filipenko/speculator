@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PaperPortfolio } from "../paper/portfolio.js";
-import type { Candle, Order, RiskParams, Signal } from "../types.js";
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import type { Candle, Order, PortfolioSnapshot, RiskParams, Signal } from "../types.js";
 import { evaluateProtectiveExit, GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 
 function riskParams(overrides: Partial<RiskParams> = {}): RiskParams {
@@ -20,7 +20,8 @@ describe("GenericRiskManager", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const buyOrder: Order = {
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 9,
@@ -31,7 +32,8 @@ describe("GenericRiskManager", () => {
     portfolio.applyOrderSync(buyOrder);
     const sellOrder: Order = {
       pair: "SOL/USDC",
-      side: "SELL",
+      type: "market",
+      intent: "close-long",
       reason: "exit",
       price: 100,
       size: 9,
@@ -62,7 +64,8 @@ describe("GenericRiskManager", () => {
     const openedAt = new Date("2026-01-01T00:00:00.000Z");
     portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 5,
@@ -114,8 +117,8 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(90),
       [],
     );
-    assert.equal(holdThroughStop.kind, "command");
-    assert.equal(holdThroughStop.command.side, "SELL");
+    assert.equal(holdThroughStop.kind, "protective-command");
+    assert.equal(holdThroughStop.command.intent, "close-long");
     assert.match(holdThroughStop.command.reason, /ATR/);
 
     const stopCmd = risk.check(
@@ -130,8 +133,8 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(90),
       [],
     );
-    assert.equal(stopCmd.kind, "command");
-    assert.equal(stopCmd.command.side, "SELL");
+    assert.equal(stopCmd.kind, "protective-command");
+    assert.equal(stopCmd.command.intent, "close-long");
     assert.match(stopCmd.command.reason, /ATR/);
   });
 
@@ -140,7 +143,8 @@ describe("GenericRiskManager", () => {
     const openedAt = new Date("2026-01-01T00:00:00.000Z");
     portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 1,
@@ -171,7 +175,7 @@ describe("GenericRiskManager", () => {
       portfolio.getSnapshot(115),
       candles,
     );
-    assert.equal(result.kind, "command");
+    assert.equal(result.kind, "protective-command");
     assert.match(result.command.reason, /ATR trail/);
   });
 });
@@ -195,7 +199,8 @@ describe("evaluateProtectiveExit", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 1,
@@ -217,8 +222,100 @@ describe("evaluateProtectiveExit", () => {
       riskParams({ atrStopMult: 2 }),
     );
     assert.ok(cmd);
-    assert.equal(cmd.side, "SELL");
+    assert.equal(cmd.intent, "close-long");
     assert.match(cmd.reason, /ATR stop/);
+  });
+
+  it("still stops on a bar-close wick when the close is the high", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 123.3333,
+      at: new Date("2026-01-01T00:15:00.000Z"),
+      meta: { atr: 0.87, barLow: 118.777, barHigh: 123.3333 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(123.3333),
+      riskParams({ atrStopMult: 50, atrTrailMult: 3 }),
+      123.3333,
+    );
+    assert.ok(cmd);
+    assert.match(cmd.reason, /ATR trail/);
+  });
+
+  it("does not trail-exit a long on the high tick because an earlier low is under the new trail", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 123.3333,
+      at: new Date("2026-01-01T00:07:30.000Z"),
+      meta: { atr: 0.87, barLow: 118.777, barHigh: 123.3333 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(123.3333),
+      riskParams({ atrStopMult: 50, atrTrailMult: 3 }),
+      123.3333,
+    );
+    assert.equal(cmd, null);
+  });
+
+  it("still trail-exits a long when the low tick itself is through the trail", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 119,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      side: "HOLD",
+      reason: "hold",
+      price: 115,
+      at: new Date("2026-01-01T00:03:45.000Z"),
+      meta: { atr: 1, barLow: 115, barHigh: 119 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(115),
+      riskParams({ atrStopMult: 50, atrTrailMult: 2 }),
+      120,
+    );
+    assert.ok(cmd);
+    assert.match(cmd.reason, /ATR trail/);
   });
 });
 
@@ -252,7 +349,8 @@ describe("HighRiskManager", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 9,
@@ -264,7 +362,7 @@ describe("HighRiskManager", () => {
     const result = risk.check(sell, portfolio.getSnapshot(110), []);
     assert.equal(result.kind, "command");
     if (result.kind === "command") {
-      assert.equal(result.command.side, "SELL");
+      assert.equal(result.command.intent, "close-long");
       assert.equal(result.command.baseSize, 9);
     }
   });
@@ -273,7 +371,8 @@ describe("HighRiskManager", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "entry",
       price: 100,
       size: 9,
@@ -291,10 +390,68 @@ describe("HighRiskManager", () => {
     };
     const risk = new HighRiskManager("trend is bearish", riskParams({ atrStopMult: 2 }));
     const result = risk.check(hold, portfolio.getSnapshot(95), []);
-    assert.equal(result.kind, "command");
-    if (result.kind === "command") {
-      assert.equal(result.command.side, "SELL");
+    assert.equal(result.kind, "protective-command");
+    if (result.kind === "protective-command") {
+      assert.equal(result.command.intent, "close-long");
       assert.match(result.command.reason, /ATR stop/);
+    }
+  });
+});
+
+describe("SOL reserve top-up", () => {
+  function snapshot(side: "flat" | "long", insufficientSol: number): PortfolioSnapshot {
+    const long = side === "long";
+    return {
+      cashUsdc: 1000,
+      position: {
+        pair: "SOL/USDC",
+        side,
+        size: long ? 1 : 0,
+        entryPrice: long ? 100 : 0,
+        ...(long ? { openedAt: new Date("2026-01-01T00:00:00.000Z") } : {}),
+      },
+      realizedPnl: 0,
+      equity: 1000,
+      trades: [],
+      nativeSol: 0.01,
+      insufficientSol,
+      simulated: false,
+    };
+  }
+
+  function signal(side: "BUY" | "HOLD"): Signal {
+    return {
+      pair: "SOL/USDC",
+      side,
+      reason: side === "BUY" ? "cross" : "hold",
+      price: 100,
+      at: new Date("2026-01-01T02:00:00.000Z"),
+    };
+  }
+
+  it("buys SOL when flat, ignoring HOLD and BUY", () => {
+    const risk = new GenericRiskManager(riskParams());
+    const snap = snapshot("flat", 0.04);
+    for (const side of ["HOLD", "BUY"] as const) {
+      const result = risk.check(signal(side), snap, []);
+      assert.equal(result.kind, "command");
+      if (result.kind === "command") {
+        assert.equal(result.command.intent, "buy-sol");
+        assert.equal(result.command.baseSize, 0.04);
+        assert.equal(result.command.reason, "native SOL below reserve minimum");
+      }
+    }
+  });
+
+  it("does not buy SOL while a position is open", () => {
+    const risk = new GenericRiskManager(riskParams());
+    const snap = snapshot("long", 0.04);
+    const hold = risk.check(signal("HOLD"), snap, []);
+    assert.equal(hold.kind, "no-command");
+    const buy = risk.check(signal("BUY"), snap, []);
+    assert.equal(buy.kind, "risk");
+    if (buy.kind === "risk") {
+      assert.match(buy.risk.reason, /already long/);
     }
   });
 });

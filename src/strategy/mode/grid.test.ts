@@ -27,6 +27,8 @@ function flatSnapshot(entryPrice = 0): PortfolioSnapshot {
     realizedPnl: 0,
     equity: 100,
     trades: [],
+    nativeSol: 0,
+    insufficientSol: 0,
     simulated: true,
   };
 }
@@ -38,6 +40,8 @@ function longSnapshot(entryPrice: number): PortfolioSnapshot {
     realizedPnl: 0,
     equity: entryPrice,
     trades: [],
+    nativeSol: 0,
+    insufficientSol: 0,
     simulated: true,
   };
 }

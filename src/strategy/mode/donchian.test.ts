@@ -94,6 +94,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams(),
       price: 102,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD");
     assert.match(signal.reason, /warmup/i);
@@ -106,6 +107,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams(),
       price: candles[candles.length - 1]!.close,
+      trend: "flat",
     });
     assert.equal(signal.side, "BUY", signal.reason);
     assert.match(signal.reason, /Donchian breakout/i);
@@ -126,6 +128,7 @@ describe("evaluateDonchian", () => {
       strategy: testParams(),
       price: forming.close,
       at,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /waiting for closed 15m breakout/i);
@@ -149,6 +152,7 @@ describe("evaluateDonchian", () => {
       strategy: testParams(),
       price: next.close,
       at,
+      trend: "flat",
     });
     assert.equal(signal.side, "BUY", signal.reason);
     assert.match(signal.reason, /Donchian breakout/i);
@@ -161,6 +165,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams(),
       price: candles[candles.length - 1]!.close,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /volume/i);
@@ -173,6 +178,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams({ trendEmaPeriod: 30 }),
       price: candles[candles.length - 1]!.close,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /trend EMA/i);
@@ -187,6 +193,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams(),
       price: candles[candles.length - 1]!.close,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /No Donchian signal/i);
@@ -199,20 +206,22 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams(),
       price: candles[candles.length - 1]!.close,
+      entryPrice: 100,
+      trend: "flat",
     });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.match(signal.reason, /Donchian exit/i);
     assert.ok(signal.meta?.donchianLower != null);
   });
 
-  it("ignores a breakout when doNotBuy is set", () => {
+  it("ignores a breakout when HTF trend is bearish", () => {
     const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
       candles,
       strategy: testParams(),
       price: candles[candles.length - 1]!.close,
-      doNotBuy: true,
+      trend: "bearish",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /not bullish/i);
@@ -225,6 +234,7 @@ describe("evaluateDonchian", () => {
       candles,
       strategy: testParams({ minBreakAtrMult: 50 }),
       price: candles[candles.length - 1]!.close,
+      trend: "flat",
     });
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /ATR/i);
@@ -251,9 +261,165 @@ describe("evaluateDonchian", () => {
       price: last.close - 1.5,
       entryPrice: last.close,
       openedAt: new Date(last.time * 1000),
+      trend: "flat",
     });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.match(signal.reason, /Gave back/i);
+  });
+
+  it("sells a long that never closes above the breakout follow level within timeStopBars", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    let t = entryBar.time;
+    for (let i = 0; i < 4; i++) {
+      t += INTERVAL;
+      candles.push(bar(t, entryBar.close - 0.2, 0.1, 10));
+    }
+    const last = candles[candles.length - 1]!;
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles,
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: last.close,
+      at: new Date((last.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Time stop/i);
+  });
+
+  it("time-stops when only a wick clears the breakout high (close does not)", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    // Close below breakout high; high wick well above it.
+    const wick = {
+      time: entryBar.time + INTERVAL,
+      open: entryBar.close - 0.1,
+      high: entryBar.high + 1.0,
+      low: entryBar.close - 0.3,
+      close: entryBar.close - 0.1,
+      volume: 10,
+    };
+    let t = wick.time;
+    const after = [wick];
+    for (let i = 0; i < 3; i++) {
+      t += INTERVAL;
+      after.push(bar(t, entryBar.close - 0.15, 0.1, 10));
+    }
+    const last = after[after.length - 1]!;
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, ...after],
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: last.close,
+      at: new Date((last.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Time stop/i);
+  });
+
+  it("holds when a later close clears breakoutHigh − ATR", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    // Close above breakout high (well clear of breakoutHigh − ATR).
+    const follow = bar(entryBar.time + INTERVAL, entryBar.high + 0.2, 0.3, 10);
+    let t = follow.time;
+    const after = [follow];
+    for (let i = 0; i < 3; i++) {
+      t += INTERVAL;
+      after.push(bar(t, entryBar.close - 0.1, 0.1, 10));
+    }
+    const last = after[after.length - 1]!;
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, ...after],
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: last.close,
+      at: new Date((last.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+  });
+
+  it("time-stops when closes stay more than 1×ATR under the breakout high", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    // Close far under the breakout high so even breakoutHigh − ATR is missed.
+    const poke = bar(entryBar.time + INTERVAL, entryBar.high - 2.0, 0.1, 10);
+    let t = poke.time;
+    const after = [poke];
+    for (let i = 0; i < 3; i++) {
+      t += INTERVAL;
+      after.push(bar(t, entryBar.high - 2.0, 0.1, 10));
+    }
+    const last = after[after.length - 1]!;
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, ...after],
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: last.close,
+      at: new Date((last.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Time stop/i);
+  });
+
+  it("holds when a close sits under the breakout wick but within 1×ATR", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    const under = bar(entryBar.time + INTERVAL, entryBar.high - 0.15, 0.05, 10);
+    let t = under.time;
+    const after = [under];
+    for (let i = 0; i < 3; i++) {
+      t += INTERVAL;
+      after.push(bar(t, entryBar.high - 0.2, 0.05, 10));
+    }
+    const last = after[after.length - 1]!;
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, ...after],
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: last.close,
+      at: new Date((last.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+  });
+
+  it("does not time-stop before timeStopBars have elapsed", () => {
+    const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
+    const entryBar = candles[candles.length - 1]!;
+    const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
+    const next = bar(entryBar.time + INTERVAL, entryBar.close - 0.2, 0.1, 10);
+    const signal = evaluateDonchian({
+      pair: "SOL/USDC",
+      candles: [...candles, next],
+      strategy: testParams({ timeStopBars: 4, givebackAtrMult: 0 }),
+      price: next.close,
+      at: new Date((next.time + INTERVAL) * 1000),
+      entryPrice: entryBar.close,
+      openedAt,
+      trend: "flat",
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.doesNotMatch(signal.reason, /Time stop/i);
   });
 });
 
@@ -267,16 +433,18 @@ describe("donchianParamsFor", () => {
     assert.equal(p.trendEmaPeriod, 50);
     assert.equal(p.minBreakAtrMult, 0.35);
     assert.equal(p.givebackAtrMult, 3);
+    assert.equal(p.timeStopBars, 1);
     assert.equal(p.volumeSmaMult, 2.0);
   });
 
-  it("tightens volume and lengthens the exit channel in squeeze", () => {
+  it("tightens volume in squeeze and keeps a fixed exit channel", () => {
     assert.equal(donchianParamsFor("bullish", "high").volumeSmaMult, 1.2);
     assert.equal(donchianParamsFor("bullish", "high").exitPeriod, 40);
-    assert.equal(donchianParamsFor("bullish", "high").minBreakAtrMult, 0.2);
+    assert.equal(donchianParamsFor("bullish", "high").minBreakAtrMult, 0.35);
     assert.equal(donchianParamsFor("bullish", "low").volumeSmaMult, 1.5);
     assert.equal(donchianParamsFor("bullish", "squeeze").volumeSmaMult, 1.6);
-    assert.equal(donchianParamsFor("bullish", "squeeze").exitPeriod, 55);
+    assert.equal(donchianParamsFor("bullish", "squeeze").exitPeriod, 40);
+    assert.equal(donchianParamsFor("bullish", "squeeze").minBreakAtrMult, 0.25);
   });
 });
 
@@ -287,10 +455,10 @@ describe("DonchianStrategy", () => {
     assert.match(strategy.getDisplayName(), /flat/);
     const risk = strategy.getRiskParams();
     assert.equal(risk.timeframe, "15m");
-    assert.equal(risk.atrStopMult, 2.5);
+    assert.equal(risk.atrStopMult, 3);
     assert.equal(risk.atrTrailMult, 3);
     assert.equal(risk.cooldownBars, 8);
-    assert.equal(risk.minHoldBars, 16);
+    assert.equal(risk.minHoldBars, 0);
     const required = strategy.getRequiredCandles();
     assert.equal(required.timeframe, "15m");
     assert.ok(required.count <= 100);

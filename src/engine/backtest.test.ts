@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
-import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated-quote.js";
-import { PaperPortfolio } from "../paper/portfolio.js";
-import { GenericRiskManager, HighRiskManager } from "../risk/risk-manager.js";
+import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import { GenericRiskManager, HighRiskManager } from "../strategy/risk-manager.js";
 import {
   evaluateMarketIndicators,
   htfParamsFor,
@@ -26,7 +26,7 @@ import {
   runBacktest,
   computeBuyHoldEquity,
 } from "./backtest.js";
-import { intraBarPrices } from "./intra-bar.js";
+import { intraBarPrices } from "../backtest/intra-bar.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 
@@ -41,7 +41,8 @@ function makeConfig(cash = 1000): AppConfig {
     botId: "test",
     solanaRpcUrl: "https://api.mainnet-beta.solana.com",
     slippageBps: 50,
-    liveSolReserveSol: 0.05,
+    solReserveMin: 0.03,
+    solReserveMax: 0.05,
     pairs: [
       {
         symbol: "SOL/USDC",
@@ -592,7 +593,8 @@ describe("PaperPortfolio applyOrder", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const buyOrder: Order = {
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "test",
       price: 100,
       size: 9.9,
@@ -606,7 +608,8 @@ describe("PaperPortfolio applyOrder", () => {
 
     const sellOrder: Order = {
       pair: "SOL/USDC",
-      side: "SELL",
+      type: "market",
+      intent: "close-long",
       reason: "test",
       price: 110,
       size: 9.9,

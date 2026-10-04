@@ -39,6 +39,12 @@ export interface DonchianParams {
    * Caps giveback if HTF later widens the risk trail.
    */
   givebackAtrMult: number;
+  /**
+   * Bars after entry to prove follow-through. If no later **close** reaches
+   * breakoutHigh - ATR, sell at the current price. 0 = off.
+   * Wicks alone do not count.
+   */
+  timeStopBars: number;
 }
 
 /** Stricter volume confirmation in squeeze; unused when HTF is bearish/unknown. */
@@ -49,37 +55,12 @@ const VOLUME_SMA_MULT: Record<Trend, Record<Volatility, number>> = {
   unknown: { high: 1.8, low: 1.8, squeeze: 1.8, unknown: 1.8 },
 };
 
-/**
- * Exit channel is longer than entry so a 5h pullback does not dump a multi-day
- * runner. Squeeze breakouts get the widest channel (those are the big legs).
- */
-const EXIT_PERIOD: Record<Volatility, number> = {
-  high: 40,
-  low: 40,
-  squeeze: 55,
-  unknown: 40,
-};
-
 /** Skip 20-bar highs that barely poke the channel (false breaks). */
 const MIN_BREAK_ATR: Record<Volatility, number> = {
-  high: 0.2,
+  high: 0.35,
   low: 0.35,
   squeeze: 0.25,
   unknown: 0.25,
-};
-
-const ATR_STOP: Record<Trend, number> = {
-  bullish: 3,
-  flat: 2.5,
-  bearish: 2,
-  unknown: 2,
-};
-
-const GIVEBACK_ATR_MULT: Record<Volatility, number> = {
-  high: 3,
-  low: 3,
-  squeeze: 3,
-  unknown: 3,
 };
 
 /**
@@ -102,24 +83,26 @@ export function donchianParamsFor(
   return {
     timeframe: "15m",
     entryPeriod: 20,
-    exitPeriod: EXIT_PERIOD[volatility],
+    exitPeriod: 40,
     volumeSmaPeriod: 20,
     volumeSmaMult: VOLUME_SMA_MULT[trend][volatility],
     trendEmaPeriod: 50,
     atrPeriod: 14,
     minBreakAtrMult: MIN_BREAK_ATR[volatility],
-    givebackAtrMult: GIVEBACK_ATR_MULT[volatility],
+    givebackAtrMult: 3,
+    timeStopBars: 1,
   };
 }
 
 function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
   return {
     timeframe: "15m",
-    atrStopMult: ATR_STOP[trend],
+    atrStopMult: 3,
     atrTrailMult: ATR_TRAIL[trend][volatility],
     /** 2h on 15m: skip an immediate re-entry, not a full day after an ATR stop. */
     cooldownBars: 8,
-    minHoldBars: 16,
+    /** 0 so the time stop, giveback, and channel exit are not delayed. */
+    minHoldBars: 0,
   };
 }
 
@@ -135,7 +118,7 @@ export interface DonchianInput {
   /** When the long was opened; peak is max high of overlapping candles. */
   openedAt?: Date;
   /** When true, breakouts are ignored (HTF bearish/unknown). Exits still fire. */
-  doNotBuy?: boolean;
+  trend: Trend;
 }
 
 /**
@@ -143,9 +126,11 @@ export interface DonchianInput {
  * BUY when a **closed** bar's close crosses above the prior entry-period high by
  * minBreakAtrMult×ATR, volume exceeds k × prior volume SMA, and close is above trend EMA.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
- * SELL when a closed close crosses below the prior (longer) exit-period low, or when
- * price gives back givebackAtrMult × ATR from the hold's peak (does not widen with HTF).
- * Volume / EMA / doNotBuy do not block exits. ATR stop/trail still use the forming range.
+ * SELL when a closed close crosses below the prior (longer) exit-period low, when
+ * price gives back givebackAtrMult × ATR from the hold's peak (does not widen with HTF),
+ * or when timeStopBars pass without a close at breakoutHigh − ATR
+ * (false breakout; wicks alone do not count). The time stop sells at the current price.
+ * Volume / EMA / trend do not block exits. ATR stop/trail still use the forming range.
  */
 export function evaluateDonchian(input: DonchianInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -221,10 +206,8 @@ export function evaluateDonchian(input: DonchianInput): Signal {
     ? `No Donchian signal (close=${fmt(close)}, upper=${fmt(entryUpperPrev)}, exitLow=${fmt(exitLowerPrev)}, vol=${fmt(volume)}, volSMA=${fmt(volumeSmaPrev)})`
     : `No Donchian signal (waiting for closed 15m breakout; close=${fmt(close)}, upper=${fmt(entryUpperPrev)}, exitLow=${fmt(exitLowerPrev)})`;
 
-  if (
-    input.entryPrice != null &&
-    input.entryPrice > 0 &&
-    strategy.givebackAtrMult > 0 &&
+  const gaveBack =
+    input.entryPrice &&
     gaveBackFromPeak({
       entryPrice: input.entryPrice,
       openedAt: input.openedAt,
@@ -234,17 +217,37 @@ export function evaluateDonchian(input: DonchianInput): Signal {
       givebackAtrMult: strategy.givebackAtrMult,
       close,
       price,
-    })
-  ) {
+    });
+
+  const timeStop =
+    input.entryPrice != null
+      ? stalledBreakout({
+          entryPrice: input.entryPrice,
+          openedAt: input.openedAt,
+          candles: signalCandles,
+          timeframe: strategy.timeframe,
+          atrNow,
+          timeStopBars: strategy.timeStopBars,
+          at,
+        })
+      : null;
+
+  if (input.entryPrice && gaveBack) {
     const peak = holdPeak(input.entryPrice, input.openedAt, candles, strategy.timeframe);
     const level = peak - strategy.givebackAtrMult * atrNow;
     side = "SELL";
     reason = `Gave back ${strategy.givebackAtrMult}×ATR from peak ${fmt(peak)} (level ${fmt(level)}, ATR=${fmt(atrNow)})`;
-  } else if (brokeLower) {
+  } else if (input.entryPrice && timeStop != null) {
+    side = "SELL";
+    reason =
+      `Time stop: no follow-through in ${strategy.timeStopBars} bars ` +
+      `(best close ${fmt(timeStop.bestClose)} < ${fmt(timeStop.followLevel)} ` +
+      `= breakout high ${fmt(timeStop.breakoutHigh)} - ATR, ATR=${fmt(atrNow)})`;
+  } else if (input.entryPrice && brokeLower) {
     side = "SELL";
     reason = `Donchian exit: close broke prior ${strategy.exitPeriod}-bar low (prev ${fmt(closePrev)} ≥ ${fmt(exitLowerPrev)}, close ${fmt(close)} < ${fmt(exitLowerPrev)})`;
   } else if (brokeUpper) {
-    if (input.doNotBuy) {
+    if (input.trend !== "bullish" && input.trend !== "flat") {
       reason = `Breakout ignored: HTF trend not bullish or flat`;
     } else if (close <= entryUpperPrev + breakMargin) {
       reason =
@@ -269,7 +272,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   return { ...base, side, reason };
 }
 
-/** 15m Donchian breakout: closed-bar 20-bar high + SMA volume + EMA50; HTF bullish or flat; exit at 40/55-bar low or 3×ATR giveback. */
+/** 15m Donchian breakout: closed-bar 20-bar high + SMA volume + EMA50; HTF bullish or flat; exit at 40-bar low, 3×ATR giveback, or time stop without close follow-through. */
 export class DonchianStrategy implements Strategy {
   private readonly params: DonchianParams;
   private readonly risk: RiskParams;
@@ -282,10 +285,18 @@ export class DonchianStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, entryPeriod, exitPeriod, volumeSmaPeriod, volumeSmaMult, trendEmaPeriod } =
-      this.params;
+    const {
+      timeframe,
+      entryPeriod,
+      exitPeriod,
+      volumeSmaPeriod,
+      volumeSmaMult,
+      trendEmaPeriod,
+      timeStopBars,
+    } = this.params;
     const gate = this.trend === "bullish" ? "bull" : this.trend === "flat" ? "flat" : "no-buy";
-    return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod} ${gate})`;
+    const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
+    return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod}${stop} ${gate})`;
   }
 
   getMode(): "donchian" {
@@ -324,7 +335,7 @@ export class DonchianStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      doNotBuy: market.trend !== "bullish" && market.trend !== "flat",
+      trend: market.trend,
       ...(entryPrice != null ? { entryPrice } : {}),
       ...(position?.openedAt != null ? { openedAt: position.openedAt } : {}),
     });
@@ -353,6 +364,69 @@ function holdPeak(
   return peak;
 }
 
+/**
+ * False breakout: after `timeStopBars`, no later **close** has reached
+ * breakoutHigh − ATR. Wicks above the level do not count.
+ * The breakout bar is the last candle that closed at or before the fill.
+ */
+function stalledBreakout(input: {
+  entryPrice: number;
+  openedAt: Date | undefined;
+  candles: Candle[];
+  timeframe: Timeframe;
+  atrNow: number;
+  timeStopBars: number;
+  at: Date;
+}): { bestClose: number; breakoutHigh: number; followLevel: number } | null {
+  if (
+    input.entryPrice <= 0 ||
+    input.timeStopBars <= 0 ||
+    input.openedAt == null ||
+    !(input.atrNow > 0)
+  ) {
+    return null;
+  }
+
+  const intervalSec = candleIntervalSeconds(input.timeframe);
+  if (intervalSec <= 0) {
+    return null;
+  }
+
+  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
+  const barsHeld = Math.floor(elapsedSec / intervalSec);
+  if (barsHeld < input.timeStopBars) {
+    return null;
+  }
+
+  const openedSec = input.openedAt.getTime() / 1000;
+  let breakoutHigh: number | null = null;
+  for (const candle of input.candles) {
+    if (candle.time + intervalSec <= openedSec) {
+      breakoutHigh = candle.high;
+    }
+  }
+  if (breakoutHigh == null) {
+    return null;
+  }
+
+  const followLevel = breakoutHigh - input.atrNow;
+  let bestClose = Number.NEGATIVE_INFINITY;
+  for (const candle of input.candles) {
+    if (candle.time + intervalSec <= openedSec) {
+      continue;
+    }
+    bestClose = Math.max(bestClose, candle.close);
+  }
+  if (!Number.isFinite(bestClose)) {
+    bestClose = input.entryPrice;
+  }
+
+  if (bestClose >= followLevel) {
+    return null;
+  }
+  return { bestClose, breakoutHigh, followLevel };
+}
+
 function gaveBackFromPeak(input: {
   entryPrice: number;
   openedAt: Date | undefined;
@@ -363,6 +437,10 @@ function gaveBackFromPeak(input: {
   close: number;
   price: number;
 }): boolean {
+  if (input.entryPrice <= 0 || input.givebackAtrMult <= 0) {
+    return false;
+  }
+
   const peak = holdPeak(input.entryPrice, input.openedAt, input.candles, input.timeframe);
   const level = peak - input.givebackAtrMult * input.atrNow;
   return input.close <= level || input.price <= level;

@@ -13,6 +13,7 @@
     "paper": "tsx src/index.ts paper",
     "trade": "tsx src/index.ts trade",
     "wallet": "tsx src/index.ts wallet",
+    "positions": "tsx src/index.ts positions",
     "backtest": "tsx src/index.ts backtest",
     "regime": "tsx src/index.ts regime",
     "migrate": "dbmate --no-dump-schema --migrations-dir ./migrations up",
@@ -28,8 +29,7 @@
     "web:dev": "pnpm --dir web dev",
     "web:build": "pnpm --dir web build",
     "server:build": "cargo build --release --manifest-path server/Cargo.toml",
-    "server:dev": "cargo run --manifest-path server/Cargo.toml",
-    "install-runtime": "node scripts/install-runtime.mjs"
+    "server:dev": "cargo run --manifest-path server/Cargo.toml"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

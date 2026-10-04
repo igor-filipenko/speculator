@@ -22,7 +22,9 @@ type TelegramInfo =
   | { type: "signal"; signal: Signal }
   | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade }
-  | { type: "market"; market: MarketIndicators; previous?: Trend };
+  | { type: "protective"; trade: Trade }
+  | { type: "market"; market: MarketIndicators; previous?: Trend }
+  | { type: "error"; pair?: string; message: string };
 
 const PARSE_MODE = "MarkdownV2" as const;
 
@@ -83,11 +85,13 @@ async function notifyTelegram(
       .with({ type: "signal" }, ({ signal }) => formatSignalMessage(signal))
       .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
+      .with({ type: "protective" }, ({ trade }) => formatProtectiveMessage(trade))
       .with({ type: "market" }, ({ market, previous }) =>
         previous !== undefined
           ? formatMarketMessage(market, previous)
           : formatMarketMessage(market),
       )
+      .with({ type: "error" }, ({ pair, message }) => formatErrorMessage(pair, message))
       .exhaustive();
 
     if (text == null) {
@@ -206,6 +210,30 @@ function formatTradeMessage(trade: Trade): string {
     `*${escapeMd(trade.pair)}*`,
     `Size ${code(trade.size.toFixed(6))} @ ${code(trade.price.toFixed(6))}`,
   ];
+  if (trade.simulated) {
+    lines.push(`_simulated_`);
+  }
+  if (trade.txSignature != null) {
+    lines.push(`Sig ${code(trade.txSignature)}`);
+  }
+  if (trade.realizedPnl != null) {
+    lines.push(`Realized P&L ${code(`${trade.realizedPnl.toFixed(4)} USDC`)}`);
+  }
+  return lines.join("\n");
+}
+
+function formatProtectiveMessage(trade: Trade): string {
+  const heading = trade.simulated
+    ? `🛡️ *PAPER STOP ${escapeMd(trade.side)}*`
+    : `🛡️ *LIVE STOP ${escapeMd(trade.side)}*`;
+  const lines = [
+    heading,
+    `*${escapeMd(trade.pair)}*`,
+    `Size ${code(trade.size.toFixed(6))} @ ${code(trade.price.toFixed(6))}`,
+  ];
+  if (trade.reason) {
+    lines.push("", `_${escapeMd(trade.reason)}_`);
+  }
   if (trade.simulated) {
     lines.push(`_simulated_`);
   }
@@ -420,6 +448,18 @@ export function formatMarketIndicatorsListMessage(
   return ["📡 *Market*", ...blocks].join("\n\n");
 }
 
+export function formatErrorMessage(pair: string | undefined, message: string): string {
+  const where = pair != null ? `*${escapeMd(pair)}* ` : "";
+  return [`⚠️ ${where}*ERROR*`, escapeMd(message)].join("\n");
+}
+
+function formatPosition(position: { side: string; size: number; entryPrice: number }): string {
+  if (position.side === "flat") {
+    return "flat";
+  }
+  return `${position.side} ${position.size.toFixed(6)} @ ${position.entryPrice.toFixed(6)}`;
+}
+
 function formatPortfolioMessage(
   portfolios: Map<string, Portfolio>,
   lastSignals: Map<string, Signal>,
@@ -432,10 +472,7 @@ function formatPortfolioMessage(
   for (const [pair, portfolio] of portfolios) {
     const markPrice = lastSignals.get(pair)?.price ?? 0;
     const snapshot = portfolio.getSnapshot(markPrice);
-    const pos =
-      snapshot.position.side === "long"
-        ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-        : "flat";
+    const pos = formatPosition(snapshot.position);
 
     blocks.push(
       "",

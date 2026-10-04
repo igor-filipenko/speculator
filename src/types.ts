@@ -2,7 +2,12 @@
 
 export type SignalSide = "BUY" | "SELL" | "HOLD";
 
-export type PositionSide = "flat" | "long";
+export type PositionSide = "flat" | "long" | "short";
+
+/** What a command does to the single position. */
+export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-short" | "buy-sol";
+
+export type OrderType = "market" | "limit";
 
 export type StrategyMode = "bollinger" | "grid" | "donchian";
 
@@ -168,8 +173,10 @@ export interface Trade {
   side: "BUY" | "SELL";
   price: number;
   size: number;
-  /** Realized P&L in quote currency (set on SELL). */
+  /** Realized P&L in quote currency (set on a closing fill). */
   realizedPnl?: number;
+  /** Jupiter perps open + close + borrow charged on this fill (backtest shorts). */
+  perpsFeeUsdc?: number;
   at: Date;
   simulated: boolean;
   /** On-chain transaction signature (live fills only). */
@@ -185,27 +192,43 @@ export interface PortfolioSnapshot {
   /** Mark-to-market equity = cash + position * markPrice. */
   equity: number;
   trades: Trade[];
+  nativeSol: number;
+  insufficientSol: number;
   simulated: boolean;
 }
 
 /** Intent to trade after risk checks (not yet filled). */
 export interface Command {
   pair: string;
-  side: "BUY" | "SELL";
+  intent: OrderIntent;
+  /** Only `market` is executed today. */
+  orderType: OrderType;
   reason: string;
   at: Date;
   /** Mid/spot hint from the signal before exchange costs. */
   priceHint: number;
-  /** Quote (USDC) budget to spend on BUY. */
+  /** Quote budget for open-long and open-short. */
   quoteBudgetUsdc?: number;
-  /** Base size to sell on SELL. */
+  /** Base size for close-long, close-short, and buy-sol (SOL to buy). */
   baseSize?: number;
+}
+
+/**
+ * Perps fee schedule as fractions of notional.
+ * Open and borrow come from the venue's pool-info rates. Close matches the open
+ * base fee when the venue publishes one rate for both.
+ */
+export interface PerpsFees {
+  openFeePct: number;
+  closeFeePct: number;
+  borrowFeePctPerHour: number;
 }
 
 /** Fill returned by an exchange (simulated paper/backtest or live on-chain). */
 export interface Order {
   pair: string;
-  side: "BUY" | "SELL";
+  type: OrderType;
+  intent: OrderIntent;
   price: number;
   size: number;
   at: Date;
@@ -220,7 +243,28 @@ export interface Order {
     mid: number;
     slippageUsdcPerBase: number;
     poolFeeUsdcPerBase: number;
+    /** Perps schedule. Set on short opens and covers; spot fills omit it. */
+    perps?: PerpsFees;
   };
+}
+
+export interface BalanceSource {
+  nativeSol(): number;
+  refresh(mints: readonly string[]): Promise<void>;
+  tokenUi(mint: string): number;
+}
+
+/**
+ * Short-only position (perps)
+ */
+export interface OpenPosition {
+  size: number;
+  entryPrice: number;
+  collateralUsd: number;
+}
+
+export interface PositionSource {
+  findOpenPosition(pair: PairConfig): Promise<OpenPosition | null>;
 }
 
 export interface Portfolio {
@@ -247,6 +291,8 @@ export interface Strategy {
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
+    /** Live perps rates from {@link Exchange.perpsFeeSchedule}. Omitted in unit tests. */
+    perpsFees?: PerpsFees,
   ): Signal;
   /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
@@ -267,12 +313,17 @@ export interface RequiredCommand {
   command: Command;
 }
 
+export interface ProtectiveCommand {
+  kind: "protective-command";
+  command: Command;
+}
+
 export interface NoCommand {
   kind: "no-command";
 }
 
-/** Tagged result of {@link RiskManager.check}: fill, blocked signal, or HOLD / no-op. */
-export type RiskOrCommand = ClearRisk | RequiredCommand | NoCommand;
+/** Tagged result of {@link RiskManager.check}: fill, protective exit, blocked signal, or HOLD / no-op. */
+export type RiskOrCommand = ClearRisk | RequiredCommand | ProtectiveCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
@@ -310,7 +361,12 @@ export interface StrategyManager {
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
 export interface Exchange {
   spotPrice(pair: PairConfig): Promise<number>;
-  execute(command: Command, pair: PairConfig): Promise<Order | null>;
+  execute(command: Command, pair: PairConfig): Promise<Order | Error>;
+  /**
+   * Open, close, and hourly short-borrow rates for this pair.
+   * Implementations cache the result; callers may invoke this every tick.
+   */
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees>;
 }
 
 export interface ProgramState {
@@ -319,6 +375,14 @@ export interface ProgramState {
   readonly lastCandles: Map<string, Candle[]>;
   readonly lastMarketIndicators: Map<string, MarketIndicators>;
   readonly portfolios: Map<string, Portfolio>;
+}
+
+export interface Error {
+  readonly message: string;
+}
+
+export function isOrder(result: Order | Error): result is Order {
+  return "intent" in result;
 }
 
 export type ShutdownCb = (reason: string, exitCode: number) => Promise<void>;

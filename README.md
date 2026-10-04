@@ -50,7 +50,8 @@ Edit `.env`:
 | `WALLET_KEYPAIR_PATH`                 | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
 | `SOLANA_RPC_URL`                      | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
 | `SLIPPAGE_BPS`                        | Jupiter swap slippage (default `50`)                                                  |
-| `LIVE_SOL_RESERVE_SOL`                | Native SOL to keep for fees; not sold (default `0.05`)                                |
+| `SOL_RESERVE_MIN`                     | Refill native SOL when below this (default `0.03`)                                    |
+| `SOL_RESERVE_MAX`                     | Target after refill; SOL below this is not sold (default `0.05`)                      |
 | `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
 | `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                              |
 | `TELEGRAM_ALLOWED_USER_ID`            | Mini App allowlist (defaults to `TELEGRAM_CHAT_ID`)                                   |
@@ -63,7 +64,7 @@ Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 pnpm start
 ```
 
-Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot).
+Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot), `pnpm positions` (open or close the live long or short).
 
 ### Telegram (optional)
 
@@ -150,18 +151,31 @@ Live trading (on-chain Jupiter swaps; spends real tokens):
 pnpm trade
 ```
 
-Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. Native SOL below `LIVE_SOL_RESERVE_SOL` aborts swaps so the wallet can still pay fees. For `SOL/USDC`, only SOL above that reserve is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature.
+Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. When the position is flat and native SOL is below `SOL_RESERVE_MIN`, the bot buys SOL up to `SOL_RESERVE_MAX`. Other swaps abort below the minimum so the wallet can still pay fees. For `SOL/USDC`, only SOL above `SOL_RESERVE_MAX` is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature. A SOL reserve top-up is not stored as a strategy trade.
 
-Print on-chain live portfolio (sync + snapshot, no swaps):
+Print on-chain live portfolio (sync + snapshot, no swaps). Each pair includes native SOL. When native SOL is below `SOL_RESERVE_MIN`, the report warns with the shortfall up to `SOL_RESERVE_MAX`.
 
 ```bash
 pnpm wallet
+pnpm wallet -- --buy-sol
 ```
+
+`--buy-sol` swaps the first `WATCHLIST` pair's quote into SOL to clear that shortfall, then prints the portfolio.
 
 Export the Phantom-importable private key from `WALLET_KEYPAIR_PATH` (stdout — treat as highly sensitive). A Solana CLI keypair has no recoverable Phantom seed phrase; import via **Import Private Key** in Phantom.
 
 ```bash
 pnpm wallet export
+```
+
+Open or close the live position on the first `WATCHLIST` pair through `JupiterExchange`. Longs are spot swaps. Shorts are Jupiter Perps. Opens spend that many USDC. Closes exit the whole position. Each fill is a **LIVE** transaction.
+
+```bash
+pnpm positions list
+pnpm positions open long 10
+pnpm positions close long
+pnpm positions open short 10
+pnpm positions close short
 ```
 
 Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
@@ -188,8 +202,10 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
-| Liquid (`SOL/USDC`) | 0.30%    | 0.25%    | 0.0001 SOL → USDC via close |
-| Meme (future pairs) | 2.0%     | 0.30%    | same                        |
+| Liquid (`SOL/USDC`) | 0.05%    | 0.04%    | 0.0001 SOL → USDC via close |
+| Meme (future pairs) | 0.80%    | 0.25%    | same                        |
+
+Short opens and covers skip the spot pool fee. They pay a perps schedule instead: open and close base fees plus hourly short borrow on entry notional for the time the short is open. Watch, paper, and trade load that schedule from [Jupiter pool-info](https://perps-api.jup.ag/v1/pool-info) (`openFeePercent`, `shortBorrowRatePercent`; close uses the same base rate) and reuse it for one hour. Backtest uses the offline snapshot (0.06% open, 0.06% close, 0.0007% per hour as of 2026-10-02) and does not call Jupiter. Price impact is not charged; pool-info only publishes its cap.
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
 
@@ -319,7 +335,7 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 | flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
 | bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
-Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Grid (`grid`)
 
@@ -327,11 +343,11 @@ ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish
 
 ### Donchian breakout (`donchian`)
 
-Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.2–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low** (55-bar in 1h squeeze) so a 5h dip does not dump a multi-day runner, or when price **gives back 3×ATR from the hold's peak** (caps drawdown if HTF later widens the risk trail). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
+Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.25–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low**, when price **gives back 3×ATR from the hold's peak**, or on a **1-bar time stop**: if no later **close** reaches the breakout bar's high **minus 1×ATR**, the long is sold at the current price (wicks alone do not count). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
 
 **Volume SMA multiplier:** bullish high 1.2 / low 1.5 / squeeze 1.6; flat high 1.5 / low 2.0 / squeeze 1.8.
 
-ATR stop is 3× (2.5× flat, 2× bearish); trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak. Cooldown 8 bars (2h), minHold 16. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+ATR stop is 3×; trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak, and at the current price on a 1-bar time stop when no close reaches breakout high − ATR. Cooldown 8 bars (2h), minHold 0. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks by default (or candle close with `--no-intrabar`; stop level for ATR exits).
 
@@ -356,10 +372,8 @@ src/
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters
-  exchange/jupiter.ts      # paper Exchange (Jupiter quote only)
-  exchange/jupiter-swap.ts # live Swap API V2 order + execute
-  exchange/wallet.ts       # JSON keypair + RPC balances
-  exchange/emulated-*.ts   # backtest fill model + EmulatedExchange
+  exchange/jupiter/        # spot long (Swap API V2) + perps short
+  exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
@@ -371,9 +385,9 @@ src/
   strategy/mode/grid-svg.ts      # grid SVG for /chart
   strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
-  paper/portfolio.ts
-  paper/store.ts           # paper load/save (Timescale bot.* mode=paper)
-  live/portfolio.ts        # on-chain cash/size + ledger
+  portfolio/paper/         # simulated cash book + Timescale mode=paper
+  portfolio/live/          # on-chain cash/size + ledger
+  portfolio/wallet/        # JSON keypair + RPC balances
   notify/console.ts
   notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio
   engine/tick.ts           # shared paper/trade poll loop

@@ -73,7 +73,7 @@ describe("migrations", () => {
     const before = await query<{ version: string }>(
       `SELECT version FROM schema_migrations ORDER BY version`,
     );
-    assert.equal(before.length, 3);
+    assert.equal(before.length, 4);
 
     await runMigrations(process.env["DATABASE_URL"] ?? "");
 

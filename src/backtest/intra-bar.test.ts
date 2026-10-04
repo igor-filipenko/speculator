@@ -24,6 +24,16 @@ describe("intraBarPrices", () => {
     assert.deepEqual(intraBarPrices(bar(100, 100, 100, 100)), [100]);
     assert.deepEqual(intraBarPrices(bar(100, 104, 100, 104)), [100, 104]);
   });
+
+  it("walks a long open → low → close → high so the high is last", () => {
+    assert.deepEqual(intraBarPrices(bar(100, 104, 98, 99), "long"), [100, 98, 99, 104]);
+    assert.deepEqual(intraBarPrices(bar(100, 104, 98, 103), "long"), [100, 98, 103, 104]);
+  });
+
+  it("walks a short open → high → close → low so the low is last", () => {
+    assert.deepEqual(intraBarPrices(bar(100, 104, 98, 103), "short"), [100, 104, 103, 98]);
+    assert.deepEqual(intraBarPrices(bar(100, 104, 98, 99), "short"), [100, 104, 99, 98]);
+  });
 });
 
 describe("formingCandle", () => {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { MarketIndicators } from "../types.js";
-import { formatMarketIndicatorsListMessage, formatMarketMessage } from "./telegram.js";
+import {
+  formatErrorMessage,
+  formatMarketIndicatorsListMessage,
+  formatMarketMessage,
+} from "./telegram.js";
 
 const sample: MarketIndicators = {
   pair: "SOL/USDC",
@@ -87,5 +91,14 @@ describe("formatMarketMessage", () => {
     assert.match(text, /MARKET/);
     assert.match(text, /flat/);
     assert.match(text, /bullish/);
+  });
+});
+
+describe("formatErrorMessage", () => {
+  it("includes the pair and the exchange error", () => {
+    const text = formatErrorMessage("SOL/USDC", "jupiter spot cannot short");
+    assert.match(text, /ERROR/);
+    assert.match(text, /SOL\/USDC/);
+    assert.match(text, /cannot short/);
   });
 });

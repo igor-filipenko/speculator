@@ -1,8 +1,16 @@
 import { match } from "ts-pattern";
-import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../db/live.js";
-import { tradableBaseSize } from "../exchange/amounts.js";
-import type { BalanceSource } from "../exchange/wallet.js";
-import type { Order, PairConfig, Portfolio, Position, PortfolioSnapshot, Trade } from "../types.js";
+import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
+import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
+import type {
+  BalanceSource,
+  Order,
+  PairConfig,
+  Portfolio,
+  Position,
+  PortfolioSnapshot,
+  PositionSource,
+  Trade,
+} from "../../types.js";
 import type {
   PersistableLivePortfolio,
   PersistedLivePortfolio,
@@ -12,11 +20,13 @@ import type {
 const DUST = 1e-9;
 
 export interface LivePortfolioOptions {
-  solReserve: number;
+  solReserveMin: number;
+  solReserveMax: number;
+  positions?: PositionSource;
 }
 
 /**
- * Long-only live portfolio. Cash and size come from on-chain balances;
+ * Live portfolio. Spot size is a long; a Jupiter Perps short overrides it.
  * entry price, opened-at, and realized P&L are the Timescale ledger.
  */
 export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
@@ -26,12 +36,17 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private readonly trades: Trade[] = [];
   private readonly pairConfig: PairConfig;
   private readonly balances: BalanceSource;
-  private readonly solReserve: number;
+  private readonly solReserveMin: number;
+  private readonly solReserveMax: number;
+  private readonly positions: PositionSource | undefined;
+  private shortCollateralUsd = 0;
 
   constructor(pair: PairConfig, balances: BalanceSource, options: LivePortfolioOptions) {
     this.pairConfig = pair;
     this.balances = balances;
-    this.solReserve = options.solReserve;
+    this.solReserveMin = options.solReserveMin;
+    this.solReserveMax = options.solReserveMax;
+    this.positions = options.positions;
     this.position = {
       pair: pair.symbol,
       side: "flat",
@@ -55,9 +70,9 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       portfolios.set(pair.symbol, portfolio);
       const snap = portfolio.toPersisted();
       const pos =
-        snap.position.side === "long"
-          ? `long ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`
-          : "flat";
+        snap.position.side === "flat"
+          ? "flat"
+          : `${snap.position.side} ${snap.position.size.toFixed(6)} @ ${snap.position.entryPrice.toFixed(6)}`;
       console.log(
         `Live ${pair.symbol}: ledger cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
       );
@@ -145,7 +160,13 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   }
 
   getSnapshot(markPrice: number): PortfolioSnapshot {
-    const positionValue = this.position.side === "long" ? this.position.size * markPrice : 0;
+    const positionValue =
+      this.position.side === "long"
+        ? this.position.size * markPrice
+        : this.position.side === "short"
+          ? this.shortCollateralUsd + this.position.size * (this.position.entryPrice - markPrice)
+          : 0;
+    const nativeSol = this.balances.nativeSol();
     return {
       simulated: false,
       cashUsdc: this.cashUsdc,
@@ -153,6 +174,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       realizedPnl: this.realizedPnl,
       equity: this.cashUsdc + positionValue,
       trades: [...this.trades],
+      nativeSol,
+      insufficientSol: calcInsufficientSol(nativeSol, this.solReserveMin, this.solReserveMax),
     };
   }
 
@@ -165,9 +188,17 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   }
 
   async applyOrder(order: Order): Promise<Trade | null> {
-    const nextTrade = match(order.side)
-      .with("BUY", () => this.openLong(order))
-      .with("SELL", () => this.closeLong(order))
+    if (order.intent === "buy-sol") {
+      await this.overlayChain(order.price);
+      return null;
+    }
+
+    const before = this.position.side;
+    const nextTrade = match(order.intent)
+      .with("open-long", () => this.openLong(order))
+      .with("close-long", () => this.closeLong(order))
+      .with("open-short", () => this.openShort(order))
+      .with("close-short", () => this.closeShort(order))
       .exhaustive();
 
     if (nextTrade == null) {
@@ -175,11 +206,21 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     }
 
     await this.overlayChain(order.price);
-    if (order.side === "BUY" && this.position.side !== "long") {
+    if (order.intent === "open-long" && before === "flat" && this.position.side !== "long") {
       // RPC can lag the fill; keep the just-opened long until the next refresh.
       this.position = {
         pair: this.pairConfig.symbol,
         side: "long",
+        size: order.size,
+        entryPrice: order.price,
+        openedAt: order.at,
+      };
+    }
+    if (order.intent === "open-short" && before === "flat" && this.position.side !== "short") {
+      this.shortCollateralUsd = 0;
+      this.position = {
+        pair: this.pairConfig.symbol,
+        side: "short",
         size: order.size,
         entryPrice: order.price,
         openedAt: order.at,
@@ -197,12 +238,35 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private async overlayChain(markPrice: number): Promise<void> {
     await this.balances.refresh([this.pairConfig.baseMint, this.pairConfig.quoteMint]);
     this.cashUsdc = this.balances.tokenUi(this.pairConfig.quoteMint);
+    const short = this.positions ? await this.positions.findOpenPosition(this.pairConfig) : null;
     const size = tradableBaseSize({
       baseMint: this.pairConfig.baseMint,
       tokenUi: this.balances.tokenUi(this.pairConfig.baseMint),
       nativeSol: this.balances.nativeSol(),
-      reserveSol: this.solReserve,
+      reserveSol: this.solReserveMax,
     });
+
+    if (short != null && size > DUST) {
+      console.error(
+        `[${this.pairConfig.symbol}] spot long and jupiter perps short are both open; keeping the short`,
+      );
+    }
+    if (short != null) {
+      this.shortCollateralUsd = short.collateralUsd;
+      if (this.position.side !== "short") {
+        this.position = {
+          pair: this.pairConfig.symbol,
+          side: "short",
+          size: short.size,
+          entryPrice: short.entryPrice,
+          openedAt: new Date(),
+        };
+      } else {
+        this.position = { ...this.position, size: short.size };
+      }
+      return;
+    }
+    this.shortCollateralUsd = 0;
 
     if (size > DUST) {
       if (this.position.side !== "long") {
@@ -293,6 +357,67 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     this.trades.push(trade);
     return trade;
   }
+
+  private openShort(order: Order): Trade | null {
+    if (this.position.side === "short") {
+      return null;
+    }
+    if (order.size <= 0 || order.price <= 0) {
+      return null;
+    }
+    const trade: Trade = {
+      pair: order.pair,
+      side: "SELL",
+      price: order.price,
+      size: order.size,
+      at: order.at,
+      simulated: false,
+      reason: order.reason,
+    };
+    if (order.txSignature !== undefined) {
+      trade.txSignature = order.txSignature;
+    }
+    this.position = {
+      pair: this.pairConfig.symbol,
+      side: "short",
+      size: order.size,
+      entryPrice: order.price,
+      openedAt: order.at,
+    };
+    this.trades.push(trade);
+    return trade;
+  }
+
+  private closeShort(order: Order): Trade | null {
+    if (this.position.side !== "short" || this.position.size <= 0) {
+      return null;
+    }
+    const size = order.size;
+    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc;
+    const trade: Trade = {
+      pair: order.pair,
+      side: "BUY",
+      price: order.price,
+      size,
+      realizedPnl: pnl,
+      at: order.at,
+      simulated: false,
+      reason: order.reason,
+    };
+    if (order.txSignature !== undefined) {
+      trade.txSignature = order.txSignature;
+    }
+    this.realizedPnl += pnl;
+    this.shortCollateralUsd = 0;
+    this.position = {
+      pair: this.pairConfig.symbol,
+      side: "flat",
+      size: 0,
+      entryPrice: 0,
+    };
+    this.trades.push(trade);
+    return trade;
+  }
 }
 
 function snapshotKey(portfolio: LivePortfolio): string {
@@ -304,4 +429,16 @@ function snapshotKey(portfolio: LivePortfolio): string {
     entry: persisted.position.entryPrice,
     pnl: persisted.realizedPnl,
   });
+}
+
+/**
+ * SOL to buy so native balance reaches `max` after falling below `min`.
+ * At or above `min`, no top-up.
+ */
+function calcInsufficientSol(
+  nativeSol: number,
+  solReserveMin: number,
+  solReserveMax: number,
+): number {
+  return nativeSol < solReserveMin ? solReserveMax - nativeSol : 0;
 }

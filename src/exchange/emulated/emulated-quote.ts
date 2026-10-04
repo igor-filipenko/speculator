@@ -1,7 +1,12 @@
 /**
  * Simulated exchange fill pricing from GeckoTerminal candle close.
  * Jupiter-like fee/slippage model — used only for offline backtests.
+ * Spot legs pay pool fee + slippage. Perps shorts pay slippage only here;
+ * open, close, and borrow fees are applied from {@link JUPITER_PERPS_FEES}.
  */
+
+import { JUPITER_PERPS_FEES } from "../jupiter/perps-fees.js";
+import type { PerpsFees } from "../../types.js";
 
 export type LiquidityTier = "liquid" | "meme";
 
@@ -28,6 +33,11 @@ export interface EmulateFillPriceInput {
   tier?: LiquidityTier;
   /** Override priority fee in SOL (default {@link PRIORITY_FEE_SOL}). */
   priorityFeeSol?: number;
+  /**
+   * `perps` drops the spot pool fee and attaches the Jupiter short fee schedule.
+   * Open/close/borrow are charged later from entry notional and hold time.
+   */
+  venue?: "spot" | "perps";
 }
 
 export interface EmulatedFillBreakdown {
@@ -42,6 +52,8 @@ export interface EmulatedFillBreakdown {
   slippageUsdcPerBase: number;
   /** Pool fee in USDC per 1 base unit at mid (informational). */
   poolFeeUsdcPerBase: number;
+  /** Present for perps short fills. */
+  perps?: PerpsFees;
 }
 
 export interface EmulatedFill {
@@ -65,7 +77,9 @@ export function emulateFillPrice(input: EmulateFillPriceInput): EmulatedFill {
   const tier = input.tier ?? "liquid";
   const costs = TIER_COSTS[tier];
   const priorityFeeSol = input.priorityFeeSol ?? PRIORITY_FEE_SOL;
-  const adverseFraction = costs.slippage + costs.poolFee;
+  const perps = input.venue === "perps";
+  const poolFee = perps ? 0 : costs.poolFee;
+  const adverseFraction = costs.slippage + poolFee;
 
   const fillPrice = side === "BUY" ? close * (1 + adverseFraction) : close * (1 - adverseFraction);
 
@@ -77,12 +91,13 @@ export function emulateFillPrice(input: EmulateFillPriceInput): EmulatedFill {
     breakdown: {
       mid: close,
       slippage: costs.slippage,
-      poolFee: costs.poolFee,
+      poolFee,
       adverseFraction,
       priorityFeeSol,
       priorityFeeUsdc,
       slippageUsdcPerBase: close * costs.slippage,
-      poolFeeUsdcPerBase: close * costs.poolFee,
+      poolFeeUsdcPerBase: close * poolFee,
+      ...(perps ? { perps: JUPITER_PERPS_FEES } : {}),
     },
   };
 }

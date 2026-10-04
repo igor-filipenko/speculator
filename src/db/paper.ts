@@ -1,4 +1,4 @@
-import type { PersistedPortfolio, PersistedTrade } from "../paper/store.js";
+import type { PersistedPortfolio, PersistedTrade } from "../portfolio/paper/store.js";
 import {
   insertPaperTrade as insert,
   loadAllPaperPortfolios as loadAll,

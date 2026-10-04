@@ -1,13 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-
-/** On-chain balances used by live portfolios and swap sizing. */
-export interface BalanceSource {
-  owner: PublicKey;
-  refresh(mints: readonly string[]): Promise<void>;
-  nativeSol(): number;
-  tokenUi(mint: string): number;
-}
+import type { BalanceSource } from "../../types.js";
 
 /** Exported signing material from a Solana CLI JSON keypair (sensitive). */
 export interface WalletSecrets {

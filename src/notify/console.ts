@@ -2,6 +2,8 @@ import { insertSignal } from "../db/signals.js";
 import type {
   MarketIndicators,
   MtfSnapshot,
+  Order,
+  PerpsFees,
   Risk,
   Signal,
   PortfolioSnapshot,
@@ -68,6 +70,13 @@ function band(label: string, lower?: number, mid?: number, upper?: number): stri
   return ` ${label} ${parts.join(" ")}`;
 }
 
+export function logPerpsFees(pair: string, fees: PerpsFees): void {
+  console.log(
+    `[${pair}] perps fees open=${pct(fees.openFeePct)} close=${pct(fees.closeFeePct)} ` +
+      `borrow=${pct(fees.borrowFeePctPerHour)}/h`,
+  );
+}
+
 export function logSignal(signal: Signal): void {
   const ts = signal.at.toISOString();
   const meta = signal.meta
@@ -100,11 +109,22 @@ export function logTrade(trade: Trade): void {
   );
 }
 
+export function logOrder(order: Order): void {
+  const reason = order.reason ? ` — ${order.reason}` : "";
+  const sig = order.txSignature != null ? ` sig=${order.txSignature}` : "";
+  if (order.simulated) {
+    console.log(
+      `  → PAPER ${order.intent} size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)} (simulated)${sig}${reason}`,
+    );
+    return;
+  }
+  console.log(
+    `  → LIVE ${order.intent} size=${order.size.toFixed(6)} @ ${order.price.toFixed(6)}${sig}${reason}`,
+  );
+}
+
 export function logSnapshot(snapshot: PortfolioSnapshot): void {
-  const pos =
-    snapshot.position.side === "long"
-      ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-      : "flat";
+  const pos = formatOpenPosition(snapshot.position);
   const label = snapshot.simulated ? "paper" : "live";
   console.log(
     `  ${label} cash=${snapshot.cashUsdc.toFixed(4)} USDC | position=${pos} | equity=${snapshot.equity.toFixed(4)} | realizedPnl=${snapshot.realizedPnl.toFixed(4)}`,
@@ -113,22 +133,34 @@ export function logSnapshot(snapshot: PortfolioSnapshot): void {
 
 /** CLI report matching the Telegram `/portfolio` fields. */
 export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
-  const pos =
-    snapshot.position.side === "long"
-      ? `long ${snapshot.position.size.toFixed(6)} @ ${snapshot.position.entryPrice.toFixed(6)}`
-      : "flat";
+  const pos = formatOpenPosition(snapshot.position);
   console.log("");
   console.log(pair);
   console.log(`Cash ${snapshot.cashUsdc.toFixed(4)} USDC`);
   console.log(`Position ${pos}`);
   console.log(`Equity ${snapshot.equity.toFixed(4)}`);
   console.log(`Realized P&L ${snapshot.realizedPnl.toFixed(4)}`);
+  console.log(`Native SOL ${snapshot.nativeSol.toFixed(6)}`);
+  if (snapshot.insufficientSol > 0) {
+    console.log(`SOL shortfall ${snapshot.insufficientSol.toFixed(6)}`);
+  }
   console.log(snapshot.simulated ? "simulated" : "live");
 }
 
 /** Persist one signal to Timescale for later analysis. */
 export async function persistSignal(signal: Signal): Promise<void> {
   await insertSignal(signal);
+}
+
+function formatOpenPosition(position: { side: string; size: number; entryPrice: number }): string {
+  if (position.side === "flat") {
+    return "flat";
+  }
+  return `${position.side} ${position.size.toFixed(6)} @ ${position.entryPrice.toFixed(6)}`;
+}
+
+function pct(fraction: number): string {
+  return `${(fraction * 100).toFixed(4)}%`;
 }
 
 function fmt(n: number | undefined): string {

@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
-import type { PersistedLivePortfolio, PersistedLiveTrade } from "../live/store.js";
-import type { PersistedPortfolio, PersistedTrade } from "../paper/store.js";
+import type { PersistedLivePortfolio, PersistedLiveTrade } from "../portfolio/live/store.js";
+import type { PersistedPortfolio, PersistedTrade } from "../portfolio/paper/store.js";
 import { getBotId, query, queryWith, withTransaction } from "./db.js";
 
 export type BotMode = "paper" | "live";
@@ -53,7 +53,10 @@ function rowToTrade(row: Record<string, unknown>): PersistedLiveTrade {
 function rowToPosition(row: Record<string, unknown>): PersistedLivePortfolio["position"] {
   const position: PersistedLivePortfolio["position"] = {
     pair: asString(row["pair"], "pair"),
-    side: row["position_side"] === "long" ? "long" : "flat",
+    side:
+      row["position_side"] === "long" || row["position_side"] === "short"
+        ? row["position_side"]
+        : "flat",
     size: Number(row["position_size"]),
     entryPrice: Number(row["entry_price"]),
   };

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
-import { resetSpeculatorDbCache, setBotId } from "../db/db.js";
+import { resetSpeculatorDbCache, setBotId } from "../../db/db.js";
 import { randomUUID } from "node:crypto";
-import { useTestDb } from "../db/test-db.js";
+import { useTestDb } from "../../db/test-db.js";
 
 describe("paper store", () => {
   before(async () => {
@@ -19,7 +19,8 @@ describe("paper store", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const trade = portfolio.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "test buy",
       price: 100,
       size: 10,
@@ -48,7 +49,8 @@ describe("paper store", () => {
     const sol = new PaperPortfolio("SOL/USDC", 1000);
     sol.applyOrderSync({
       pair: "SOL/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "sol buy",
       price: 100,
       size: 10,
@@ -61,7 +63,8 @@ describe("paper store", () => {
     const other = new PaperPortfolio("BONK/USDC", 500);
     other.applyOrderSync({
       pair: "BONK/USDC",
-      side: "BUY",
+      type: "market",
+      intent: "open-long",
       reason: "bonk buy",
       price: 0.00001,
       size: 50_000_000,

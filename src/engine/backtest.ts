@@ -1,22 +1,24 @@
+import { assert } from "console";
 import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
-import { EmulatedExchange } from "../exchange/emulated-exchange.js";
-import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated-quote.js";
+import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
+import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated/emulated-quote.js";
 import { candleIntervalSeconds } from "../market/gecko-terminal.js";
 import { loadCachedCandles } from "../market/ohlcv-cache.js";
-import { PaperPortfolio } from "../paper/portfolio.js";
-import type {
-  Candle,
-  MarketIndicators,
-  Order,
-  PairConfig,
-  Strategy,
-  StrategyManager,
-  Trade,
+import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import {
+  isOrder,
+  type Candle,
+  type MarketIndicators,
+  type Order,
+  type PairConfig,
+  type Strategy,
+  type StrategyManager,
+  type Trade,
 } from "../types.js";
-import { intraBarTicks } from "./intra-bar.js";
-import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "./market-replay.js";
-import { parseReplayDate, readFlagValue, resolveReplayWindow } from "./replay-window.js";
+import { intraBarTicks } from "../backtest/intra-bar.js";
+import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
+import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
 export { parseReplayDate as parseBacktestDate, resolveReplayWindow as resolveBacktestWindow };
 
@@ -43,6 +45,8 @@ export interface BacktestCostTotals {
   poolFeeUsdc: number;
   /** Sum of priority fees in USDC. */
   priorityFeeUsdc: number;
+  /** Jupiter perps open + close + borrow on short round-trips. */
+  perpsFeeUsdc: number;
 }
 
 export interface BacktestMetrics {
@@ -103,8 +107,9 @@ export interface RunBacktestOptions {
 
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
- * By default each signal-timeframe bar is walked as a forming candle (open/high/low/close,
- * green vs red path) so `evaluateSignal` sees the same incomplete last bar as live.
+ * By default each signal-timeframe bar is walked as a forming candle so `evaluateSignal`
+ * sees the same incomplete last bar as live. The path is fixed from the position at the
+ * bar open: long visits the high last, short visits the low last, flat follows candle color.
  * Pass {@link RunBacktestOptions.noIntrabar} to evaluate once per bar at close.
  * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
  */
@@ -210,11 +215,13 @@ async function replayPair(args: {
     slippageUsdc: 0,
     poolFeeUsdc: 0,
     priorityFeeUsdc: 0,
+    perpsFeeUsdc: 0,
   };
   const barIntervalSec = candleIntervalSeconds(
     strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
   );
 
+  const perpsFees = await exchange.perpsFeeSchedule(pair);
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
@@ -225,9 +232,10 @@ async function replayPair(args: {
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
+    const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks = noIntrabar
       ? [{ price: candle.close, atSec: candle.time + barIntervalSec, forming: candle }]
-      : intraBarTicks(candle, barIntervalSec);
+      : intraBarTicks(candle, barIntervalSec, positionSide);
 
     for (const tick of ticks) {
       const window = closed.concat(tick.forming);
@@ -267,14 +275,19 @@ async function replayPair(args: {
         price,
         new Date(tick.atSec * 1000),
         portfolio.getSnapshot(price),
+        perpsFees,
       );
 
       const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
-      if (result.kind === "command") {
+      if (result.kind === "command" || result.kind === "protective-command") {
         const command = result.command;
         // Protective exits fill at the stop/trail level; cross signals use the tick price.
         exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : price);
         const order = await exchange.execute(command, pair);
+        assert(isOrder(order), "Expected order, got error");
+        if (!isOrder(order)) {
+          continue;
+        }
         const trade = portfolio.applyOrderSync(order);
         if (trade) {
           accumulateCosts(costs, trade, order);
@@ -299,7 +312,7 @@ async function replayPair(args: {
   const lastClose = candles[candles.length - 1]!.close;
   const snap = portfolio.getSnapshot(lastClose);
   const sells = snap.trades.filter((t) => t.side === "SELL");
-  const wins = sells.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
   const roundTrips = sells.length;
   const totalReturnPct =
     startingCashUsdc > 0 ? ((snap.equity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
@@ -371,6 +384,7 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
   totals.slippageUsdc += trade.size * fillCosts.slippageUsdcPerBase;
   totals.poolFeeUsdc += trade.size * fillCosts.poolFeeUsdcPerBase;
   totals.priorityFeeUsdc += order.priorityFeeUsdc;
+  totals.perpsFeeUsdc += trade.perpsFeeUsdc ?? 0;
 }
 
 /** Parse CLI flags for `backtest`. */
@@ -488,7 +502,8 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
   console.log(`Max drawdown: ${metrics.maxDrawdownPct.toFixed(2)}%`);
   console.log(
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
-      `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} USDC`,
+      `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} | ` +
+      `perps: ${costs.perpsFeeUsdc.toFixed(4)} USDC`,
   );
   console.log(
     metrics.intrabar
@@ -503,7 +518,7 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     for (const t of trades) {
       const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
       const reason = t.reason ? ` — ${t.reason}` : "";
-      const endOfTrip = t.side === "SELL" ? "\n" : "";
+      const endOfTrip = t.realizedPnl !== undefined ? "\n" : "";
       console.log(
         `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}${endOfTrip}`,
       );

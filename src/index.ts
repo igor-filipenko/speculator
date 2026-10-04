@@ -17,7 +17,6 @@ import type {
   ProgramState,
   ShutdownCb,
   Signal,
-  StrategyMode,
 } from "./types.js";
 
 function usage(): never {
@@ -119,8 +118,8 @@ async function main(): Promise<void> {
 async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = new SimpleStrategyManager({
-    strategyMode: config.strategy,
+  const strategyManager = await SimpleStrategyManager.create({
+    strategyId: config.strategy,
     htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
@@ -152,8 +151,8 @@ async function runWatchCommand(argv: string[]): Promise<void> {
 async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = new SimpleStrategyManager({
-    strategyMode: config.strategy,
+  const strategyManager = await SimpleStrategyManager.create({
+    strategyId: config.strategy,
     htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
@@ -190,8 +189,8 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 async function runTradeCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = new SimpleStrategyManager({
-    strategyMode: config.strategy,
+  const strategyManager = await SimpleStrategyManager.create({
+    strategyId: config.strategy,
     htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
@@ -258,18 +257,12 @@ async function runWalletCommand(argv: string[]): Promise<void> {
   await runWallet(config, { buySol });
 }
 
-const VALID_STRATEGIES: StrategyMode[] = ["bollinger", "grid", "donchian"];
-
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
   const config = await loadConfig();
 
-  const strategyMode: StrategyMode = flags.strategy
-    ? validateStrategyFlag(flags.strategy)
-    : config.strategy;
-
-  const strategyManager = new SimpleStrategyManager({
-    strategyMode,
+  const strategyManager = await SimpleStrategyManager.create({
+    strategyId: flags.strategy ?? config.strategy,
     htf: config.htf,
   });
   const results = await runBacktest({
@@ -291,8 +284,8 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
 async function runRegimeCommand(argv: string[]): Promise<void> {
   const flags = parseRegimeArgs(argv);
   const config = await loadConfig();
-  const strategyManager = new SimpleStrategyManager({
-    strategyMode: config.strategy,
+  const strategyManager = await SimpleStrategyManager.create({
+    strategyId: config.strategy,
     htf: config.htf,
   });
   const results = await runRegime({
@@ -307,13 +300,6 @@ async function runRegimeCommand(argv: string[]): Promise<void> {
   for (const result of results) {
     await printRegimeReport(result);
   }
-}
-
-function validateStrategyFlag(value: string): StrategyMode {
-  if (VALID_STRATEGIES.includes(value as StrategyMode)) {
-    return value as StrategyMode;
-  }
-  throw new Error(`Invalid --strategy "${value}". Valid options: ${VALID_STRATEGIES.join(", ")}`);
 }
 
 void (async () => {

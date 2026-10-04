@@ -243,7 +243,7 @@ async function replayPair(args: {
       exchange.setMidPrice(price);
 
       if (!ignoreTrend) {
-        const synced = syncMarketIndicators({
+        const synced = await syncMarketIndicators({
           pair: pair.symbol,
           strategyManager,
           htfCandles,

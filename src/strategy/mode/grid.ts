@@ -395,7 +395,7 @@ export class GridStrategy implements Strategy {
     return `Grid(ATR${this.params.atrPeriod}×${this.params.gridMult}, anchor${this.params.reanchorBars})`;
   }
 
-  getMode(): "grid" {
+  getId(): string {
     return "grid";
   }
 

@@ -93,7 +93,9 @@ export interface SyncMarketIndicatorsResult {
  * Advance HTF/1h windows to `atTime` and re-evaluate market indicators when a bar closes.
  * Same cadence as backtest: trend/vol only change on HTF or 1h close.
  */
-export function syncMarketIndicators(args: SyncMarketIndicatorsArgs): SyncMarketIndicatorsResult {
+export async function syncMarketIndicators(
+  args: SyncMarketIndicatorsArgs,
+): Promise<SyncMarketIndicatorsResult> {
   const htfEnd = advanceClosedEnd(args.htfCandles, args.atTime, args.htfEnd);
   const mtfEnd = advanceClosedEnd(args.mtfCandles, args.atTime, args.mtfEnd);
   if ((htfEnd === 0 && mtfEnd === 0) || (htfEnd === args.htfEnd && mtfEnd === args.mtfEnd)) {
@@ -113,6 +115,6 @@ export function syncMarketIndicators(args: SyncMarketIndicatorsArgs): SyncMarket
     args.price,
     new Date(lastBar.time * 1000),
   );
-  args.strategyManager.applyMarketIndicators(market, args.lastMarket);
+  await args.strategyManager.applyMarketIndicators(market, args.lastMarket);
   return { htfEnd, mtfEnd, lastMarket: market, evaluated: true };
 }

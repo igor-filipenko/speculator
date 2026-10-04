@@ -299,7 +299,7 @@ export class DonchianStrategy implements Strategy {
     return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod}${stop} ${gate})`;
   }
 
-  getMode(): "donchian" {
+  getId(): string {
     return "donchian";
   }
 

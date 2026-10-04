@@ -451,7 +451,7 @@ describe("donchianParamsFor", () => {
 describe("DonchianStrategy", () => {
   it("exposes risk params and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");
-    assert.equal(strategy.getMode(), "donchian");
+    assert.equal(strategy.getId(), "donchian");
     assert.match(strategy.getDisplayName(), /flat/);
     const risk = strategy.getRiskParams();
     assert.equal(risk.timeframe, "15m");

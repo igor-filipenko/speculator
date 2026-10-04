@@ -204,8 +204,8 @@ async function processPair(args: {
     logMarket(market);
     const marketChanged =
       previous !== undefined
-        ? strategyManager.applyMarketIndicators(market, previous)
-        : strategyManager.applyMarketIndicators(market);
+        ? await strategyManager.applyMarketIndicators(market, previous)
+        : await strategyManager.applyMarketIndicators(market);
     lastMarketIndicators.set(pair.symbol, market);
     if (marketChanged) {
       console.log(

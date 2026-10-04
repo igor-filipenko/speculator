@@ -110,7 +110,7 @@ export async function runRegime(options: RunRegimeOptions): Promise<RegimeResult
     }
 
     results.push(
-      replayRegime({
+      await replayRegime({
         pair,
         strategyManager,
         htfCandles,
@@ -123,14 +123,14 @@ export async function runRegime(options: RunRegimeOptions): Promise<RegimeResult
   return results;
 }
 
-function replayRegime(args: {
+async function replayRegime(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
   htfCandles: Candle[];
   mtfCandles: Candle[];
   fromTime: number;
   toTime: number;
-}): RegimeResult {
+}): Promise<RegimeResult> {
   const { pair, strategyManager, htfCandles, mtfCandles, fromTime, toTime } = args;
   const times = uniqueTimes(htfCandles, mtfCandles);
   const priceAt = priceByTime(htfCandles, mtfCandles);
@@ -143,7 +143,7 @@ function replayRegime(args: {
 
   for (const atTime of times) {
     const price = priceAt.get(atTime) ?? lastMarket?.price ?? 0;
-    const synced = syncMarketIndicators({
+    const synced = await syncMarketIndicators({
       pair: pair.symbol,
       strategyManager,
       htfCandles,

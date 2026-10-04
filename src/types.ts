@@ -9,8 +9,6 @@ export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-sho
 
 export type OrderType = "market" | "limit";
 
-export type StrategyMode = "bollinger" | "grid" | "donchian";
-
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
@@ -281,7 +279,8 @@ export interface RequiredCandles {
 
 export interface Strategy {
   getDisplayName(): string;
-  getMode(): StrategyMode;
+  /** `strategy.registry.id` (for example `bollinger`). */
+  getId(): string;
   getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(
@@ -355,7 +354,7 @@ export interface StrategyManager {
   applyMarketIndicators(
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,
-  ): boolean;
+  ): Promise<boolean>;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

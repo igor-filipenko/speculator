@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { useTestDb } from "../db/test-db.js";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
@@ -82,7 +83,7 @@ function htfAwareManager(strategy: Strategy): StrategyManager {
         state.trend === "bullish"
           ? new GenericRiskManager(strategy.getRiskParams())
           : new HighRiskManager(`trend is ${state.trend}`, strategy.getRiskParams());
-      return prev?.trend !== state.trend;
+      return Promise.resolve(prev?.trend !== state.trend);
     },
   };
 }
@@ -104,7 +105,7 @@ function managerFor(
       volatility: "unknown",
       htf: { timeframe: "4h", candles },
     }),
-    applyMarketIndicators: () => false,
+    applyMarketIndicators: () => Promise.resolve(false),
   };
 }
 
@@ -119,7 +120,7 @@ function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }
   };
   return {
     getDisplayName: () => "scripted",
-    getMode: () => "bollinger",
+    getId: () => "bollinger",
     getRiskParams: () => risk,
     getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
     evaluateSignal: (pair, candles, _market, price, at) => {
@@ -277,7 +278,7 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
-    assert.equal(result.metrics.strategy.getMode(), "bollinger");
+    assert.equal(result.metrics.strategy.getId(), "bollinger");
     assert.equal(result.metrics.intrabar, true);
     assert.ok(result.equityCurve.length === candles.length);
 
@@ -336,7 +337,8 @@ describe("runBacktest", () => {
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("bollinger", "flat", "low");
+    await useTestDb();
+    const strategy = await loadStrategy("bollinger", "flat", "low");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
@@ -351,7 +353,7 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
-      strategyManager: new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" }),
+      strategyManager: await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" }),
       candles,
     });
 
@@ -416,7 +418,7 @@ describe("runBacktest", () => {
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
-      getMode: () => "bollinger",
+      getId: () => "bollinger",
       getRiskParams: () => ({
         timeframe: "15m",
         atrStopMult: 100,
@@ -480,7 +482,7 @@ describe("runBacktest", () => {
     };
     const strategy: Strategy = {
       getDisplayName: () => "wick-buy",
-      getMode: () => "bollinger",
+      getId: () => "bollinger",
       getRiskParams: () => ({
         timeframe: "15m",
         atrStopMult: 100,
@@ -540,7 +542,7 @@ describe("runBacktest", () => {
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
-      getMode: () => "bollinger",
+      getId: () => "bollinger",
       getRiskParams: () => ({
         timeframe: "15m",
         atrStopMult: 100,

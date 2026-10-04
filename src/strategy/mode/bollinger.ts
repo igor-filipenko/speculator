@@ -454,7 +454,7 @@ export class BollingerStrategy implements Strategy {
     return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax})`;
   }
 
-  getMode(): "bollinger" {
+  getId(): string {
     return "bollinger";
   }
 

@@ -1,16 +1,27 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
+import { after, before, describe, it } from "node:test";
+import { resetSpeculatorDbCache } from "../db/db.js";
+import { useTestDb } from "../db/test-db.js";
 import type { Candle } from "../types.js";
+import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
 import {
   classifyHighLow,
   confirmLabel,
   confirmTrend,
   evaluateMarketIndicators,
   htfParamsFor,
+  loadStrategy,
   mtfParamsFor,
   SimpleStrategyManager,
 } from "./strategy-manager.js";
+
+before(async () => {
+  await useTestDb();
+});
+
+after(async () => {
+  await resetSpeculatorDbCache();
+});
 
 function bar(time: number, close: number, range = 0.5): Candle {
   return {
@@ -86,8 +97,8 @@ const mtfParams = mtfParamsFor();
 const at = new Date("2026-01-01T00:00:00.000Z");
 
 describe("htfParamsFor / getRequiredCandles", () => {
-  it("uses 200-EMA warmup of at least 220 bars on the given HTF", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+  it("uses 200-EMA warmup of at least 220 bars on the given HTF", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const required = manager.getRequiredHtfCandles();
     assert.equal(required.timeframe, "4h");
     assert.ok(required.count >= 200);
@@ -95,8 +106,8 @@ describe("htfParamsFor / getRequiredCandles", () => {
     assert.equal(htfParamsFor("4h").trendConfirmBars, 2);
   });
 
-  it("requires at least 120 1h bars for MTF volatility", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+  it("requires at least 120 1h bars for MTF volatility", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const required = manager.getRequiredMtfCandles();
     assert.equal(required.timeframe, "1h");
     assert.ok(required.count >= 120);
@@ -108,17 +119,17 @@ describe("htfParamsFor / getRequiredCandles", () => {
 });
 
 describe("SimpleStrategyManager defaults", () => {
-  it("returns env-style strategy and GenericRiskManager from that strategy", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "grid", htf: "4h" });
-    assert.equal(manager.getActiveStrategy().getMode(), "grid");
+  it("returns env-style strategy and GenericRiskManager from that strategy", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "grid", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getId(), "grid");
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
     assert.equal(manager.getActiveRiskManager(), manager.getActiveRiskManager());
   });
 });
 
 describe("applyMarketIndicators", () => {
-  it("switches to HighRiskManager when trend is bearish", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+  it("switches to HighRiskManager when trend is bearish", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const bullish = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),
@@ -127,7 +138,7 @@ describe("applyMarketIndicators", () => {
       params,
     });
     assert.equal(bullish.trend, "bullish");
-    assert.equal(manager.applyMarketIndicators(bullish), true);
+    assert.equal(await manager.applyMarketIndicators(bullish), true);
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
 
     const bearish = evaluateMarketIndicators({
@@ -138,14 +149,14 @@ describe("applyMarketIndicators", () => {
       params,
     });
     assert.equal(bearish.trend, "bearish");
-    assert.equal(manager.applyMarketIndicators(bearish, bullish), true);
+    assert.equal(await manager.applyMarketIndicators(bearish, bullish), true);
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
-    assert.equal(manager.applyMarketIndicators(bearish, bearish), false);
+    assert.equal(await manager.applyMarketIndicators(bearish, bearish), false);
     assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
   });
 
-  it("returns true when volatility changes even if trend is unchanged", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+  it("returns true when volatility changes even if trend is unchanged", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const first = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),
@@ -153,14 +164,14 @@ describe("applyMarketIndicators", () => {
       at,
       params,
     });
-    manager.applyMarketIndicators(first);
+    await manager.applyMarketIndicators(first);
     const squeezed = { ...first, volatility: "squeeze" as const };
-    assert.equal(manager.applyMarketIndicators(squeezed, first), true);
-    assert.equal(manager.applyMarketIndicators(squeezed, squeezed), false);
+    assert.equal(await manager.applyMarketIndicators(squeezed, first), true);
+    assert.equal(await manager.applyMarketIndicators(squeezed, squeezed), false);
   });
 
-  it("recreates GridStrategy with wide params (gridMult=8) when trend is bullish and vol is high", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "grid", htf: "4h" });
+  it("recreates GridStrategy with wide params (gridMult=8) when trend is bullish and vol is high", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "grid", htf: "4h" });
     const strategyBefore = manager.getActiveStrategy();
     const mtfCandles = highVolMtf(140);
     const high = evaluateMarketIndicators({
@@ -174,14 +185,14 @@ describe("applyMarketIndicators", () => {
     });
     assert.equal(high.trend, "bullish");
     assert.equal(high.volatility, "high");
-    manager.applyMarketIndicators(high);
+    await manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("×8"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
-  it("recreates BollingerStrategy with high-vol ADX when trend is bullish and vol is high", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" });
+  it("recreates BollingerStrategy with high-vol ADX when trend is bullish and vol is high", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const strategyBefore = manager.getActiveStrategy();
     const mtfCandles = highVolMtf(140);
     const high = evaluateMarketIndicators({
@@ -195,15 +206,15 @@ describe("applyMarketIndicators", () => {
     });
     assert.equal(high.trend, "bullish");
     assert.equal(high.volatility, "high");
-    manager.applyMarketIndicators(high);
+    await manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
-  it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", () => {
-    const manager = new SimpleStrategyManager({ strategyMode: "donchian", htf: "4h" });
-    assert.equal(manager.getActiveStrategy().getMode(), "donchian");
+  it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", async () => {
+    const manager = await SimpleStrategyManager.create({ strategyId: "donchian", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getId(), "donchian");
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("flat"));
     const first = evaluateMarketIndicators({
       pair: "SOL/USDC",
@@ -212,12 +223,27 @@ describe("applyMarketIndicators", () => {
       at,
       params,
     });
-    manager.applyMarketIndicators(first);
+    await manager.applyMarketIndicators(first);
     const squeezed = { ...first, volatility: "squeeze" as const };
-    manager.applyMarketIndicators(squeezed, first);
+    await manager.applyMarketIndicators(squeezed, first);
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("×1.6"));
     assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
+  });
+});
+
+describe("loadStrategy", () => {
+  it("builds bollinger, donchian, and grid from strategy.registry", async () => {
+    assert.equal((await loadStrategy("bollinger", "flat", "low")).getId(), "bollinger");
+    assert.equal((await loadStrategy("donchian", "flat", "low")).getId(), "donchian");
+    assert.equal((await loadStrategy("grid", "bearish", "high")).getId(), "grid");
+  });
+
+  it("rejects an id that is not in strategy.registry", async () => {
+    await assert.rejects(
+      () => loadStrategy("missing", "flat", "low"),
+      /Unknown strategy "missing"/,
+    );
   });
 });
 

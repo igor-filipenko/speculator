@@ -321,7 +321,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
     const blockedLong =
-      input.volatility == "squeeze" && input.trend != "bullish"
+      input.volatility == "squeeze" && input.trend == "bearish"
         ? "waiting for breakout down"
         : undefined;
 
@@ -369,7 +369,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const wickReject = lastBar.high >= bbUpper && close < bbUpper && close < lastBar.open;
     const rejectedUpper = closeReject || wickReject;
     const blockedShort =
-      input.volatility == "squeeze" && input.trend != "bearish"
+      input.volatility == "squeeze" && input.trend == "bullish"
         ? "waiting for breakout up"
         : undefined;
 

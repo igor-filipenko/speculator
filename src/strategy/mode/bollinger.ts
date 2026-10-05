@@ -6,7 +6,6 @@ import type {
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
-  RiskParams,
   Signal,
   SignalSide,
   Strategy,
@@ -99,6 +98,7 @@ const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
   unknown: { high: 40, low: 40, squeeze: 40, unknown: 40 },
 };
 
+/** Stop distance beyond the entry-bar extreme, in ATRs. */
 const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
   flat: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
@@ -106,12 +106,20 @@ const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
   unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
 };
 
-const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 3.5, low: 3, squeeze: 3, unknown: 2.5 },
-  flat: { high: 3, low: 3, squeeze: 3, unknown: 2.5 },
-  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
-  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
-};
+/**
+ * Hard stop beyond the signal bar. Longs sit under the bar low; shorts sit over
+ * the bar high. Using the close would leave the reclaim wick already through the stop.
+ */
+export function bollingerStopPrice(
+  side: "long" | "short",
+  barExtreme: number,
+  atrValue: number,
+  trend: Trend = "flat",
+  volatility: Volatility = "low",
+): number {
+  const distance = ATR_STOP[trend][volatility] * atrValue;
+  return side === "long" ? barExtreme - distance : barExtreme + distance;
+}
 
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(
@@ -133,16 +141,6 @@ export function bollingerParamsFor(
     workTrendAdxFlatMax: 20,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
-  };
-}
-
-function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
-  return {
-    timeframe: "15m",
-    atrStopMult: ATR_STOP[trend][volatility],
-    atrTrailMult: ATR_TRAIL[trend][volatility],
-    cooldownBars: 2,
-    minHoldBars: 0,
   };
 }
 
@@ -186,7 +184,7 @@ export interface BollingerInput {
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
  */
-export function evaluateBollinger(input: BollingerInput): Omit<Signal, "strategyId"> {
+export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
   const forming = candles[candles.length - 1];
@@ -235,6 +233,7 @@ export function evaluateBollinger(input: BollingerInput): Omit<Signal, "strategy
 
   const base = {
     pair,
+    strategyId: "bollinger",
     price,
     at,
     meta,
@@ -436,17 +435,30 @@ export function evaluateBollinger(input: BollingerInput): Omit<Signal, "strategy
       `BUY needs both below mid, SELL needs both above mid + upper reject`;
   }
 
-  return { ...base, side, reason };
+  if ((side !== "BUY" && side !== "SELL") || atrNow == null || !(atrNow > 0)) {
+    return { ...base, side, reason };
+  }
+  const extreme = side === "BUY" ? lastBar.low : lastBar.high;
+  return {
+    ...base,
+    side,
+    reason,
+    slPrice: bollingerStopPrice(
+      side === "BUY" ? "long" : "short",
+      extreme,
+      atrNow,
+      input.trend,
+      input.volatility,
+    ),
+  };
 }
 
 /** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
-  private readonly risk: RiskParams;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low") {
     this.params = bollingerParamsFor(trend, volatility);
-    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
@@ -456,16 +468,6 @@ export class BollingerStrategy implements Strategy {
 
   getId(): string {
     return "bollinger";
-  }
-
-  getRiskParams(): RiskParams {
-    return this.risk;
-  }
-
-  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
-  hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
-    const distance = this.risk.atrStopMult * atr;
-    return side === "long" ? entryPrice - distance : entryPrice + distance;
   }
 
   getRequiredCandles(): RequiredCandles {
@@ -491,30 +493,23 @@ export class BollingerStrategy implements Strategy {
       (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
         ? position
         : undefined;
-    return withEntryStop(
-      {
-        ...evaluateBollinger({
-          pair,
-          candles,
-          strategy: this.params,
-          price,
-          at,
-          trend: market.trend,
-          volatility: market.volatility,
-          ...(perpsFees !== undefined ? { perpsFees } : {}),
-          ...(positioned?.side === "long" || positioned?.side === "short"
-            ? {
-                entryPrice: positioned.entryPrice,
-                positionSide: positioned.side,
-                ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
-              }
-            : {}),
-        }),
-        strategyId: this.getId(),
-      },
-      (side, entryPrice, atr) => this.hardStopLoss(side, entryPrice, atr),
-      positioned?.side === "long" || positioned?.side === "short" ? positioned.side : undefined,
-    );
+    return evaluateBollinger({
+      pair,
+      candles,
+      strategy: this.params,
+      price,
+      at,
+      trend: market.trend,
+      volatility: market.volatility,
+      ...(perpsFees !== undefined ? { perpsFees } : {}),
+      ...(positioned?.side === "long" || positioned?.side === "short"
+        ? {
+            entryPrice: positioned.entryPrice,
+            positionSide: positioned.side,
+            ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
+          }
+        : {}),
+    });
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {
@@ -576,26 +571,4 @@ function fmt(n: number): string {
 
 function pct(n: number): string {
   return `${(n * 100).toFixed(2)}%`;
-}
-
-/** Hard stop on a flat BUY (long) or flat SELL (short). Exits keep the open stop. */
-function withEntryStop(
-  signal: Signal,
-  stop: (side: "long" | "short", entryPrice: number, atr: number) => number,
-  positionSide?: "long" | "short",
-): Signal {
-  if (positionSide === "long" || positionSide === "short") {
-    return signal;
-  }
-  const atrNow = signal.meta?.atr;
-  if (atrNow == null || !(atrNow > 0) || !(signal.price > 0)) {
-    return signal;
-  }
-  if (signal.side === "BUY") {
-    return { ...signal, slPrice: stop("long", signal.price, atrNow) };
-  }
-  if (signal.side === "SELL") {
-    return { ...signal, slPrice: stop("short", signal.price, atrNow) };
-  }
-  return signal;
 }

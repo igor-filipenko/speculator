@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { resetSpeculatorDbCache } from "../db/db.js";
 import { useTestDb } from "../db/test-db.js";
 import type { Candle } from "../types.js";
-import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
+import { GenericRiskManager } from "./risk-manager.js";
 import {
   classifyHighLow,
   confirmLabel,
@@ -128,7 +128,7 @@ describe("SimpleStrategyManager defaults", () => {
 });
 
 describe("applyMarketIndicators", () => {
-  it("switches to HighRiskManager when trend is bearish", async () => {
+  it("keeps GenericRiskManager when trend is bearish", async () => {
     const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const bullish = evaluateMarketIndicators({
       pair: "SOL/USDC",
@@ -150,9 +150,9 @@ describe("applyMarketIndicators", () => {
     });
     assert.equal(bearish.trend, "bearish");
     assert.equal(await manager.applyMarketIndicators(bearish, bullish), true);
-    assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
     assert.equal(await manager.applyMarketIndicators(bearish, bearish), false);
-    assert.ok(manager.getActiveRiskManager() instanceof HighRiskManager);
+    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
   it("returns true when volatility changes even if trend is unchanged", async () => {

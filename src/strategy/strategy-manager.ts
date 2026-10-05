@@ -1,4 +1,3 @@
-import { match } from "ts-pattern";
 import { getStrategy, listStrategies, type RegisteredStrategy } from "../db/strategies.js";
 import {
   evaluateMarketIndicators,
@@ -7,7 +6,7 @@ import {
   type HtfParams,
   type MtfParams,
 } from "../market/htf.js";
-import { GenericRiskManager, HighRiskManager } from "./risk-manager.js";
+import { GenericRiskManager } from "./risk-manager.js";
 import type {
   Candle,
   HtfTimeframe,
@@ -42,8 +41,8 @@ export interface SimpleStrategyManagerOptions {
 
 /**
  * Active strategy id comes from env/CLI and must exist in `strategy.registry`.
- * Grid, Bollinger, and Donchian params (and ATR trail) follow HTF trend × 1h
- * volatility; Generic vs High risk still follows trend only.
+ * Grid, Bollinger, and Donchian params follow HTF trend × 1h volatility.
+ * The risk manager is the same in every regime: hard stop and max deposit.
  */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;
@@ -55,7 +54,7 @@ export class SimpleStrategyManager implements StrategyManager {
   private constructor(options: SimpleStrategyManagerOptions, strategy: Strategy) {
     this.strategyId = options.strategyId;
     this.strategy = strategy;
-    this.riskManager = new GenericRiskManager(strategy.getRiskParams());
+    this.riskManager = new GenericRiskManager();
     this.params = htfParamsFor(options.htf);
     this.mtfParams = mtfParamsFor();
   }
@@ -116,14 +115,8 @@ export class SimpleStrategyManager implements StrategyManager {
   }
 }
 
-export function createRiskManager(trend: Trend, strategy: Strategy): RiskManager {
-  const risk = strategy.getRiskParams();
-  return match(trend)
-    .with("bearish", () => new HighRiskManager("trend is bearish", risk, true))
-    .with("unknown", () => new HighRiskManager("trend is unknown", risk, false))
-    .with("bullish", () => new GenericRiskManager(risk, { allowLong: true, allowShort: false }))
-    .with("flat", () => new GenericRiskManager(risk, { allowLong: true, allowShort: true }))
-    .exhaustive();
+export function createRiskManager(_trend: Trend, _strategy: Strategy): RiskManager {
+  return new GenericRiskManager();
 }
 
 type StrategyFactory = (trend: Trend, volatility: Volatility) => Strategy;

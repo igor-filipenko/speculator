@@ -4,7 +4,7 @@ import { useTestDb } from "../db/test-db.js";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
-import { GenericRiskManager, HighRiskManager } from "../strategy/risk-manager.js";
+import { GenericRiskManager } from "../strategy/risk-manager.js";
 import {
   evaluateMarketIndicators,
   htfParamsFor,
@@ -16,7 +16,6 @@ import type {
   MarketIndicators,
   Order,
   RiskManager,
-  RiskParams,
   Signal,
   SignalSide,
   Strategy,
@@ -58,13 +57,13 @@ function makeConfig(cash = 1000): AppConfig {
   };
 }
 
-function makeRisk(strategy: Strategy): GenericRiskManager {
-  return new GenericRiskManager(strategy.getRiskParams());
+function makeRisk(): GenericRiskManager {
+  return new GenericRiskManager();
 }
 
 function htfAwareManager(strategy: Strategy): StrategyManager {
   const params = htfParamsFor("4h");
-  let riskManager: RiskManager = new GenericRiskManager(strategy.getRiskParams());
+  const riskManager: RiskManager = new GenericRiskManager();
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
@@ -79,21 +78,12 @@ function htfAwareManager(strategy: Strategy): StrategyManager {
         at,
         params,
       }),
-    applyMarketIndicators: (state, prev) => {
-      riskManager =
-        state.trend === "bullish"
-          ? new GenericRiskManager(strategy.getRiskParams())
-          : new HighRiskManager(`trend is ${state.trend}`, strategy.getRiskParams());
-      return Promise.resolve(prev?.trend !== state.trend);
-    },
+    applyMarketIndicators: (state, prev) => Promise.resolve(prev?.trend !== state.trend),
   };
 }
 
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
-function managerFor(
-  strategy: Strategy,
-  riskManager: RiskManager = makeRisk(strategy),
-): StrategyManager {
+function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): StrategyManager {
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
@@ -112,21 +102,14 @@ function managerFor(
 
 function scriptedStrategy(opts: {
   buyIndex: number;
-  risk?: Partial<RiskParams>;
+  /** Distance below the buy price stored as slPrice when withStop is set. */
+  stopDistance?: number;
   withStop?: boolean;
 }): Strategy {
-  const risk: RiskParams = {
-    timeframe: "15m",
-    atrStopMult: 100,
-    atrTrailMult: 100,
-    cooldownBars: 0,
-    minHoldBars: 0,
-    ...opts.risk,
-  };
+  const stopDistance = opts.stopDistance ?? 100;
   return {
     getDisplayName: () => "scripted",
     getId: () => "bollinger",
-    getRiskParams: () => risk,
     getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
     evaluateSignal: (pair, candles, _market, price, at) => {
       const last = candles[candles.length - 1]!;
@@ -142,7 +125,7 @@ function scriptedStrategy(opts: {
         meta: { atr: 1, barLow: last.low, barHigh: last.high },
       };
       if (opts.withStop && side === "BUY") {
-        signal.slPrice = price - risk.atrStopMult;
+        signal.slPrice = price - stopDistance;
       }
       return signal;
     },
@@ -332,7 +315,7 @@ describe("runBacktest", () => {
     const strategy = scriptedStrategy({
       buyIndex: 20,
       withStop: true,
-      risk: { atrStopMult: 0.5, atrTrailMult: 50 },
+      stopDistance: 0.5,
     });
 
     const [result] = await runBacktest({
@@ -379,7 +362,7 @@ describe("runBacktest", () => {
     assert.ok(result.metrics.vsHoldReturnPct > 0);
   });
 
-  it("evaluates HTF market state and blocks BUY when trend is not bullish", async () => {
+  it("fills a scripted BUY when HTF trend is bearish", async () => {
     const intervalHtf = 4 * 60 * 60;
     const ltfStart = 1_700_000_000;
     const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
@@ -391,7 +374,7 @@ describe("runBacktest", () => {
       htfCandles: htf,
     });
     assert.ok(result);
-    assert.equal(result.trades.filter((t) => t.side === "BUY").length, 0);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
   });
 
   it("allows BUY when HTF trend is bullish", async () => {
@@ -432,13 +415,6 @@ describe("runBacktest", () => {
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
       getId: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });
@@ -503,13 +479,6 @@ describe("runBacktest", () => {
     const strategy: Strategy = {
       getDisplayName: () => "wick-buy",
       getId: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         const last = window[window.length - 1]!;
@@ -564,13 +533,6 @@ describe("runBacktest", () => {
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
       getId: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });

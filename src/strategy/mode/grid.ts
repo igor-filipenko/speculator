@@ -4,7 +4,6 @@ import type {
   MarketIndicators,
   PriceLevel,
   RequiredCandles,
-  RiskParams,
   Signal,
   PortfolioSnapshot,
   Strategy,
@@ -75,14 +74,6 @@ const ATR_STOP: Record<Trend, number> = {
   unknown: 1.5,
 };
 
-/** Tight trail in bullish high/squeeze so a spike does not reverse through the whole TP. */
-const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 6, low: 8, squeeze: 6, unknown: 8 },
-  flat: { high: 8, low: 8, squeeze: 8, unknown: 8 },
-  bearish: { high: 4, low: 4, squeeze: 4, unknown: 4 },
-  unknown: { high: 4, low: 4, squeeze: 4, unknown: 4 },
-};
-
 export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams {
   return {
     timeframe: "15m",
@@ -97,16 +88,6 @@ export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams 
     dipAtrMult: 1.5,
     maxDipAtrMult: 2,
     failReclaimAtrMult: 0.75,
-  };
-}
-
-function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
-  return {
-    timeframe: "15m",
-    atrStopMult: ATR_STOP[trend],
-    atrTrailMult: ATR_TRAIL[trend][volatility],
-    cooldownBars: 8,
-    minHoldBars: 1,
   };
 }
 
@@ -384,11 +365,11 @@ function lastSellTrade(snapshot: PortfolioSnapshot | undefined): Trade | undefin
 
 export class GridStrategy implements Strategy {
   private readonly params: GridParams;
-  private readonly risk: RiskParams;
+  private readonly trend: Trend;
 
   constructor(trend: Trend, volatility: Volatility) {
+    this.trend = trend;
     this.params = gridParamsFor(trend, volatility);
-    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
@@ -399,13 +380,9 @@ export class GridStrategy implements Strategy {
     return "grid";
   }
 
-  getRiskParams(): RiskParams {
-    return this.risk;
-  }
-
-  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
+  /** Long: entry − ATR_STOP × ATR. Short: entry + ATR_STOP × ATR. */
   hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
-    const distance = this.risk.atrStopMult * atr;
+    const distance = ATR_STOP[this.trend] * atr;
     return side === "long" ? entryPrice - distance : entryPrice + distance;
   }
 

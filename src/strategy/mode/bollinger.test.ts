@@ -5,6 +5,7 @@ import {
   evaluateBollinger,
   BollingerStrategy,
   bollingerParamsFor,
+  bollingerStopPrice,
   isWorkDriftDown,
   type BollingerInput,
   type BollingerParams,
@@ -480,15 +481,10 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 40);
   });
 
-  it("widens ATR stop/trail in bullish high vol and shortens cooldown", () => {
-    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrStopMult, 3);
-    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrTrailMult, 3.5);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrStopMult, 2.5);
-    assert.equal(new BollingerStrategy("flat", "low").hardStopLoss("long", 100, 4), 90);
-    assert.equal(new BollingerStrategy("flat", "low").hardStopLoss("short", 100, 4), 110);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrTrailMult, 3);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().cooldownBars, 2);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 0);
+  it("places the hard stop beyond the entry-bar extreme", () => {
+    assert.equal(bollingerStopPrice("long", 100, 4, "bullish", "high"), 88);
+    assert.equal(bollingerStopPrice("long", 100, 4, "flat", "low"), 90);
+    assert.equal(bollingerStopPrice("short", 100, 4, "flat", "low"), 110);
   });
 });
 

@@ -4,7 +4,6 @@ import type {
   MarketIndicators,
   PortfolioSnapshot,
   RequiredCandles,
-  RiskParams,
   Signal,
   SignalSide,
   Strategy,
@@ -63,17 +62,8 @@ const MIN_BREAK_ATR: Record<Volatility, number> = {
   unknown: 0.25,
 };
 
-/**
- * Wide enough to hold the first 15m pullback after a breakout on a bullish HTF
- * (4× trails out of the runner before the HTF move). Flat uses a tighter trail
- * so a 15m spike cannot give the whole move back to the ATR stop.
- */
-const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 6, low: 8, squeeze: 6, unknown: 6 },
-  flat: { high: 3, low: 3, squeeze: 3, unknown: 3 },
-  bearish: { high: 3, low: 3, squeeze: 3, unknown: 3 },
-  unknown: { high: 3, low: 3, squeeze: 3, unknown: 3 },
-};
+/** Hard stop distance from the entry price, in ATRs. */
+const ATR_STOP_MULT = 3;
 
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function donchianParamsFor(
@@ -91,18 +81,6 @@ export function donchianParamsFor(
     minBreakAtrMult: MIN_BREAK_ATR[volatility],
     givebackAtrMult: 3,
     timeStopBars: 1,
-  };
-}
-
-function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
-  return {
-    timeframe: "15m",
-    atrStopMult: 3,
-    atrTrailMult: ATR_TRAIL[trend][volatility],
-    /** 2h on 15m: skip an immediate re-entry, not a full day after an ATR stop. */
-    cooldownBars: 8,
-    /** 0 so the time stop, giveback, and channel exit are not delayed. */
-    minHoldBars: 0,
   };
 }
 
@@ -130,7 +108,7 @@ export interface DonchianInput {
  * price gives back givebackAtrMult × ATR from the hold's peak (does not widen with HTF),
  * or when timeStopBars pass without a close at breakoutHigh − ATR
  * (false breakout; wicks alone do not count). The time stop sells at the current price.
- * Volume / EMA / trend do not block exits. ATR stop/trail still use the forming range.
+ * Volume / EMA / trend do not block exits. The hard stop is set on the opening signal.
  */
 export function evaluateDonchian(input: DonchianInput): Omit<Signal, "strategyId"> {
   const { pair, candles, strategy, price } = input;
@@ -275,13 +253,11 @@ export function evaluateDonchian(input: DonchianInput): Omit<Signal, "strategyId
 /** 15m Donchian breakout: closed-bar 20-bar high + SMA volume + EMA50; HTF bullish or flat; exit at 40-bar low, 3×ATR giveback, or time stop without close follow-through. */
 export class DonchianStrategy implements Strategy {
   private readonly params: DonchianParams;
-  private readonly risk: RiskParams;
   private readonly trend: Trend;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low") {
     this.trend = trend;
     this.params = donchianParamsFor(trend, volatility);
-    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
@@ -303,13 +279,9 @@ export class DonchianStrategy implements Strategy {
     return "donchian";
   }
 
-  getRiskParams(): RiskParams {
-    return this.risk;
-  }
-
-  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
+  /** Long: entry − ATR_STOP_MULT × ATR. Short: entry + ATR_STOP_MULT × ATR. */
   hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
-    const distance = this.risk.atrStopMult * atr;
+    const distance = ATR_STOP_MULT * atr;
     return side === "long" ? entryPrice - distance : entryPrice + distance;
   }
 

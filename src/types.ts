@@ -160,20 +160,6 @@ export interface PairConfig {
   geckoPoolAddress: string;
 }
 
-/** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */
-export interface RiskParams {
-  /** Bar size for cooldown / min-hold (usually matches strategy timeframe). */
-  timeframe: Timeframe;
-  /** Hard stop distance: entry − atrStopMult × ATR. */
-  atrStopMult: number;
-  /** Trailing stop from peak: peak − atrTrailMult × ATR. */
-  atrTrailMult: number;
-  /** Bars to wait after a SELL before allowing a new BUY. */
-  cooldownBars: number;
-  /** Bars to hold before allowing a discretionary (cross) SELL; stops still fire. */
-  minHoldBars: number;
-}
-
 export interface Trade {
   pair: string;
   side: "BUY" | "SELL";
@@ -297,7 +283,6 @@ export interface Strategy {
   getDisplayName(): string;
   /** `strategy.registry.id` (for example `bollinger`). */
   getId(): string;
-  getRiskParams(): RiskParams;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(
     pair: string,

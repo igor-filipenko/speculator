@@ -449,33 +449,23 @@ describe("donchianParamsFor", () => {
 });
 
 describe("DonchianStrategy", () => {
-  it("exposes risk params and required candles on 15m", () => {
+  it("exposes a 3×ATR hard stop and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");
     assert.equal(strategy.getId(), "donchian");
     assert.match(strategy.getDisplayName(), /flat/);
-    const risk = strategy.getRiskParams();
-    assert.equal(risk.timeframe, "15m");
-    assert.equal(risk.atrStopMult, 3);
     assert.equal(strategy.hardStopLoss("long", 100, 4), 88);
     assert.equal(strategy.hardStopLoss("short", 100, 4), 112);
-    assert.equal(risk.atrTrailMult, 3);
-    assert.equal(risk.cooldownBars, 8);
-    assert.equal(risk.minHoldBars, 0);
     const required = strategy.getRequiredCandles();
     assert.equal(required.timeframe, "15m");
     assert.ok(required.count <= 100);
     assert.ok(required.count >= 70);
   });
 
-  it("widens ATR trail in bullish and names the volume mult", () => {
+  it("names the volume mult in bullish high vol", () => {
     const strategy = new DonchianStrategy("bullish", "high");
     assert.match(strategy.getDisplayName(), /×1\.2/);
     assert.match(strategy.getDisplayName(), /bull/);
-    const risk = strategy.getRiskParams();
-    assert.equal(risk.atrStopMult, 3);
-    assert.equal(risk.atrTrailMult, 6);
-    assert.equal(new DonchianStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
-    assert.equal(new DonchianStrategy("bullish", "squeeze").getRiskParams().atrTrailMult, 6);
+    assert.equal(strategy.hardStopLoss("long", 100, 4), 88);
   });
 
   it("sets doNotBuy from MarketIndicators.trend, not from constructor params", () => {

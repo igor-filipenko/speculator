@@ -742,16 +742,10 @@ describe("gridParamsFor", () => {
     assert.equal(gridParamsFor("flat", "low").failReclaimAtrMult, 0.75);
   });
 
-  it("tightens the ATR trail in bullish high/squeeze and keeps a wide trail in flat", () => {
-    assert.equal(new GridStrategy("bullish", "high").getRiskParams().atrTrailMult, 6);
-    assert.equal(new GridStrategy("bullish", "squeeze").getRiskParams().atrTrailMult, 6);
-    assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
-    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrTrailMult, 8);
-    assert.equal(new GridStrategy("flat", "low").getRiskParams().atrStopMult, 1.5);
+  it("widens the hard stop in a bullish trend", () => {
     assert.equal(new GridStrategy("flat", "low").hardStopLoss("long", 100, 4), 94);
     assert.equal(new GridStrategy("flat", "low").hardStopLoss("short", 100, 4), 106);
-    assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrStopMult, 3);
-    assert.equal(new GridStrategy("bearish", "high").getRiskParams().atrStopMult, 1.5);
-    assert.equal(new GridStrategy("flat", "low").getRiskParams().cooldownBars, 8);
+    assert.equal(new GridStrategy("bullish", "low").hardStopLoss("long", 100, 4), 88);
+    assert.equal(new GridStrategy("bearish", "high").hardStopLoss("long", 100, 4), 94);
   });
 });

@@ -21,6 +21,7 @@ Build/run: [README.md](./README.md).
 - Shared TypeScript strict flags live in `tsconfig.base.json` (root CLI and `web/` both extend it). Prefer Prettier + type-aware ESLint over alternate formatters/linters in `web/` too (`pnpm --dir web check`).
 - Keep the dependency surface small: prefer `fetch` + zod + tsx + `pg`; `dbmate` is allowed for SQL migrations; `grammy` is allowed for optional Telegram notify/commands; `@solana/web3.js` is allowed for live keypair signing and RPC balances. Do not add heavy TA libraries (`technicalindicators`, etc.) — indicators stay hand-rolled in `src/strategy/indicators.ts`. Mini App UI uses React + shadcn under `web/`; API uses Axum under `server/`.
 - Never commit secrets (`.env`, private keys, keypair JSON). Use `.env.example` only.
+- Do not create new files or packages. Ask explicitly if you need one.
 
 ## Layout
 

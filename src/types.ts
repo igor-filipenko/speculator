@@ -105,6 +105,10 @@ export interface Signal {
   reason: string;
   price: number;
   at: Date;
+  /** `strategy.registry.id` of the strategy that produced this signal. */
+  strategyId: string;
+  /** Hard stop for an opening signal, set by the strategy. */
+  slPrice?: number;
   meta?: {
     emaFast?: number;
     emaSlow?: number;
@@ -140,6 +144,10 @@ export interface Position {
   /** Average entry price in quote (USDC). */
   entryPrice: number;
   openedAt?: Date;
+  /** `strategy.registry.id` that opened this position. */
+  strategyId: string;
+  /** Hard stop price from the opening signal. */
+  slPrice: number;
 }
 
 export interface PairConfig {
@@ -209,6 +217,10 @@ export interface Command {
   quoteBudgetUsdc?: number;
   /** Base size for close-long, close-short, and buy-sol (SOL to buy). */
   baseSize?: number;
+  /** Signal that produced this command. */
+  signal?: Signal;
+  /** Hard stop copied from {@link Signal.slPrice} on an opening command. */
+  slPrice?: number;
 }
 
 /**
@@ -236,6 +248,10 @@ export interface Order {
   reason: string;
   /** Network priority fee in USDC (0 for live paper quotes). */
   priorityFeeUsdc: number;
+  /** `strategy.registry.id` for an opening fill. */
+  strategyId?: string;
+  /** Hard stop price for an opening fill. */
+  slPrice?: number;
   /** Present for emulated (backtest) fills. */
   fillCosts?: {
     mid: number;

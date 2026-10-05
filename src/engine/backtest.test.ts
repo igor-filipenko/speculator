@@ -20,12 +20,14 @@ import type {
   SignalSide,
   Strategy,
   StrategyManager,
+  Trade,
 } from "../types.js";
 import {
   parseBacktestArgs,
   parseBacktestDate,
   runBacktest,
   computeBuyHoldEquity,
+  roundTripHoldMs,
 } from "./backtest.js";
 import { intraBarPrices } from "../backtest/intra-bar.js";
 
@@ -239,6 +241,34 @@ describe("parseBacktestDate", () => {
   });
 });
 
+describe("roundTripHoldMs", () => {
+  function fill(side: "BUY" | "SELL", at: string, realizedPnl?: number): Trade {
+    return {
+      pair: "SOL/USDC",
+      side,
+      price: 100,
+      size: 1,
+      at: new Date(at),
+      simulated: true,
+      ...(realizedPnl !== undefined ? { realizedPnl } : {}),
+    };
+  }
+
+  it("measures close minus open for each completed trip", () => {
+    const holds = roundTripHoldMs([
+      fill("BUY", "2026-01-01T00:00:00.000Z"),
+      fill("SELL", "2026-01-01T01:30:00.000Z", 1),
+      fill("SELL", "2026-01-02T00:00:00.000Z"),
+      fill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
+    ]);
+    assert.deepEqual(holds, [90 * 60 * 1000, 15 * 60 * 1000]);
+  });
+
+  it("ignores an open that never closes", () => {
+    assert.deepEqual(roundTripHoldMs([fill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+  });
+});
+
 describe("computeBuyHoldEquity", () => {
   it("applies round-trip emulated costs on flat price", () => {
     const hold = computeBuyHoldEquity(500, 100, 100, "SOL/USDC");
@@ -330,6 +360,9 @@ describe("runBacktest", () => {
     );
     assert.ok(stopSell);
     assert.match(stopSell.reason ?? "", /hard stop hit/);
+    assert.ok(result.metrics.roundTripMinMs > 0);
+    assert.equal(result.metrics.roundTripMinMs, result.metrics.roundTripMaxMs);
+    assert.equal(result.metrics.roundTripAvgMs, result.metrics.roundTripMinMs);
   });
 
   it("keeps flat equity when indicators never fire", async () => {
@@ -355,6 +388,9 @@ describe("runBacktest", () => {
 
     assert.ok(result);
     assert.equal(result.trades.length, 0);
+    assert.equal(result.metrics.roundTripMinMs, 0);
+    assert.equal(result.metrics.roundTripMaxMs, 0);
+    assert.equal(result.metrics.roundTripAvgMs, 0);
     assert.equal(result.metrics.endingEquity, 500);
     assert.equal(result.metrics.totalReturnPct, 0);
     assert.ok(result.metrics.holdEquity < 500);

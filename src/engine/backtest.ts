@@ -67,6 +67,12 @@ export interface BacktestMetrics {
   roundTrips: number;
   wins: number;
   winRate: number;
+  /** Shortest completed round-trip (close − open), milliseconds. 0 when none closed. */
+  roundTripMinMs: number;
+  /** Longest completed round-trip (close − open), milliseconds. 0 when none closed. */
+  roundTripMaxMs: number;
+  /** Mean completed round-trip (close − open), milliseconds. 0 when none closed. */
+  roundTripAvgMs: number;
   maxDrawdownPct: number;
   costs: BacktestCostTotals;
   candleCount: number;
@@ -314,6 +320,8 @@ async function replayPair(args: {
   const sells = snap.trades.filter((t) => t.side === "SELL");
   const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
   const roundTrips = sells.length;
+  const holdMs = roundTripHoldMs(snap.trades);
+  const holdStats = summarizeHoldMs(holdMs);
   const totalReturnPct =
     startingCashUsdc > 0 ? ((snap.equity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
   const holdEquity = computeBuyHoldEquity(startingCashUsdc, firstClose, lastClose, pair.symbol);
@@ -336,6 +344,9 @@ async function replayPair(args: {
       roundTrips,
       wins,
       winRate: roundTrips > 0 ? wins / roundTrips : 0,
+      roundTripMinMs: holdStats.minMs,
+      roundTripMaxMs: holdStats.maxMs,
+      roundTripAvgMs: holdStats.avgMs,
       maxDrawdownPct,
       costs,
       candleCount: candles.length,
@@ -373,6 +384,50 @@ export function computeBuyHoldEquity(
   const size = spendable / buy.fillPrice;
   const sell = emulateFillPrice({ side: "SELL", close: lastClose, tier });
   return size * sell.fillPrice - sell.priorityFeeUsdc;
+}
+
+/**
+ * Hold time of each completed round-trip, in milliseconds.
+ * A close is a fill with `realizedPnl`; it pairs with the previous open.
+ */
+export function roundTripHoldMs(trades: readonly Trade[]): number[] {
+  const holds: number[] = [];
+  let openedAt: Date | undefined;
+  for (const trade of trades) {
+    if (trade.realizedPnl === undefined) {
+      openedAt = trade.at;
+      continue;
+    }
+    if (openedAt !== undefined) {
+      holds.push(trade.at.getTime() - openedAt.getTime());
+      openedAt = undefined;
+    }
+  }
+  return holds;
+}
+
+function summarizeHoldMs(holds: readonly number[]): {
+  minMs: number;
+  maxMs: number;
+  avgMs: number;
+} {
+  const first = holds[0];
+  if (first === undefined) {
+    return { minMs: 0, maxMs: 0, avgMs: 0 };
+  }
+  let minMs = first;
+  let maxMs = first;
+  let sum = 0;
+  for (const ms of holds) {
+    if (ms < minMs) {
+      minMs = ms;
+    }
+    if (ms > maxMs) {
+      maxMs = ms;
+    }
+    sum += ms;
+  }
+  return { minMs, maxMs, avgMs: sum / holds.length };
 }
 
 function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order): void {
@@ -499,6 +554,10 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     `Realized P&L: ${metrics.realizedPnl.toFixed(4)} USDC | Trades: ${metrics.tradeCount} ` +
       `(${metrics.roundTrips} round-trips, win rate ${fmtPct(metrics.winRate * 100)})`,
   );
+  console.log(
+    `Round-trip hold: min ${fmtDuration(metrics.roundTripMinMs)} | ` +
+      `max ${fmtDuration(metrics.roundTripMaxMs)} | avg ${fmtDuration(metrics.roundTripAvgMs)}`,
+  );
   console.log(`Max drawdown: ${metrics.maxDrawdownPct.toFixed(2)}%`);
   console.log(
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
@@ -515,12 +574,25 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     console.log("No simulated fills.");
   } else {
     console.log("Trades (simulated):");
+    const holds = roundTripHoldMs(trades);
+    let opened = false;
+    let holdIndex = 0;
     for (const t of trades) {
       const pnl = t.realizedPnl !== undefined ? ` pnl=${t.realizedPnl.toFixed(4)}` : "";
+      let holdNote = "";
+      if (t.realizedPnl === undefined) {
+        opened = true;
+      } else if (opened) {
+        const hold = holds[holdIndex++];
+        if (hold !== undefined) {
+          holdNote = ` hold=${fmtDuration(hold)}`;
+        }
+        opened = false;
+      }
       const reason = t.reason ? ` — ${t.reason}` : "";
       const endOfTrip = t.realizedPnl !== undefined ? "\n" : "";
       console.log(
-        `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${reason}${endOfTrip}`,
+        `  ${t.at.toISOString()} ${t.side} size=${t.size.toFixed(6)} @ ${t.price.toFixed(6)}${pnl}${holdNote}${reason}${endOfTrip}`,
       );
     }
   }
@@ -529,6 +601,26 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
     console.log("");
     console.log(await renderConsoleChart({ pair: metrics.pair, candles, trades }));
   }
+}
+
+function fmtDuration(ms: number): string {
+  const sign = ms < 0 ? "-" : "";
+  const sec = Math.round(Math.abs(ms) / 1000);
+  if (sec < 60) {
+    return `${sign}${sec}s`;
+  }
+  const minutes = Math.floor(sec / 60);
+  if (minutes < 60) {
+    return `${sign}${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  if (hours < 48) {
+    return remMin === 0 ? `${sign}${hours}h` : `${sign}${hours}h ${remMin}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours === 0 ? `${sign}${days}d` : `${sign}${days}d ${remHours}h`;
 }
 
 function fmtPct(n: number): string {

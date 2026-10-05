@@ -132,7 +132,7 @@ export interface DonchianInput {
  * (false breakout; wicks alone do not count). The time stop sells at the current price.
  * Volume / EMA / trend do not block exits. ATR stop/trail still use the forming range.
  */
-export function evaluateDonchian(input: DonchianInput): Signal {
+export function evaluateDonchian(input: DonchianInput): Omit<Signal, "strategyId"> {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
   const forming = candles[candles.length - 1];
@@ -307,6 +307,12 @@ export class DonchianStrategy implements Strategy {
     return this.risk;
   }
 
+  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
+  hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
+    const distance = this.risk.atrStopMult * atr;
+    return side === "long" ? entryPrice - distance : entryPrice + distance;
+  }
+
   getRequiredCandles(): RequiredCandles {
     const { timeframe, entryPeriod, exitPeriod, volumeSmaPeriod, trendEmaPeriod, atrPeriod } =
       this.params;
@@ -327,18 +333,28 @@ export class DonchianStrategy implements Strategy {
     snapshot?: PortfolioSnapshot,
   ): Signal {
     const position = snapshot?.position;
-    const entryPrice =
-      position?.side === "long" && position.entryPrice > 0 ? position.entryPrice : undefined;
-    return evaluateDonchian({
-      pair,
-      candles,
-      strategy: this.params,
-      price,
-      at,
-      trend: market.trend,
-      ...(entryPrice != null ? { entryPrice } : {}),
-      ...(position?.openedAt != null ? { openedAt: position.openedAt } : {}),
-    });
+    const positioned =
+      (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
+        ? position
+        : undefined;
+    const entryPrice = positioned?.side === "long" ? positioned.entryPrice : undefined;
+    return withEntryStop(
+      {
+        ...evaluateDonchian({
+          pair,
+          candles,
+          strategy: this.params,
+          price,
+          at,
+          trend: market.trend,
+          ...(entryPrice != null ? { entryPrice } : {}),
+          ...(positioned?.openedAt != null ? { openedAt: positioned.openedAt } : {}),
+        }),
+        strategyId: this.getId(),
+      },
+      (side, entry, atr) => this.hardStopLoss(side, entry, atr),
+      positioned?.side === "long" || positioned?.side === "short" ? positioned.side : undefined,
+    );
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {
@@ -448,4 +464,26 @@ function gaveBackFromPeak(input: {
 
 function fmt(n: number): string {
   return n.toFixed(4);
+}
+
+/** Hard stop on a flat BUY (long) or flat SELL (short). Exits keep the open stop. */
+function withEntryStop(
+  signal: Signal,
+  stop: (side: "long" | "short", entryPrice: number, atr: number) => number,
+  positionSide?: "long" | "short",
+): Signal {
+  if (positionSide === "long" || positionSide === "short") {
+    return signal;
+  }
+  const atrNow = signal.meta?.atr;
+  if (atrNow == null || !(atrNow > 0) || !(signal.price > 0)) {
+    return signal;
+  }
+  if (signal.side === "BUY") {
+    return { ...signal, slPrice: stop("long", signal.price, atrNow) };
+  }
+  if (signal.side === "SELL") {
+    return { ...signal, slPrice: stop("short", signal.price, atrNow) };
+  }
+  return signal;
 }

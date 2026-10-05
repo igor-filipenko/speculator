@@ -16,6 +16,7 @@ describe("market.signals", () => {
   it("inserts a signal with optional meta", async () => {
     await insertSignal({
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "BUY",
       reason: "test",
       price: 150.5,
@@ -51,6 +52,7 @@ describe("market.signals", () => {
     const at = new Date("2026-07-31T11:00:00.000Z");
     const signal = {
       pair: "SOL/USDC" as const,
+      strategyId: "bollinger",
       side: "BUY" as const,
       reason: "first",
       price: 151,

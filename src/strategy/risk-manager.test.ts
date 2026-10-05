@@ -47,6 +47,7 @@ describe("GenericRiskManager", () => {
     const start = Math.floor(Date.parse("2026-01-01T01:00:00.000Z") / 1000);
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "BUY",
       reason: "cross",
       price: 100,
@@ -83,6 +84,7 @@ describe("GenericRiskManager", () => {
     risk.check(
       {
         pair: "SOL/USDC",
+        strategyId: "bollinger",
         side: "HOLD",
         reason: "hold",
         price: 100,
@@ -95,6 +97,7 @@ describe("GenericRiskManager", () => {
 
     const crossSell: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "SELL",
       reason: "bearish cross",
       price: 90,
@@ -108,6 +111,7 @@ describe("GenericRiskManager", () => {
     const holdThroughStop = risk.check(
       {
         pair: "SOL/USDC",
+        strategyId: "bollinger",
         side: "HOLD",
         reason: "no cross",
         price: 90,
@@ -124,6 +128,7 @@ describe("GenericRiskManager", () => {
     const stopCmd = risk.check(
       {
         pair: "SOL/USDC",
+        strategyId: "bollinger",
         side: "SELL",
         reason: "no cross",
         price: 90,
@@ -166,6 +171,7 @@ describe("GenericRiskManager", () => {
     const result = risk.check(
       {
         pair: "SOL/USDC",
+        strategyId: "bollinger",
         side: "SELL",
         reason: "exit",
         price: 115,
@@ -185,6 +191,7 @@ describe("evaluateProtectiveExit", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 100);
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "flat",
       price: 100,
@@ -210,6 +217,7 @@ describe("evaluateProtectiveExit", () => {
     });
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "hold",
       price: 95,
@@ -224,6 +232,40 @@ describe("evaluateProtectiveExit", () => {
     assert.ok(cmd);
     assert.equal(cmd.intent, "close-long");
     assert.match(cmd.reason, /ATR stop/);
+  });
+
+  it("uses the position hard stop instead of the live ATR distance", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 100,
+      size: 1,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 98,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "HOLD",
+      reason: "hold",
+      price: 97,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      meta: { atr: 2, barLow: 97, barHigh: 101 },
+    };
+    const cmd = evaluateProtectiveExit(
+      signal,
+      portfolio.getSnapshot(97),
+      riskParams({ atrStopMult: 50, atrTrailMult: 50 }),
+    );
+    assert.ok(cmd);
+    assert.equal(cmd.intent, "close-long");
+    assert.match(cmd.reason, /hard stop hit \(98/);
   });
 
   it("still stops on a bar-close wick when the close is the high", () => {
@@ -241,6 +283,7 @@ describe("evaluateProtectiveExit", () => {
     });
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "hold",
       price: 123.3333,
@@ -272,6 +315,7 @@ describe("evaluateProtectiveExit", () => {
     });
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "hold",
       price: 123.3333,
@@ -302,6 +346,7 @@ describe("evaluateProtectiveExit", () => {
     });
     const signal: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "hold",
       price: 115,
@@ -319,9 +364,52 @@ describe("evaluateProtectiveExit", () => {
   });
 });
 
+describe("opening command", () => {
+  it("copies the signal and its hard stop when the deposit is within the cap", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "cross",
+      price: 100,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: 99.5,
+    };
+    const risk = new GenericRiskManager(riskParams({ cooldownBars: 0 }));
+    const result = risk.check(signal, portfolio.getSnapshot(100), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-long");
+      assert.equal(result.command.signal?.strategyId, "bollinger");
+      assert.equal(result.command.slPrice, 99.5);
+    }
+  });
+
+  it("blocks a BUY whose cash would lose more than MAX_RISK_PERCENT at the stop", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "cross",
+      price: 100,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: 92,
+    };
+    const risk = new GenericRiskManager(riskParams({ cooldownBars: 0 }));
+    const result = risk.check(signal, portfolio.getSnapshot(100), []);
+    assert.equal(result.kind, "risk");
+    if (result.kind === "risk") {
+      assert.match(result.risk.reason, /exceeds max/);
+    }
+  });
+});
+
 describe("HighRiskManager", () => {
   const buy: Signal = {
     pair: "SOL/USDC",
+    strategyId: "bollinger",
     side: "BUY",
     reason: "cross",
     price: 100,
@@ -329,6 +417,7 @@ describe("HighRiskManager", () => {
   };
   const sell: Signal = {
     pair: "SOL/USDC",
+    strategyId: "bollinger",
     side: "SELL",
     reason: "exit",
     price: 110,
@@ -382,6 +471,7 @@ describe("HighRiskManager", () => {
     });
     const hold: Signal = {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side: "HOLD",
       reason: "hold",
       price: 95,
@@ -408,6 +498,8 @@ describe("SOL reserve top-up", () => {
         side,
         size: long ? 1 : 0,
         entryPrice: long ? 100 : 0,
+        strategyId: long ? "bollinger" : "",
+        slPrice: 0,
         ...(long ? { openedAt: new Date("2026-01-01T00:00:00.000Z") } : {}),
       },
       realizedPnl: 0,
@@ -422,6 +514,7 @@ describe("SOL reserve top-up", () => {
   function signal(side: "BUY" | "HOLD"): Signal {
     return {
       pair: "SOL/USDC",
+      strategyId: "bollinger",
       side,
       reason: side === "BUY" ? "cross" : "hold",
       price: 100,

@@ -23,7 +23,7 @@ function bar(time: number, close: number, range = 0.3): Candle {
 function flatSnapshot(entryPrice = 0): PortfolioSnapshot {
   return {
     cashUsdc: 100,
-    position: { pair: "SOL/USDC", side: "flat", size: 0, entryPrice },
+    position: { pair: "SOL/USDC", side: "flat", size: 0, entryPrice, strategyId: "", slPrice: 0 },
     realizedPnl: 0,
     equity: 100,
     trades: [],
@@ -36,7 +36,14 @@ function flatSnapshot(entryPrice = 0): PortfolioSnapshot {
 function longSnapshot(entryPrice: number): PortfolioSnapshot {
   return {
     cashUsdc: 0,
-    position: { pair: "SOL/USDC", side: "long", size: 1, entryPrice },
+    position: {
+      pair: "SOL/USDC",
+      side: "long",
+      size: 1,
+      entryPrice,
+      strategyId: "grid",
+      slPrice: 0,
+    },
     realizedPnl: 0,
     equity: entryPrice,
     trades: [],
@@ -741,6 +748,8 @@ describe("gridParamsFor", () => {
     assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrTrailMult, 8);
     assert.equal(new GridStrategy("flat", "low").getRiskParams().atrTrailMult, 8);
     assert.equal(new GridStrategy("flat", "low").getRiskParams().atrStopMult, 1.5);
+    assert.equal(new GridStrategy("flat", "low").hardStopLoss("long", 100, 4), 94);
+    assert.equal(new GridStrategy("flat", "low").hardStopLoss("short", 100, 4), 106);
     assert.equal(new GridStrategy("bullish", "low").getRiskParams().atrStopMult, 3);
     assert.equal(new GridStrategy("bearish", "high").getRiskParams().atrStopMult, 1.5);
     assert.equal(new GridStrategy("flat", "low").getRiskParams().cooldownBars, 8);

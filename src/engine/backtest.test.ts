@@ -17,6 +17,7 @@ import type {
   Order,
   RiskManager,
   RiskParams,
+  Signal,
   SignalSide,
   Strategy,
   StrategyManager,
@@ -109,7 +110,11 @@ function managerFor(
   };
 }
 
-function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }): Strategy {
+function scriptedStrategy(opts: {
+  buyIndex: number;
+  risk?: Partial<RiskParams>;
+  withStop?: boolean;
+}): Strategy {
   const risk: RiskParams = {
     timeframe: "15m",
     atrStopMult: 100,
@@ -127,14 +132,19 @@ function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
       const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";
-      return {
+      const signal: Signal = {
         pair,
         side,
         reason: side === "BUY" ? "scripted buy" : "hold",
         price,
         at,
+        strategyId: "bollinger",
         meta: { atr: 1, barLow: last.low, barHigh: last.high },
       };
+      if (opts.withStop && side === "BUY") {
+        signal.slPrice = price - risk.atrStopMult;
+      }
+      return signal;
     },
     buildChartSvg: () => "<svg></svg>",
   };
@@ -321,7 +331,8 @@ describe("runBacktest", () => {
 
     const strategy = scriptedStrategy({
       buyIndex: 20,
-      risk: { atrStopMult: 1.5, atrTrailMult: 50 },
+      withStop: true,
+      risk: { atrStopMult: 0.5, atrTrailMult: 50 },
     });
 
     const [result] = await runBacktest({
@@ -331,9 +342,11 @@ describe("runBacktest", () => {
     });
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
-    const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
+    const stopSell = result.trades.find(
+      (t) => t.side === "SELL" && t.reason?.includes("hard stop"),
+    );
     assert.ok(stopSell);
-    assert.match(stopSell.reason ?? "", /ATR stop/);
+    assert.match(stopSell.reason ?? "", /hard stop hit/);
   });
 
   it("keeps flat equity when indicators never fire", async () => {
@@ -429,7 +442,14 @@ describe("runBacktest", () => {
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });
-        return { pair, side: "HOLD", reason: "record", price, at };
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "record",
+          price,
+          at,
+        };
       },
       buildChartSvg: () => "<svg></svg>",
     };
@@ -497,6 +517,7 @@ describe("runBacktest", () => {
           last.time === wickBar.time && price === last.low && last.low < last.open ? "BUY" : "HOLD";
         return {
           pair,
+          strategyId: "bollinger",
           side,
           reason: side === "BUY" ? "wick" : "hold",
           price,
@@ -553,7 +574,14 @@ describe("runBacktest", () => {
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });
-        return { pair, side: "HOLD", reason: "record", price, at };
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "record",
+          price,
+          at,
+        };
       },
       buildChartSvg: () => "<svg></svg>",
     };

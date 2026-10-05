@@ -5,6 +5,8 @@ export interface PersistedLivePosition {
   size: number;
   entryPrice: number;
   openedAt?: string;
+  strategyId?: string;
+  slPrice?: number;
 }
 
 /** Serializable live trade (dates as ISO strings). */

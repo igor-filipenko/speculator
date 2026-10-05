@@ -456,6 +456,8 @@ describe("DonchianStrategy", () => {
     const risk = strategy.getRiskParams();
     assert.equal(risk.timeframe, "15m");
     assert.equal(risk.atrStopMult, 3);
+    assert.equal(strategy.hardStopLoss("long", 100, 4), 88);
+    assert.equal(strategy.hardStopLoss("short", 100, 4), 112);
     assert.equal(risk.atrTrailMult, 3);
     assert.equal(risk.cooldownBars, 8);
     assert.equal(risk.minHoldBars, 0);

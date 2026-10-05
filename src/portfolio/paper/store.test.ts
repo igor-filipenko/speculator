@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
-import { resetSpeculatorDbCache, setBotId } from "../../db/db.js";
+import { query, resetSpeculatorDbCache, setBotId } from "../../db/db.js";
 import { randomUUID } from "node:crypto";
 import { useTestDb } from "../../db/test-db.js";
 
@@ -43,6 +43,54 @@ describe("paper store", () => {
 
     const restored = PaperPortfolio.fromPersisted(persisted);
     assert.deepEqual(restored.toPersisted(), portfolio.toPersisted());
+  });
+
+  it("keeps the open position strategy id and hard stop", async () => {
+    const portfolio = new PaperPortfolio("JUP/USDC", 1000);
+    const trade = portfolio.applyOrderSync({
+      pair: "JUP/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "test buy",
+      price: 1,
+      size: 10,
+      at: new Date("2026-07-31T12:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 0.9,
+    });
+    assert.ok(trade);
+    await savePaperState(new Map([["JUP/USDC", portfolio]]));
+
+    const loaded = await loadPaperState();
+    const position = loaded?.portfolios["JUP/USDC"]?.position;
+    assert.ok(position);
+    assert.equal(position.side, "long");
+    assert.equal(position.strategyId, "bollinger");
+    assert.equal(position.slPrice, 0.9);
+    const stored = await query<{ strategy_data: unknown }>(
+      `SELECT strategy_data FROM bot.positions WHERE pair = $1`,
+      ["JUP/USDC"],
+    );
+    assert.deepEqual(stored[0]?.strategy_data, {});
+    assert.equal(position.entryPrice, 1);
+
+    portfolio.applyOrderSync({
+      pair: "JUP/USDC",
+      type: "market",
+      intent: "close-long",
+      reason: "test sell",
+      price: 1.1,
+      size: 10,
+      at: new Date("2026-07-31T13:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    await savePaperState(new Map([["JUP/USDC", portfolio]]));
+    const closed = await loadPaperState();
+    assert.equal(closed?.portfolios["JUP/USDC"]?.position.side, "flat");
+    assert.equal(closed?.portfolios["JUP/USDC"]?.position.strategyId, undefined);
   });
 
   it("upserting one pair does not erase another", async () => {

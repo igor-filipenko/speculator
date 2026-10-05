@@ -186,7 +186,7 @@ export interface BollingerInput {
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
  */
-export function evaluateBollinger(input: BollingerInput): Signal {
+export function evaluateBollinger(input: BollingerInput): Omit<Signal, "strategyId"> {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
   const forming = candles[candles.length - 1];
@@ -462,6 +462,12 @@ export class BollingerStrategy implements Strategy {
     return this.risk;
   }
 
+  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
+  hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
+    const distance = this.risk.atrStopMult * atr;
+    return side === "long" ? entryPrice - distance : entryPrice + distance;
+  }
+
   getRequiredCandles(): RequiredCandles {
     const { timeframe, period, atrPeriod, adxPeriod, rsiPeriod, workTrendEmaSlow } = this.params;
     const warm = Math.max(period, atrPeriod, adxPeriod * 2, rsiPeriod, workTrendEmaSlow) + 5;
@@ -485,23 +491,30 @@ export class BollingerStrategy implements Strategy {
       (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
         ? position
         : undefined;
-    return evaluateBollinger({
-      pair,
-      candles,
-      strategy: this.params,
-      price,
-      at,
-      trend: market.trend,
-      volatility: market.volatility,
-      ...(perpsFees !== undefined ? { perpsFees } : {}),
-      ...(positioned?.side === "long" || positioned?.side === "short"
-        ? {
-            entryPrice: positioned.entryPrice,
-            positionSide: positioned.side,
-            ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
-          }
-        : {}),
-    });
+    return withEntryStop(
+      {
+        ...evaluateBollinger({
+          pair,
+          candles,
+          strategy: this.params,
+          price,
+          at,
+          trend: market.trend,
+          volatility: market.volatility,
+          ...(perpsFees !== undefined ? { perpsFees } : {}),
+          ...(positioned?.side === "long" || positioned?.side === "short"
+            ? {
+                entryPrice: positioned.entryPrice,
+                positionSide: positioned.side,
+                ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
+              }
+            : {}),
+        }),
+        strategyId: this.getId(),
+      },
+      (side, entryPrice, atr) => this.hardStopLoss(side, entryPrice, atr),
+      positioned?.side === "long" || positioned?.side === "short" ? positioned.side : undefined,
+    );
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {
@@ -563,4 +576,26 @@ function fmt(n: number): string {
 
 function pct(n: number): string {
   return `${(n * 100).toFixed(2)}%`;
+}
+
+/** Hard stop on a flat BUY (long) or flat SELL (short). Exits keep the open stop. */
+function withEntryStop(
+  signal: Signal,
+  stop: (side: "long" | "short", entryPrice: number, atr: number) => number,
+  positionSide?: "long" | "short",
+): Signal {
+  if (positionSide === "long" || positionSide === "short") {
+    return signal;
+  }
+  const atrNow = signal.meta?.atr;
+  if (atrNow == null || !(atrNow > 0) || !(signal.price > 0)) {
+    return signal;
+  }
+  if (signal.side === "BUY") {
+    return { ...signal, slPrice: stop("long", signal.price, atrNow) };
+  }
+  if (signal.side === "SELL") {
+    return { ...signal, slPrice: stop("short", signal.price, atrNow) };
+  }
+  return signal;
 }

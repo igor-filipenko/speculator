@@ -49,6 +49,46 @@ function asCommand(command: Command): RequiredCommand {
   return { kind: "command", command };
 }
 
+/** Max loss at the hard stop, as a percent of equity. */
+export const MAX_RISK_PERCENT = 1;
+
+/** Attach the signal, and copy its hard stop onto an opening command. */
+function positionCommand(signal: Signal, command: Command, opening = false): Command {
+  const next: Command = { ...command, signal };
+  if (opening && signal.slPrice !== undefined) {
+    next.slPrice = signal.slPrice;
+  }
+  return next;
+}
+
+/**
+ * Quote notional that loses `MAX_RISK_PERCENT` of equity if price trades from
+ * `price` to `slPrice`. Null when the stop distance is missing.
+ */
+function maxDepositUsdc(equity: number, price: number, slPrice: number): number | null {
+  const distance = Math.abs(price - slPrice);
+  if (!(equity > 0) || !(price > 0) || !(distance > 0)) {
+    return null;
+  }
+  return ((equity * MAX_RISK_PERCENT) / 100) * (price / distance);
+}
+
+/** Block an entry whose cash would lose more than {@link MAX_RISK_PERCENT} at the stop. */
+function depositBlock(signal: Signal, snapshot: PortfolioSnapshot): string | null {
+  const sl = signal.slPrice;
+  if (sl == null || !(sl > 0)) {
+    return null;
+  }
+  const maxDeposit = maxDepositUsdc(snapshot.equity, signal.price, sl);
+  if (maxDeposit == null) {
+    return "stop is at the entry price";
+  }
+  if (snapshot.cashUsdc > maxDeposit) {
+    return `deposit ${snapshot.cashUsdc.toFixed(2)} USDC exceeds max ${maxDeposit.toFixed(2)} (${MAX_RISK_PERCENT}% of equity at the stop)`;
+  }
+  return null;
+}
+
 function asProtectiveCommand(command: Command): ProtectiveCommand {
   return { kind: "protective-command", command };
 }
@@ -125,11 +165,55 @@ export function evaluateProtectiveExit(
   if (position.size <= 0 || position.entryPrice <= 0) {
     return null;
   }
+  const slExit = exitIfSlPriceReached(signal, snapshot);
+  if (slExit) {
+    return slExit;
+  }
   if (position.side === "long") {
     return longProtectiveExit(signal, snapshot, config, peak);
   }
   if (position.side === "short") {
     return shortProtectiveExit(signal, snapshot, config, trough);
+  }
+  return null;
+}
+
+/** Close when the bar trades through the stored hard stop. */
+function exitIfSlPriceReached(signal: Signal, snapshot: PortfolioSnapshot): Command | null {
+  const { position } = snapshot;
+  const sl = position.slPrice;
+  if (sl == null || !(sl > 0)) {
+    return null;
+  }
+  if (position.side === "long") {
+    const mark = signal.meta?.barLow ?? signal.price;
+    if (!(mark <= sl)) {
+      return null;
+    }
+    return {
+      pair: position.pair,
+      intent: "close-long",
+      orderType: "market",
+      reason: `hard stop hit (${sl.toFixed(4)})`,
+      at: signal.at,
+      priceHint: sl,
+      baseSize: position.size,
+    };
+  }
+  if (position.side === "short") {
+    const mark = signal.meta?.barHigh ?? signal.price;
+    if (!(mark >= sl)) {
+      return null;
+    }
+    return {
+      pair: position.pair,
+      intent: "close-short",
+      orderType: "market",
+      reason: `hard stop hit (${sl.toFixed(4)})`,
+      at: signal.at,
+      priceHint: sl,
+      baseSize: position.size,
+    };
   }
   return null;
 }
@@ -147,11 +231,12 @@ function longProtectiveExit(
     return null;
   }
 
+  const storedStop = position.slPrice != null && position.slPrice > 0;
   const stopPrice = position.entryPrice - config.atrStopMult * atrNow;
   const barHigh = signal.meta?.barHigh ?? signal.price;
   const peakClose = peak ?? Math.max(position.entryPrice, barHigh);
   const trailPrice = peakClose - config.atrTrailMult * atrNow;
-  const exitLevel = Math.max(stopPrice, trailPrice);
+  const exitLevel = storedStop ? trailPrice : Math.max(stopPrice, trailPrice);
 
   // Intra-bar high tick: the trail may have just ratcheted off this print.
   // An earlier low in the forming bar is not a fill of that new level.
@@ -166,7 +251,7 @@ function longProtectiveExit(
     return null;
   }
 
-  const hitStop = barLow <= stopPrice;
+  const hitStop = !storedStop && barLow <= stopPrice;
   const hitTrail = barLow <= trailPrice;
   let reason: string;
   if (hitStop && hitTrail) {
@@ -201,11 +286,12 @@ function shortProtectiveExit(
     return null;
   }
 
+  const storedStop = position.slPrice != null && position.slPrice > 0;
   const stopPrice = position.entryPrice + config.atrStopMult * atrNow;
   const barLow = signal.meta?.barLow ?? signal.price;
   const troughClose = trough ?? Math.min(position.entryPrice, barLow);
   const trailPrice = troughClose + config.atrTrailMult * atrNow;
-  const exitLevel = Math.min(stopPrice, trailPrice);
+  const exitLevel = storedStop ? trailPrice : Math.min(stopPrice, trailPrice);
 
   // Intra-bar low tick: the trail may have just tightened off this print.
   // An earlier high in the forming bar is not a fill of that new level.
@@ -219,7 +305,7 @@ function shortProtectiveExit(
     return null;
   }
 
-  const hitStop = barHigh >= stopPrice;
+  const hitStop = !storedStop && barHigh >= stopPrice;
   const hitTrail = barHigh >= trailPrice;
   let reason: string;
   if (hitStop && hitTrail) {
@@ -310,15 +396,17 @@ function checkDirected(
   direction: RiskDirection,
 ): RiskOrCommand {
   if (snapshot.position.side === "flat" && snapshot.insufficientSol > 0) {
-    return asCommand({
-      pair: signal.pair,
-      intent: "buy-sol",
-      orderType: "market",
-      reason: "native SOL below reserve minimum",
-      at: signal.at,
-      priceHint: signal.price,
-      baseSize: snapshot.insufficientSol,
-    });
+    return asCommand(
+      positionCommand(signal, {
+        pair: signal.pair,
+        intent: "buy-sol",
+        orderType: "market",
+        reason: "native SOL below reserve minimum",
+        at: signal.at,
+        priceHint: signal.price,
+        baseSize: snapshot.insufficientSol,
+      }),
+    );
   }
 
   const interval = candleIntervalSeconds(config.timeframe);
@@ -326,7 +414,7 @@ function checkDirected(
   const trough = troughSinceOpen(snapshot, candles, signal, interval);
   const stopExit = evaluateProtectiveExit(signal, snapshot, config, peak, trough);
   if (stopExit) {
-    return asProtectiveCommand(stopExit);
+    return asProtectiveCommand(positionCommand(signal, stopExit));
   }
 
   const position = snapshot.position.side;
@@ -342,15 +430,17 @@ function checkDirected(
       if (belowMinHold(snapshot, signal.at, config)) {
         return blocked(signal, "min hold not reached");
       }
-      return asCommand({
-        pair: signal.pair,
-        intent: "close-short",
-        orderType: "market",
-        reason: signal.reason,
-        at: signal.at,
-        priceHint: signal.price,
-        baseSize: snapshot.position.size,
-      });
+      return asCommand(
+        positionCommand(signal, {
+          pair: signal.pair,
+          intent: "close-short",
+          orderType: "market",
+          reason: signal.reason,
+          at: signal.at,
+          priceHint: signal.price,
+          baseSize: snapshot.position.size,
+        }),
+      );
     }
     if (!direction.allowLong) {
       return blocked(signal, direction.blockReason ?? "long entries blocked");
@@ -361,15 +451,25 @@ function checkDirected(
     if (inCooldown(snapshot.trades, signal.at, config)) {
       return blocked(signal, "cooldown after last exit");
     }
-    return asCommand({
-      pair: signal.pair,
-      intent: "open-long",
-      orderType: "market",
-      reason: signal.reason,
-      at: signal.at,
-      priceHint: signal.price,
-      quoteBudgetUsdc: snapshot.cashUsdc,
-    });
+    const overDeposit = depositBlock(signal, snapshot);
+    if (overDeposit !== null) {
+      return blocked(signal, overDeposit);
+    }
+    return asCommand(
+      positionCommand(
+        signal,
+        {
+          pair: signal.pair,
+          intent: "open-long",
+          orderType: "market",
+          reason: signal.reason,
+          at: signal.at,
+          priceHint: signal.price,
+          quoteBudgetUsdc: snapshot.cashUsdc,
+        },
+        true,
+      ),
+    );
   }
 
   if (signal.side === "SELL") {
@@ -383,15 +483,17 @@ function checkDirected(
       if (belowMinHold(snapshot, signal.at, config)) {
         return blocked(signal, "min hold not reached");
       }
-      return asCommand({
-        pair: signal.pair,
-        intent: "close-long",
-        orderType: "market",
-        reason: signal.reason,
-        at: signal.at,
-        priceHint: signal.price,
-        baseSize: snapshot.position.size,
-      });
+      return asCommand(
+        positionCommand(signal, {
+          pair: signal.pair,
+          intent: "close-long",
+          orderType: "market",
+          reason: signal.reason,
+          at: signal.at,
+          priceHint: signal.price,
+          baseSize: snapshot.position.size,
+        }),
+      );
     }
     if (!direction.allowShort) {
       return blocked(signal, direction.blockReason ?? "short entries blocked");
@@ -402,15 +504,25 @@ function checkDirected(
     if (inCooldown(snapshot.trades, signal.at, config)) {
       return blocked(signal, "cooldown after last exit");
     }
-    return asCommand({
-      pair: signal.pair,
-      intent: "open-short",
-      orderType: "market",
-      reason: signal.reason,
-      at: signal.at,
-      priceHint: signal.price,
-      quoteBudgetUsdc: snapshot.cashUsdc,
-    });
+    const overDeposit = depositBlock(signal, snapshot);
+    if (overDeposit !== null) {
+      return blocked(signal, overDeposit);
+    }
+    return asCommand(
+      positionCommand(
+        signal,
+        {
+          pair: signal.pair,
+          intent: "open-short",
+          orderType: "market",
+          reason: signal.reason,
+          at: signal.at,
+          priceHint: signal.price,
+          quoteBudgetUsdc: snapshot.cashUsdc,
+        },
+        true,
+      ),
+    );
   }
 
   return noCommand();

@@ -120,11 +120,11 @@ export interface GridSignalInput {
   market?: MarketIndicators;
 }
 
-export function evaluateGrid(input: GridSignalInput): Signal {
+export function evaluateGrid(input: GridSignalInput): Omit<Signal, "strategyId"> {
   const { pair, candles, price, at, params, snapshot, market } = input;
 
-  const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Signal => {
-    const signal: Signal = { pair, side: "HOLD", reason, price, at };
+  const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Omit<Signal, "strategyId"> => {
+    const signal: Omit<Signal, "strategyId"> = { pair, side: "HOLD", reason, price, at };
     if (meta !== undefined) {
       signal.meta = meta;
     }
@@ -403,6 +403,12 @@ export class GridStrategy implements Strategy {
     return this.risk;
   }
 
+  /** Long: entry − atrStopMult × ATR. Short: entry + atrStopMult × ATR. */
+  hardStopLoss(side: "long" | "short", entryPrice: number, atr: number): number {
+    const distance = this.risk.atrStopMult * atr;
+    return side === "long" ? entryPrice - distance : entryPrice + distance;
+  }
+
   getRequiredCandles(): RequiredCandles {
     const warmup = Math.max(
       this.params.reanchorBars,
@@ -420,10 +426,44 @@ export class GridStrategy implements Strategy {
     at: Date,
     snapshot?: PortfolioSnapshot,
   ): Signal {
-    return evaluateGrid({ pair, candles, price, at, params: this.params, snapshot, market });
+    const position = snapshot?.position;
+    const positionSide =
+      (position?.side === "long" || position?.side === "short") && position.entryPrice > 0
+        ? position.side
+        : undefined;
+    return withEntryStop(
+      {
+        ...evaluateGrid({ pair, candles, price, at, params: this.params, snapshot, market }),
+        strategyId: this.getId(),
+      },
+      (side, entryPrice, atr) => this.hardStopLoss(side, entryPrice, atr),
+      positionSide,
+    );
   }
 
   buildChartSvg(pair: string, candles: Candle[]): string {
     return buildGridSvg({ pair, candles, strategy: this.params });
   }
+}
+
+/** Hard stop on a flat BUY (long) or flat SELL (short). Exits keep the open stop. */
+function withEntryStop(
+  signal: Signal,
+  stop: (side: "long" | "short", entryPrice: number, atr: number) => number,
+  positionSide?: "long" | "short",
+): Signal {
+  if (positionSide === "long" || positionSide === "short") {
+    return signal;
+  }
+  const atrNow = signal.meta?.atr;
+  if (atrNow == null || !(atrNow > 0) || !(signal.price > 0)) {
+    return signal;
+  }
+  if (signal.side === "BUY") {
+    return { ...signal, slPrice: stop("long", signal.price, atrNow) };
+  }
+  if (signal.side === "SELL") {
+    return { ...signal, slPrice: stop("short", signal.price, atrNow) };
+  }
+  return signal;
 }

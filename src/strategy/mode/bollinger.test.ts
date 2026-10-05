@@ -484,6 +484,8 @@ describe("bollingerParamsFor", () => {
     assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrStopMult, 3);
     assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrTrailMult, 3.5);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrStopMult, 2.5);
+    assert.equal(new BollingerStrategy("flat", "low").hardStopLoss("long", 100, 4), 90);
+    assert.equal(new BollingerStrategy("flat", "low").hardStopLoss("short", 100, 4), 110);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrTrailMult, 3);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().cooldownBars, 2);
     assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 0);

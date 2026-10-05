@@ -85,6 +85,7 @@ export class EmulatedExchange implements Exchange {
         reason: command.reason,
         priorityFeeUsdc,
         fillCosts,
+        ...orderPosition(command),
       });
     }
 
@@ -103,6 +104,7 @@ export class EmulatedExchange implements Exchange {
       reason: command.reason,
       priorityFeeUsdc,
       fillCosts,
+      ...orderPosition(command),
     });
   }
 }
@@ -110,4 +112,17 @@ export class EmulatedExchange implements Exchange {
 /** Slippage model still prices a buy and a sell differently. */
 function fillSide(intent: OrderIntent): "BUY" | "SELL" {
   return intent === "open-long" || intent === "close-short" ? "BUY" : "SELL";
+}
+
+/** `strategyId` and `slPrice` carried from a command onto its fill. */
+function orderPosition(command: Command): Pick<Order, "strategyId" | "slPrice"> {
+  const fields: Pick<Order, "strategyId" | "slPrice"> = {};
+  const strategyId = command.signal?.strategyId;
+  if (strategyId !== undefined) {
+    fields.strategyId = strategyId;
+  }
+  if (command.slPrice !== undefined) {
+    fields.slPrice = command.slPrice;
+  }
+  return fields;
 }

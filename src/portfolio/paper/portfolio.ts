@@ -47,6 +47,8 @@ export class PaperPortfolio implements Portfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
   }
 
@@ -84,6 +86,8 @@ export class PaperPortfolio implements Portfolio {
       side: data.position.side,
       size: data.position.size,
       entryPrice: data.position.entryPrice,
+      strategyId: data.position.strategyId ?? "",
+      slPrice: data.position.slPrice ?? 0,
     };
     if (data.position.openedAt !== undefined) {
       position.openedAt = new Date(data.position.openedAt);
@@ -118,6 +122,12 @@ export class PaperPortfolio implements Portfolio {
     };
     if (this.position.openedAt !== undefined) {
       position.openedAt = this.position.openedAt.toISOString();
+    }
+    if (this.position.strategyId !== undefined) {
+      position.strategyId = this.position.strategyId;
+    }
+    if (this.position.slPrice !== undefined) {
+      position.slPrice = this.position.slPrice;
     }
 
     const trades: PersistedTrade[] = this.trades.map((t) => {
@@ -215,13 +225,7 @@ export class PaperPortfolio implements Portfolio {
       reason: order.reason,
     };
 
-    this.position = {
-      pair: order.pair,
-      side: "long",
-      size: order.size,
-      entryPrice: order.price,
-      openedAt: order.at,
-    };
+    this.position = openedPosition(order.pair, "long", order);
     // All-in: exchange already sized from cash − priority fee.
     this.cashUsdc = 0;
     this.trades.push(trade);
@@ -257,6 +261,8 @@ export class PaperPortfolio implements Portfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
     this.trades.push(trade);
     return trade;
@@ -280,13 +286,7 @@ export class PaperPortfolio implements Portfolio {
       reason: order.reason,
     };
 
-    this.position = {
-      pair: order.pair,
-      side: "short",
-      size: order.size,
-      entryPrice: order.price,
-      openedAt: order.at,
-    };
+    this.position = openedPosition(order.pair, "short", order);
     this.trades.push(trade);
     return trade;
   }
@@ -323,10 +323,25 @@ export class PaperPortfolio implements Portfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
     this.trades.push(trade);
     return trade;
   }
+}
+
+function openedPosition(pair: string, side: "long" | "short", order: Order): Position {
+  const position: Position = {
+    pair,
+    side,
+    size: order.size,
+    entryPrice: order.price,
+    openedAt: order.at,
+    strategyId: order.strategyId ?? "",
+    slPrice: order.slPrice ?? 0,
+  };
+  return position;
 }
 
 function markEquity(cashUsdc: number, position: Position, markPrice: number): number {

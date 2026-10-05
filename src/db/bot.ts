@@ -1,7 +1,11 @@
 import type { PoolClient } from "pg";
 import type { PersistedLivePortfolio, PersistedLiveTrade } from "../portfolio/live/store.js";
-import type { PersistedPortfolio, PersistedTrade } from "../portfolio/paper/store.js";
-import { getBotId, query, queryWith, withTransaction } from "./db.js";
+import type {
+  PersistedPortfolio,
+  PersistedPosition,
+  PersistedTrade,
+} from "../portfolio/paper/store.js";
+import { getBotId, query, queryWith, withTransaction, type SqlValue } from "./db.js";
 
 export type BotMode = "paper" | "live";
 
@@ -67,6 +71,26 @@ function rowToPosition(row: Record<string, unknown>): PersistedLivePortfolio["po
   return position;
 }
 
+function overlayPosition(
+  position: PersistedPosition,
+  row: Record<string, unknown>,
+): PersistedPosition {
+  const side = row["side"] === "long" || row["side"] === "short" ? row["side"] : position.side;
+  const next: PersistedPosition = {
+    pair: position.pair,
+    side,
+    size: Number(row["size"]),
+    entryPrice: Number(row["entry_price"]),
+    strategyId: asString(row["strategy_id"], "strategy_id"),
+    slPrice: Number(row["sl_price"]),
+  };
+  const openedAt = timestampToIso(row["opened_at"]);
+  if (openedAt !== undefined) {
+    next.openedAt = openedAt;
+  }
+  return next;
+}
+
 export async function portfolioCount(botId: string, mode: BotMode): Promise<number> {
   const rows = await query<{ cnt: string | number | bigint }>(
     `
@@ -108,6 +132,19 @@ export async function loadAllPortfolios(
     [botId, mode],
   );
 
+  const positionRows = await query<Record<string, unknown>>(
+    `
+    SELECT pair, strategy_id, side, size, entry_price, sl_price, opened_at
+    FROM bot.positions
+    WHERE bot_id = $1 AND mode = $2
+    `,
+    [botId, mode],
+  );
+  const positionByPair = new Map<string, Record<string, unknown>>();
+  for (const row of positionRows) {
+    positionByPair.set(asString(row["pair"], "pair"), row);
+  }
+
   const tradesByPair = new Map<string, PersistedLiveTrade[]>();
   for (const row of tradeRows) {
     const trade = rowToTrade(row);
@@ -119,10 +156,11 @@ export async function loadAllPortfolios(
   const portfolios: Record<string, PersistedLivePortfolio> = {};
   for (const row of portfolioRows) {
     const pair = asString(row["pair"], "pair");
+    const stored = positionByPair.get(pair);
     portfolios[pair] = {
       cashUsdc: Number(row["cash_usdc"]),
       realizedPnl: Number(row["realized_pnl"]),
-      position: rowToPosition(row),
+      position: stored != null ? overlayPosition(rowToPosition(row), stored) : rowToPosition(row),
       trades: tradesByPair.get(pair) ?? [],
     };
   }
@@ -145,6 +183,29 @@ const UPSERT_PORTFOLIO_SQL = `
     entry_price = EXCLUDED.entry_price,
     opened_at = EXCLUDED.opened_at,
     updated_at = now()
+`;
+
+const UPSERT_POSITION_SQL = `
+  INSERT INTO bot.positions (
+    bot_id, mode, pair, strategy_id, strategy_data, side, size, entry_price, sl_price, opened_at, updated_at
+  )
+  VALUES (
+    $1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, $8, $9::timestamptz, now()
+  )
+  ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
+    strategy_id = EXCLUDED.strategy_id,
+    strategy_data = '{}'::jsonb,
+    side = EXCLUDED.side,
+    size = EXCLUDED.size,
+    entry_price = EXCLUDED.entry_price,
+    sl_price = EXCLUDED.sl_price,
+    opened_at = EXCLUDED.opened_at,
+    updated_at = now()
+`;
+
+const DELETE_POSITION_SQL = `
+  DELETE FROM bot.positions
+  WHERE bot_id = $1 AND mode = $2 AND pair = $3
 `;
 
 const INSERT_TRADE_SQL = `
@@ -170,6 +231,46 @@ function portfolioValues(botId: string, mode: BotMode, portfolio: PersistedLiveP
   ] as const;
 }
 
+type RunSql = (text: string, values: SqlValue[]) => Promise<unknown>;
+
+function positionValues(
+  botId: string,
+  mode: BotMode,
+  position: PersistedPosition,
+): SqlValue[] | null {
+  if (position.side !== "long" && position.side !== "short") {
+    return null;
+  }
+  if (!position.strategyId || position.slPrice == null) {
+    return null;
+  }
+  return [
+    botId,
+    mode,
+    position.pair,
+    position.strategyId,
+    position.side,
+    position.size,
+    position.entryPrice,
+    position.slPrice,
+    position.openedAt ?? null,
+  ];
+}
+
+async function syncPosition(
+  run: RunSql,
+  botId: string,
+  mode: BotMode,
+  position: PersistedPosition,
+): Promise<void> {
+  const values = positionValues(botId, mode, position);
+  if (values == null) {
+    await run(DELETE_POSITION_SQL, [botId, mode, position.pair]);
+    return;
+  }
+  await run(UPSERT_POSITION_SQL, values);
+}
+
 function tradeValues(botId: string, mode: BotMode, trade: PersistedLiveTrade) {
   return [
     botId,
@@ -191,6 +292,7 @@ export async function upsertPortfolio(
   portfolio: PersistedLivePortfolio,
 ): Promise<void> {
   await query(UPSERT_PORTFOLIO_SQL, [...portfolioValues(botId, mode, portfolio)]);
+  await syncPosition((text, values) => query(text, values), botId, mode, portfolio.position);
 }
 
 export async function insertTrade(
@@ -209,6 +311,12 @@ async function writePortfolio(
 ): Promise<void> {
   const pair = portfolio.position.pair;
   await queryWith(client, UPSERT_PORTFOLIO_SQL, [...portfolioValues(botId, mode, portfolio)]);
+  await syncPosition(
+    (text, values) => queryWith(client, text, values),
+    botId,
+    mode,
+    portfolio.position,
+  );
   await queryWith(client, `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2 AND pair = $3`, [
     botId,
     mode,
@@ -236,6 +344,10 @@ export async function replaceBotLedgers(
 ): Promise<void> {
   await withTransaction(async (client) => {
     await queryWith(client, `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2`, [
+      botId,
+      mode,
+    ]);
+    await queryWith(client, `DELETE FROM bot.positions WHERE bot_id = $1 AND mode = $2`, [
       botId,
       mode,
     ]);

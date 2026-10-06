@@ -96,10 +96,11 @@ describe("opening command", () => {
       assert.equal(result.command.intent, "open-long");
       assert.equal(result.command.signal?.strategyId, "bollinger");
       assert.equal(result.command.slPrice, 99.5);
+      assert.equal(result.command.quoteBudgetUsdc, 1000);
     }
   });
 
-  it("blocks a BUY whose cash would lose more than MAX_RISK_PERCENT at the stop", () => {
+  it("caps a BUY budget so a stop-out loses at most MAX_RISK_PERCENT of equity", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const signal: Signal = {
       pair: "SOL/USDC",
@@ -112,9 +113,11 @@ describe("opening command", () => {
     };
     const risk = new GenericRiskManager();
     const result = risk.check(signal, portfolio.getSnapshot(100), []);
-    assert.equal(result.kind, "risk");
-    if (result.kind === "risk") {
-      assert.match(result.risk.reason, /exceeds max/);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-long");
+      // 2% of 1000 equity is 20 USDC; an 8% stop allows 250 USDC notional.
+      assert.equal(result.command.quoteBudgetUsdc, 250);
     }
   });
 });

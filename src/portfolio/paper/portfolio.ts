@@ -226,8 +226,8 @@ export class PaperPortfolio implements Portfolio {
     };
 
     this.position = openedPosition(order.pair, "long", order);
-    // All-in: exchange already sized from cash − priority fee.
-    this.cashUsdc = 0;
+    const spent = order.size * order.price + order.priorityFeeUsdc;
+    this.cashUsdc = Math.max(0, this.cashUsdc - spent);
     this.trades.push(trade);
     return trade;
   }
@@ -254,7 +254,7 @@ export class PaperPortfolio implements Portfolio {
       reason: order.reason,
     };
 
-    this.cashUsdc = Math.max(0, proceeds);
+    this.cashUsdc = Math.max(0, this.cashUsdc + proceeds);
     this.realizedPnl += pnl;
     this.position = {
       pair: order.pair,

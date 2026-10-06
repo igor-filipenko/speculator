@@ -13,8 +13,8 @@ import type {
 
 /**
  * One position per pair (long or short). Opens copy the strategy hard stop and
- * refuse a deposit that would lose more than {@link MAX_RISK_PERCENT} of equity
- * at that stop. An open position closes when price trades through `slPrice`.
+ * size the USDC budget so a stop-out loses at most {@link MAX_RISK_PERCENT} of
+ * equity. An open position closes when price trades through `slPrice`.
  */
 export class GenericRiskManager implements RiskManager {
   getDisplayName(): string {
@@ -32,6 +32,9 @@ function asCommand(command: Command): RequiredCommand {
 
 /** Max loss at the hard stop, as a percent of equity. */
 export const MAX_RISK_PERCENT = 2;
+
+/** Minimum USDC to spend on an opening order. */
+export const MIN_OPEN_DEPOSIT_USDC = 10;
 
 /** Attach the signal, and copy its hard stop onto an opening command. */
 function positionCommand(signal: Signal, command: Command, opening = false): Command {
@@ -54,20 +57,24 @@ function maxDepositUsdc(equity: number, price: number, slPrice: number): number 
   return ((equity * MAX_RISK_PERCENT) / 100) * (price / distance);
 }
 
-/** Block an entry whose cash would lose more than {@link MAX_RISK_PERCENT} at the stop. */
-function depositBlock(signal: Signal, snapshot: PortfolioSnapshot): string | null {
+/**
+ * USDC to spend on an opening order. Caps cash so a stop-out loses at most
+ * {@link MAX_RISK_PERCENT} of equity. Returns a block reason when the stop
+ * distance cannot size a deposit.
+ */
+function openingQuoteBudget(
+  signal: Signal,
+  snapshot: PortfolioSnapshot,
+): { usdc: number } | { reason: string } {
   const sl = signal.slPrice;
   if (sl == null || !(sl > 0)) {
-    return null;
+    return { usdc: snapshot.cashUsdc };
   }
   const maxDeposit = maxDepositUsdc(snapshot.equity, signal.price, sl);
-  if (maxDeposit == null) {
-    return "stop is at the entry price";
+  if (maxDeposit == null || !(maxDeposit >= MIN_OPEN_DEPOSIT_USDC)) {
+    return { reason: "stop is at the entry price" };
   }
-  if (snapshot.cashUsdc > maxDeposit) {
-    return `deposit ${snapshot.cashUsdc.toFixed(2)} USDC exceeds max ${maxDeposit.toFixed(2)} (${MAX_RISK_PERCENT}% of equity at the stop)`;
-  }
-  return null;
+  return { usdc: Math.min(snapshot.cashUsdc, maxDeposit) };
 }
 
 function asProtectiveCommand(command: Command): ProtectiveCommand {
@@ -183,9 +190,9 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     if (snapshot.cashUsdc <= 0 || signal.price <= 0) {
       return blocked(signal, "no cash or invalid price");
     }
-    const overDeposit = depositBlock(signal, snapshot);
-    if (overDeposit !== null) {
-      return blocked(signal, overDeposit);
+    const budget = openingQuoteBudget(signal, snapshot);
+    if ("reason" in budget) {
+      return blocked(signal, budget.reason);
     }
     return asCommand(
       positionCommand(
@@ -197,7 +204,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
           reason: signal.reason,
           at: signal.at,
           priceHint: signal.price,
-          quoteBudgetUsdc: snapshot.cashUsdc,
+          quoteBudgetUsdc: budget.usdc,
         },
         true,
       ),
@@ -227,9 +234,9 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     if (snapshot.cashUsdc <= 0 || signal.price <= 0) {
       return blocked(signal, "no cash or invalid price");
     }
-    const overDeposit = depositBlock(signal, snapshot);
-    if (overDeposit !== null) {
-      return blocked(signal, overDeposit);
+    const budget = openingQuoteBudget(signal, snapshot);
+    if ("reason" in budget) {
+      return blocked(signal, budget.reason);
     }
     return asCommand(
       positionCommand(
@@ -241,7 +248,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
           reason: signal.reason,
           at: signal.at,
           priceHint: signal.price,
-          quoteBudgetUsdc: snapshot.cashUsdc,
+          quoteBudgetUsdc: budget.usdc,
         },
         true,
       ),

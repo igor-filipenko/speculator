@@ -17,6 +17,22 @@ function order(intent: OrderIntent, price: number, size: number): Order {
   };
 }
 
+describe("PaperPortfolio long", () => {
+  it("keeps unspent cash and adds close proceeds", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const opened = portfolio.applyOrderSync(order("open-long", 100, 2.5));
+    assert.ok(opened);
+    assert.equal(portfolio.getSnapshot(100).cashUsdc, 750);
+    assert.equal(portfolio.getSnapshot(100).equity, 1000);
+
+    const closed = portfolio.applyOrderSync(order("close-long", 110, 2.5));
+    assert.ok(closed);
+    assert.equal(closed.realizedPnl, 25);
+    assert.equal(portfolio.getSnapshot(110).cashUsdc, 1025);
+    assert.equal(portfolio.getSnapshot(110).equity, 1025);
+  });
+});
+
 describe("PaperPortfolio short", () => {
   it("keeps cash as collateral and realizes the cover", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);

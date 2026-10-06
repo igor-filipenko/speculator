@@ -149,6 +149,10 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.bbLower != null);
     assert.ok(signal.meta?.atr != null);
     assert.ok(signal.meta?.rsi != null);
+    const mid = signal.meta?.bbMid;
+    assert.ok(mid != null && mid > signal.price);
+    assert.deepEqual(signal.tpPrices, [mid]);
+    assert.equal(signal.minRewardRisk, 0.1);
   });
 
   it("does not pyramid when already long below mid", () => {
@@ -220,6 +224,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "SELL");
     assert.match(signal.reason, /Price .+ profitable price/);
+    assert.deepEqual(signal.tpPrices, []);
   });
 
   it("holds mid when flat (no long)", () => {
@@ -302,6 +307,10 @@ describe("evaluateBollinger filters", () => {
       perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
     });
     assert.equal(withFees.side, "SELL", withFees.reason);
+    const mid = withFees.meta?.bbMid;
+    assert.ok(mid != null && mid < withFees.price);
+    assert.deepEqual(withFees.tpPrices, [mid]);
+    assert.equal(withFees.minRewardRisk, 0.1);
 
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -471,6 +480,7 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
+    assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.1);
     assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
     assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
     assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);

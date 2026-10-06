@@ -56,6 +56,8 @@ export interface BollingerParams {
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
   rsiBuyMax: number;
+  /** Minimum reward per unit of stop risk. Mean-reversion targets sit close to the stop. */
+  minRewardRisk: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -121,6 +123,13 @@ export function bollingerStopPrice(
   return side === "long" ? barExtreme - distance : barExtreme + distance;
 }
 
+/** Middle-band take-profit. Empty when the mid is not beyond the fill. */
+export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: number): number[] {
+  if (!(price > 0) || !(bbMid > 0)) return [];
+  const beyond = side === "long" ? bbMid > price : bbMid < price;
+  return beyond ? [bbMid] : [];
+}
+
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(
   trend: Trend = "flat",
@@ -141,6 +150,7 @@ export function bollingerParamsFor(
     workTrendAdxFlatMax: 20,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
+    minRewardRisk: 0.1,
   };
 }
 
@@ -183,6 +193,7 @@ export interface BollingerInput {
  * Regime / ADX / RSI do not block exits.
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
+ * An opening signal sets `tpPrices` to the middle band.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -237,6 +248,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     price,
     at,
     meta,
+    tpPrices: [] as number[],
+    minRewardRisk: strategy.minRewardRisk,
   };
 
   if (
@@ -439,17 +452,13 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     return { ...base, side, reason };
   }
   const extreme = side === "BUY" ? lastBar.low : lastBar.high;
+  const positionSide = side === "BUY" ? "long" : "short";
   return {
     ...base,
     side,
     reason,
-    slPrice: bollingerStopPrice(
-      side === "BUY" ? "long" : "short",
-      extreme,
-      atrNow,
-      input.trend,
-      input.volatility,
-    ),
+    slPrice: bollingerStopPrice(positionSide, extreme, atrNow, input.trend, input.volatility),
+    tpPrices: bollingerTpPrices(positionSide, price, bbMid),
   };
 }
 

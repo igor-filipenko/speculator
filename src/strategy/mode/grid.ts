@@ -48,6 +48,8 @@ export interface GridParams {
    * reanchor). 0 = skip. Bullish keeps the ATR stop as the only hard cut.
    */
   failReclaimAtrMult: number;
+  /** Minimum reward per unit of stop risk (1:2). */
+  minRewardRisk: number;
 }
 
 /** HTF trend × 1h vol → grid spacing / ADX gate. High vol widens; flat stays ≥ stop so TP ≥ risk. */
@@ -88,6 +90,7 @@ export function gridParamsFor(trend: Trend, volatility: Volatility): GridParams 
     dipAtrMult: 1.5,
     maxDipAtrMult: 2,
     failReclaimAtrMult: 0.75,
+    minRewardRisk: 2,
   };
 }
 
@@ -105,7 +108,15 @@ export function evaluateGrid(input: GridSignalInput): Omit<Signal, "strategyId">
   const { pair, candles, price, at, params, snapshot, market } = input;
 
   const hold = (reason: string, meta?: NonNullable<Signal["meta"]>): Omit<Signal, "strategyId"> => {
-    const signal: Omit<Signal, "strategyId"> = { pair, side: "HOLD", reason, price, at };
+    const signal: Omit<Signal, "strategyId"> = {
+      pair,
+      side: "HOLD",
+      reason,
+      price,
+      at,
+      tpPrices: [],
+      minRewardRisk: params.minRewardRisk,
+    };
     if (meta !== undefined) {
       signal.meta = meta;
     }
@@ -161,6 +172,8 @@ export function evaluateGrid(input: GridSignalInput): Omit<Signal, "strategyId">
         price: hitIntraBar ? target : price,
         at,
         meta,
+        tpPrices: [],
+        minRewardRisk: params.minRewardRisk,
       };
     }
     if (params.failReclaimAtrMult > 0 && market?.trend !== "bullish") {
@@ -178,6 +191,8 @@ export function evaluateGrid(input: GridSignalInput): Omit<Signal, "strategyId">
           price,
           at,
           meta,
+          tpPrices: [],
+          minRewardRisk: params.minRewardRisk,
         };
       }
     }
@@ -253,6 +268,8 @@ export function evaluateGrid(input: GridSignalInput): Omit<Signal, "strategyId">
       price,
       at,
       meta,
+      tpPrices: [],
+      minRewardRisk: params.minRewardRisk,
     };
   }
 

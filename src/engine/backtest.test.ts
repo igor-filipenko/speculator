@@ -124,6 +124,8 @@ function scriptedStrategy(opts: {
         price,
         at,
         strategyId: "bollinger",
+        tpPrices: [],
+        minRewardRisk: 0.1,
         meta: { atr: 1, barLow: last.low, barHigh: last.high },
       };
       if (opts.withStop && side === "BUY") {
@@ -461,6 +463,8 @@ describe("runBacktest", () => {
           reason: "record",
           price,
           at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
         };
       },
       buildChartSvg: () => "<svg></svg>",
@@ -527,6 +531,8 @@ describe("runBacktest", () => {
           reason: side === "BUY" ? "wick" : "hold",
           price,
           at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
           meta: { atr: 1, barLow: last.low, barHigh: last.high },
         };
       },
@@ -579,6 +585,8 @@ describe("runBacktest", () => {
           reason: "record",
           price,
           at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
         };
       },
       buildChartSvg: () => "<svg></svg>",

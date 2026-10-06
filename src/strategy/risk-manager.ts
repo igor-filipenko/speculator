@@ -14,7 +14,9 @@ import type {
 /**
  * One position per pair (long or short). Opens copy the strategy hard stop and
  * size the USDC budget so a stop-out loses at most {@link MAX_RISK_PERCENT} of
- * equity. An open position closes when price trades through `slPrice`.
+ * equity. When the signal lists take-profit prices, the furthest target must
+ * pay at least {@link Signal.minRewardRisk}. An open position closes when
+ * price trades through `slPrice`.
  */
 export class GenericRiskManager implements RiskManager {
   getDisplayName(): string {
@@ -58,14 +60,47 @@ function maxDepositUsdc(equity: number, price: number, slPrice: number): number 
 }
 
 /**
+ * Distance from `price` to the furthest take-profit in the trade direction.
+ * Null when every listed price is on the stop side of the entry.
+ */
+function bestTpReward(signal: Signal): number | null {
+  let best = 0;
+  for (const tp of signal.tpPrices) {
+    if (!(tp > 0)) continue;
+    const reward = signal.side === "BUY" ? tp - signal.price : signal.price - tp;
+    if (reward > best) best = reward;
+  }
+  return best > 0 ? best : null;
+}
+
+/**
+ * Block when listed take-profits pay less than {@link Signal.minRewardRisk}
+ * against the hard stop. Signals with an empty ladder skip this gate.
+ */
+function rewardRiskReason(signal: Signal): string | null {
+  if (signal.tpPrices.length === 0) return null;
+  const sl = signal.slPrice;
+  if (sl == null || !(sl > 0) || !(signal.price > 0)) return null;
+  const risk = Math.abs(signal.price - sl);
+  if (!(risk > 0)) return null;
+  const reward = bestTpReward(signal);
+  if (reward == null || reward / risk < signal.minRewardRisk) {
+    return `reward:risk below 1:${signal.minRewardRisk}`;
+  }
+  return null;
+}
+
+/**
  * USDC to spend on an opening order. Caps cash so a stop-out loses at most
  * {@link MAX_RISK_PERCENT} of equity. Returns a block reason when the stop
- * distance cannot size a deposit.
+ * distance cannot size a deposit, or when take-profits fail {@link Signal.minRewardRisk}.
  */
 function openingQuoteBudget(
   signal: Signal,
   snapshot: PortfolioSnapshot,
 ): { usdc: number } | { reason: string } {
+  const rewardRisk = rewardRiskReason(signal);
+  if (rewardRisk != null) return { reason: rewardRisk };
   const sl = signal.slPrice;
   if (sl == null || !(sl > 0)) {
     return { usdc: snapshot.cashUsdc };

@@ -14,6 +14,8 @@ describe("evaluateProtectiveExit", () => {
       reason: "flat",
       price: 100,
       at: new Date(),
+      tpPrices: [],
+      minRewardRisk: 0.1,
       meta: { atr: 1, barLow: 99, barHigh: 101 },
     };
     const cmd = evaluateProtectiveExit(signal, portfolio.getSnapshot(100));
@@ -40,6 +42,8 @@ describe("evaluateProtectiveExit", () => {
       reason: "hold",
       price: 95,
       at: new Date("2026-01-01T01:00:00.000Z"),
+      tpPrices: [],
+      minRewardRisk: 0.1,
       meta: { atr: 2, barLow: 95, barHigh: 101 },
     };
     const cmd = evaluateProtectiveExit(signal, portfolio.getSnapshot(95));
@@ -68,6 +72,8 @@ describe("evaluateProtectiveExit", () => {
       reason: "hold",
       price: 97,
       at: new Date("2026-01-01T01:00:00.000Z"),
+      tpPrices: [],
+      minRewardRisk: 0.1,
       meta: { atr: 2, barLow: 97, barHigh: 101 },
     };
     const cmd = evaluateProtectiveExit(signal, portfolio.getSnapshot(97));
@@ -88,6 +94,8 @@ describe("opening command", () => {
       price: 100,
       at: new Date("2026-01-01T00:00:00.000Z"),
       slPrice: 99.5,
+      tpPrices: [],
+      minRewardRisk: 0.1,
     };
     const risk = new GenericRiskManager();
     const result = risk.check(signal, portfolio.getSnapshot(100), []);
@@ -110,6 +118,8 @@ describe("opening command", () => {
       price: 100,
       at: new Date("2026-01-01T00:00:00.000Z"),
       slPrice: 92,
+      tpPrices: [],
+      minRewardRisk: 0.1,
     };
     const risk = new GenericRiskManager();
     const result = risk.check(signal, portfolio.getSnapshot(100), []);
@@ -118,6 +128,95 @@ describe("opening command", () => {
       assert.equal(result.command.intent, "open-long");
       // 2% of 1000 equity is 20 USDC; an 8% stop allows 250 USDC notional.
       assert.equal(result.command.quoteBudgetUsdc, 250);
+    }
+  });
+
+  it("blocks an opening BUY when the furthest take-profit pays less than 1:2", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const price = 100;
+    const riskDistance = 4;
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "reclaim",
+      price,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: price - riskDistance,
+      tpPrices: [price + riskDistance * 1.5],
+      minRewardRisk: 2,
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
+    assert.equal(result.kind, "risk");
+    if (result.kind === "risk") {
+      assert.match(result.risk.reason, /reward:risk below 1:2/);
+    }
+  });
+
+  it("opens a BUY when the furthest take-profit pays 1:2", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const price = 100;
+    const riskDistance = 4;
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "reclaim",
+      price,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: price - riskDistance,
+      tpPrices: [price + riskDistance * 2],
+      minRewardRisk: 2,
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-long");
+      assert.equal(result.command.quoteBudgetUsdc, 500);
+    }
+  });
+
+  it("opens a short when the furthest take-profit pays 1:2", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const price = 100;
+    const riskDistance = 4;
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "SELL",
+      reason: "reject",
+      price,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: price + riskDistance,
+      tpPrices: [price - riskDistance * 2],
+      minRewardRisk: 2,
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-short");
+    }
+  });
+
+  it("uses the signal minimum, so a Bollinger 0.1 floor allows a target below 1:2", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const price = 100;
+    const riskDistance = 4;
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "reclaim",
+      price,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: price - riskDistance,
+      tpPrices: [price + riskDistance * 0.1],
+      minRewardRisk: 0.1,
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-long");
     }
   });
 });
@@ -153,6 +252,8 @@ describe("SOL reserve top-up", () => {
       reason: side === "BUY" ? "cross" : "hold",
       price: 100,
       at: new Date("2026-01-01T02:00:00.000Z"),
+      tpPrices: [],
+      minRewardRisk: 0.1,
     };
   }
 

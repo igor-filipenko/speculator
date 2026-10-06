@@ -44,6 +44,8 @@ export interface DonchianParams {
    * Wicks alone do not count.
    */
   timeStopBars: number;
+  /** Minimum reward per unit of stop risk (1:2). */
+  minRewardRisk: number;
 }
 
 /** Stricter volume confirmation in squeeze; unused when HTF is bearish/unknown. */
@@ -81,6 +83,7 @@ export function donchianParamsFor(
     minBreakAtrMult: MIN_BREAK_ATR[volatility],
     givebackAtrMult: 3,
     timeStopBars: 1,
+    minRewardRisk: 2,
   };
 }
 
@@ -152,6 +155,8 @@ export function evaluateDonchian(input: DonchianInput): Omit<Signal, "strategyId
     price,
     at,
     meta,
+    tpPrices: [] as number[],
+    minRewardRisk: strategy.minRewardRisk,
   };
 
   if (

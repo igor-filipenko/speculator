@@ -740,6 +740,7 @@ describe("gridParamsFor", () => {
     assert.equal(gridParamsFor("flat", "low").dipAtrMult, 1.5);
     assert.equal(gridParamsFor("flat", "low").maxDipAtrMult, 2);
     assert.equal(gridParamsFor("flat", "low").failReclaimAtrMult, 0.75);
+    assert.equal(gridParamsFor("flat", "low").minRewardRisk, 2);
   });
 
   it("widens the hard stop in a bullish trend", () => {

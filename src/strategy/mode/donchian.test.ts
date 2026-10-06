@@ -435,6 +435,7 @@ describe("donchianParamsFor", () => {
     assert.equal(p.givebackAtrMult, 3);
     assert.equal(p.timeStopBars, 1);
     assert.equal(p.volumeSmaMult, 2.0);
+    assert.equal(p.minRewardRisk, 2);
   });
 
   it("tightens volume in squeeze and keeps a fixed exit channel", () => {

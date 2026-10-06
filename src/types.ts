@@ -109,6 +109,17 @@ export interface Signal {
   strategyId: string;
   /** Hard stop for an opening signal, set by the strategy. */
   slPrice?: number;
+  /**
+   * Take-profit prices, nearest first.
+   * Bollinger sets the middle band. Other strategies leave this empty.
+   * The risk manager uses the furthest price for the reward:risk gate.
+   */
+  tpPrices: number[];
+  /**
+   * Minimum reward per unit of stop risk for an opening signal.
+   * Bollinger is 0.1; grid and Donchian are 2 (1:2).
+   */
+  minRewardRisk: number;
   meta?: {
     emaFast?: number;
     emaSlow?: number;

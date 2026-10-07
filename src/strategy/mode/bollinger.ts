@@ -52,6 +52,8 @@ export interface BollingerParams {
    * Below this, close under the fast EMA with -DI > +DI is treated as drift and skipped.
    */
   workTrendAdxFlatMax: number;
+  /** When false, 15m drift does not block a reclaim or an upper rejection. */
+  driftFilter: boolean;
   /** Wilder RSI period (oversold gate on lower-band reclaim). */
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
@@ -156,6 +158,7 @@ export function bollingerParamsFor(
     workTrendEmaFast: 20,
     workTrendEmaSlow: 50,
     workTrendAdxFlatMax: 20,
+    driftFilter: false,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
     minRewardRisk: 0.1,
@@ -202,7 +205,7 @@ export interface BollingerInput {
  * and band→mid must still cover the open+close fee.
  * Regime / ADX / RSI do not block exits.
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
- * is allowed; other below-fast-EMA sells are drift and skipped.
+ * is allowed; other below-fast-EMA sells are drift and skipped unless `driftFilter` is false.
  * An opening signal sets `tpPrices` to the middle band.
  * After `timeStopBars` closed bars, exit when the last close is at least
  * `timeStopAtr` × ATR against the entry. Wicks do not count.
@@ -406,6 +409,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     } else if (rsiNow >= strategy.rsiBuyMax) {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
     } else if (
+      strategy.driftFilter &&
       isWorkDriftDown({
         close,
         emaFast: emaFastNow,
@@ -466,6 +470,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       } else if (rsiNow <= rsiShortMin) {
         reason = `Upper rejection ignored: RSI ${fmt(rsiNow)} <= ${fmt(rsiShortMin)} (not overbought)`;
       } else if (
+        strategy.driftFilter &&
         isWorkDriftUp({
           close,
           emaFast: emaFastNow,

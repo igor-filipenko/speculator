@@ -558,6 +558,56 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /RSI/);
   });
 
+  it("lets a drifted reclaim through when driftFilter is false", () => {
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 70; i++) {
+      const price = 100 + i * 0.2;
+      candles.push(bar(start + i * INTERVAL, price));
+    }
+    const prev = candles[candles.length - 1]!.close;
+    const t = start + 70 * INTERVAL;
+    candles.push({
+      time: t,
+      open: prev,
+      high: prev + 0.2,
+      low: prev - 3.2,
+      close: prev - 3,
+      volume: 10,
+    });
+    candles.push({
+      time: t + INTERVAL,
+      open: prev - 3,
+      high: prev - 2.05,
+      low: prev - 3.15,
+      close: prev - 2.2,
+      volume: 10,
+    });
+    const strategy = looseFilters({
+      workTrendEmaFast: 8,
+      workTrendEmaSlow: 21,
+      workTrendAdxFlatMax: 20,
+      driftFilter: true,
+    });
+    const last = candles[candles.length - 1]!;
+    const blocked = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: last.close,
+    });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /drift down/);
+
+    const passed = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: { ...strategy, driftFilter: false },
+      price: last.close,
+    });
+    assert.equal(passed.side, "BUY", passed.reason);
+  });
+
   it("ignores reclaim when depth is below minReclaimDepth", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({
@@ -583,6 +633,7 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
+    assert.equal(bollingerParamsFor("flat", "low").driftFilter, false);
     assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.1);
     assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);

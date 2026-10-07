@@ -242,7 +242,7 @@ pnpm migrate
 pnpm paper
 ```
 
-Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`.
+Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`. After migrations that add or drop schemas/tables/sequences/types, re-run [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) as the object owner so role `speculator` stays aligned.
 
 ## Deploy (Ubuntu VPS + systemd)
 

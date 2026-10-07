@@ -34,12 +34,14 @@ deploy/
   miniapp.service
   bot.sh
   miniapp.sh
+scripts/
+  grant-privileges.sql  # keep in sync with migrations/
 
 src/ highlights:
   index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | regime
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
-  db/                   # Timescale access (portfolios, trades, signals, candles, tokens, pools)
+  db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
   market/               # Gecko OHLCV + HTF/1h MarketIndicators
   exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators + bollinger/donchian + SVGs
@@ -58,6 +60,7 @@ src/ highlights:
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
 - When changing strategy defaults, update `.env.example` (and README) together.
+- When changing SQL under `migrations/`, update [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) in the same change (schemas, tables, sequences, types, and default privileges for role `speculator`).
 - After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0` + `web` check).
 - Keep TypeScript strict flags in `tsconfig.base.json` / `tsconfig.json` and type-aware rules in `eslint.config.js` (and `web/eslint.config.js`); do not weaken them without discussion.
 

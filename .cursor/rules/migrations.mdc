@@ -1,0 +1,15 @@
+---
+description: Keep grant-privileges.sql in sync when changing SQL migrations
+globs: migrations/**/*.sql,scripts/grant-privileges.sql
+alwaysApply: false
+---
+
+# Migrations and privileges
+
+When adding, renaming, or dropping schemas, tables, sequences, or types under `migrations/`:
+
+1. Update [scripts/grant-privileges.sql](../../scripts/grant-privileges.sql) in the same change.
+2. Mirror every object the `speculator` role needs: `REVOKE` then `GRANT`, plus `ALTER DEFAULT PRIVILEGES` for the schema when new tables may appear later.
+3. Match least privilege to how the bot uses the object (read-only `strategy.registry` / `solana.*`; write (+ delete where the code deletes) on `bot.*` and `market.candles`).
+
+Do not leave a new table or sequence without an entry in `grant-privileges.sql`.

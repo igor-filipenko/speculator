@@ -1,10 +1,12 @@
 -- Privileges for role speculator on database speculator. Does not change owners.
--- Run as the object owner:
+-- Run as the object owner after schema migrations that add/drop schemas, tables,
+-- sequences, or types:
 --   psql postgres://OWNER@host:5432/speculator?sslmode=require -f scripts/grant-privileges.sql
 --
 --   public, solana : SELECT
---   market         : SELECT, INSERT
---   bot            : SELECT, INSERT, UPDATE
+--   market         : SELECT, INSERT, UPDATE (candles); SELECT, INSERT (signals + seq)
+--   strategy       : SELECT
+--   bot            : SELECT, INSERT, UPDATE, DELETE (+ trades seq)
 
 REVOKE ALL ON DATABASE speculator FROM speculator;
 GRANT CONNECT ON DATABASE speculator TO speculator;
@@ -25,17 +27,24 @@ REVOKE ALL ON SCHEMA market FROM speculator;
 GRANT USAGE ON SCHEMA market TO speculator;
 GRANT USAGE ON TYPE market.timeframe TO speculator;
 REVOKE ALL ON TABLE market.candles FROM speculator;
-GRANT SELECT, INSERT, UPDATE ON TABLE market.candles TO speculator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market.candles TO speculator;
 REVOKE ALL ON TABLE market.signals FROM speculator;
 GRANT SELECT, INSERT ON TABLE market.signals TO speculator;
 REVOKE ALL ON SEQUENCE market.signals_id_seq FROM speculator;
 GRANT USAGE, SELECT ON SEQUENCE market.signals_id_seq TO speculator;
 
+REVOKE ALL ON SCHEMA strategy FROM speculator;
+GRANT USAGE ON SCHEMA strategy TO speculator;
+REVOKE ALL ON TABLE strategy.registry FROM speculator;
+GRANT SELECT ON TABLE strategy.registry TO speculator;
+
 REVOKE ALL ON SCHEMA bot FROM speculator;
 GRANT USAGE ON SCHEMA bot TO speculator;
 GRANT USAGE ON TYPE bot.mode TO speculator;
 REVOKE ALL ON TABLE bot.portfolios FROM speculator;
-GRANT SELECT, INSERT, UPDATE ON TABLE bot.portfolios TO speculator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE bot.portfolios TO speculator;
+REVOKE ALL ON TABLE bot.positions FROM speculator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE bot.positions TO speculator;
 REVOKE ALL ON TABLE bot.trades FROM speculator;
 GRANT SELECT, INSERT, UPDATE ON TABLE bot.trades TO speculator;
 REVOKE ALL ON SEQUENCE bot.trades_id_seq FROM speculator;
@@ -43,4 +52,5 @@ GRANT USAGE, SELECT ON SEQUENCE bot.trades_id_seq TO speculator;
 
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO speculator;
 ALTER DEFAULT PRIVILEGES IN SCHEMA market GRANT SELECT, INSERT ON TABLES TO speculator;
-ALTER DEFAULT PRIVILEGES IN SCHEMA bot GRANT SELECT, INSERT, UPDATE ON TABLES TO speculator;
+ALTER DEFAULT PRIVILEGES IN SCHEMA strategy GRANT SELECT ON TABLES TO speculator;
+ALTER DEFAULT PRIVILEGES IN SCHEMA bot GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO speculator;

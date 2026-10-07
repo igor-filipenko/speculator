@@ -187,7 +187,7 @@ describe("applyMarketIndicators", () => {
     assert.equal(high.volatility, "high");
     await manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX44"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 

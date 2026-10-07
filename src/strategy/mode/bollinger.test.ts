@@ -573,11 +573,12 @@ describe("evaluateBollinger filters", () => {
 
 describe("bollingerParamsFor", () => {
   it("loosens ADX/RSI in tradable regimes", () => {
-    assert.equal(bollingerParamsFor("flat", "low").adxMax, 35);
+    assert.equal(bollingerParamsFor("flat", "low").adxMax, 39);
     assert.equal(bollingerParamsFor("flat", "low").timeframe, "15m");
-    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 50);
+    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 55);
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
-    assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
+    assert.equal(bollingerParamsFor("flat", "low").minBandToMidPct, 0.0025);
+    assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.1);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
@@ -585,14 +586,14 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.1);
     assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);
-    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
-    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
+    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 44);
+    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 55);
     assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
-    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 48);
-    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 28);
+    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 53);
+    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 32);
     assert.equal(bollingerParamsFor("flat", "squeeze").stdDev, 1.4);
-    assert.equal(bollingerParamsFor("flat", "squeeze").minReclaimDepth, 0.2);
-    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 40);
+    assert.equal(bollingerParamsFor("flat", "squeeze").minReclaimDepth, 0.12);
+    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 45);
   });
 
   it("places the hard stop beyond the entry-bar extreme", () => {

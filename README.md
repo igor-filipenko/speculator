@@ -332,10 +332,10 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 
 | Regime            | Entry                                                                                        | Exit                                       | ATR stop/trail |
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | -------------- |
-| bullish / low     | wick or close reclaim; RSI &lt; 48; ADX ≤ 32; (mid−lower)/close ≥ 0.35%; reclaim depth ≥ 15% | close ≥ BB mid **and** above entry + 0.20% | 2.5× / 3×      |
-| bullish / squeeze | RSI &lt; 50; ADX ≤ 36; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
-| flat / low        | RSI &lt; 50; ADX ≤ 35; stdDev 1.5; reclaim depth ≥ 15%                                       | same                                       | 2.5× / 3×      |
-| flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
+| bullish / low     | wick or close reclaim; RSI &lt; 53; ADX ≤ 36; (mid−lower)/close ≥ 0.25%; reclaim depth ≥ 10% | close ≥ BB mid **and** above entry + 0.20% | 2.5× / 3×      |
+| bullish / squeeze | RSI &lt; 55; ADX ≤ 40; stdDev 1.4; band→mid ≥ 0.25%; reclaim depth ≥ 12%                     | same                                       | 2.5× / 3×      |
+| flat / low        | RSI &lt; 55; ADX ≤ 39; stdDev 1.5; band→mid ≥ 0.25%; reclaim depth ≥ 10%                     | same                                       | 2.5× / 3×      |
+| flat / squeeze    | RSI &lt; 50; ADX ≤ 32; stdDev 1.4; band→mid ≥ 0.30%; reclaim depth ≥ 12%                     | same                                       | 2.5× / 3×      |
 | bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
 Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). After **2 closed 15m bars**, a long is sold and a short is covered when the last **close** is at least **1×ATR against the entry** (a wick through that level does not count), so a fade that is going the wrong way is scratched before the hard stop. A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.

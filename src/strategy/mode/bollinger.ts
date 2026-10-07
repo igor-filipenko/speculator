@@ -78,34 +78,34 @@ const STD_DEV: Record<Trend, Record<Volatility, number>> = {
 
 /** Looser ADX in tradable regimes so 15m dips still count as mean-reversion. */
 const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 40, low: 32, squeeze: 36, unknown: 32 },
-  flat: { high: 28, low: 35, squeeze: 28, unknown: 32 },
-  bearish: { high: 25, low: 25, squeeze: 25, unknown: 25 },
-  unknown: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+  bullish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
+  flat: { high: 32, low: 39, squeeze: 32, unknown: 36 },
+  bearish: { high: 29, low: 29, squeeze: 29, unknown: 29 },
+  unknown: { high: 29, low: 29, squeeze: 29, unknown: 29 },
 };
 
 /** Skip tiny squeeze TPs; high vol is no-buy so the row is unused for entries. */
 const MIN_BAND_TO_MID: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.005, low: 0.0035, squeeze: 0.0035, unknown: 0.004 },
-  flat: { high: 0.005, low: 0.0035, squeeze: 0.004, unknown: 0.004 },
-  bearish: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
-  unknown: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
+  bullish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
+  flat: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
+  bearish: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
+  unknown: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
 };
 
 /** Fraction of band width the close must reclaim; kisses stay out. */
 const MIN_RECLAIM_DEPTH: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.15, low: 0.15, squeeze: 0.2, unknown: 0.15 },
-  flat: { high: 0.15, low: 0.15, squeeze: 0.2, unknown: 0.15 },
-  bearish: { high: 0.15, low: 0.15, squeeze: 0.15, unknown: 0.15 },
-  unknown: { high: 0.15, low: 0.15, squeeze: 0.15, unknown: 0.15 },
+  bullish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
+  flat: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
+  bearish: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
+  unknown: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
 };
 
 /** HTF already gates trend; RSI just skips momentum touches that are not oversold. */
 const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 50, low: 48, squeeze: 50, unknown: 45 },
-  flat: { high: 40, low: 50, squeeze: 45, unknown: 45 },
-  bearish: { high: 40, low: 40, squeeze: 40, unknown: 40 },
-  unknown: { high: 40, low: 40, squeeze: 40, unknown: 40 },
+  bullish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
+  flat: { high: 45, low: 55, squeeze: 50, unknown: 50 },
+  bearish: { high: 45, low: 45, squeeze: 45, unknown: 45 },
+  unknown: { high: 45, low: 45, squeeze: 45, unknown: 45 },
 };
 
 /** Stop distance beyond the entry-bar extreme, in ATRs. */

@@ -1,5 +1,5 @@
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { isCandleClosed } from "../../market/gecko-terminal.js";
+import { candleIntervalSeconds, isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
@@ -58,6 +58,14 @@ export interface BollingerParams {
   rsiBuyMax: number;
   /** Minimum reward per unit of stop risk. Mean-reversion targets sit close to the stop. */
   minRewardRisk: number;
+  /**
+   * Closed bars to wait before an adverse time stop. 0 disables.
+   * Mean-reversion that is still going the wrong way is scratched here,
+   * before the hard stop.
+   */
+  timeStopBars: number;
+  /** Last closed bar must be at least this many ATRs against the entry. */
+  timeStopAtr: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -151,6 +159,8 @@ export function bollingerParamsFor(
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
     minRewardRisk: 0.1,
+    timeStopBars: 2,
+    timeStopAtr: 1,
   };
 }
 
@@ -194,6 +204,8 @@ export interface BollingerInput {
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
  * is allowed; other below-fast-EMA sells are drift and skipped.
  * An opening signal sets `tpPrices` to the middle band.
+ * After `timeStopBars` closed bars, exit when the last close is at least
+ * `timeStopAtr` × ATR against the entry. Wicks do not count.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -281,40 +293,81 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (long) {
     const minExit = entry * (1 + strategy.minExitAboveEntryPct);
     const profitablePrice = Math.max(bbMid, minExit);
-    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`;
-
     if (price >= profitablePrice) {
-      side = "SELL";
-      reason = `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`;
+      return {
+        ...base,
+        side: "SELL",
+        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`,
+      };
     }
-    return { ...base, side, reason };
+    const timed = adverseTimeStopReason({
+      side: "long",
+      entry,
+      close,
+      openedAt: input.openedAt,
+      at,
+      timeframe: strategy.timeframe,
+      atrNow,
+      timeStopBars: strategy.timeStopBars,
+      timeStopAtr: strategy.timeStopAtr,
+    });
+    if (timed != null) {
+      return { ...base, side: "SELL", reason: timed };
+    }
+    return {
+      ...base,
+      side: "HOLD",
+      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`,
+    };
   }
 
   if (short) {
+    const timed = adverseTimeStopReason({
+      side: "short",
+      entry,
+      close,
+      openedAt: input.openedAt,
+      at,
+      timeframe: strategy.timeframe,
+      atrNow,
+      timeStopBars: strategy.timeStopBars,
+      timeStopAtr: strategy.timeStopAtr,
+    });
     const fees = input.perpsFees;
-    if (fees == null) {
+    if (fees != null) {
+      const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
+      const feePct = shortPositionFeePct({
+        openFeePct: fees.openFeePct,
+        closeFeePct: fees.closeFeePct,
+        borrowFeePctPerHour: fees.borrowFeePctPerHour,
+        heldMs,
+      });
+      const minExit = entry * (1 - feePct);
+      const profitablePrice = Math.min(bbMid, minExit);
+      if (price <= profitablePrice) {
+        return {
+          ...base,
+          side: "BUY",
+          reason: `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+        };
+      }
+      if (timed != null) {
+        return { ...base, side: "BUY", reason: timed };
+      }
       return {
         ...base,
         side: "HOLD",
-        reason: "Short cover held: perps fee schedule missing",
+        reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
       };
     }
-    const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
-    const feePct = shortPositionFeePct({
-      openFeePct: fees.openFeePct,
-      closeFeePct: fees.closeFeePct,
-      borrowFeePctPerHour: fees.borrowFeePctPerHour,
-      heldMs,
-    });
-    const minExit = entry * (1 - feePct);
-    const profitablePrice = Math.min(bbMid, minExit);
-    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`;
-
-    if (price <= profitablePrice) {
-      side = "BUY";
-      reason = `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`;
+    if (timed != null) {
+      return { ...base, side: "BUY", reason: timed };
     }
-    return { ...base, side, reason };
+    return {
+      ...base,
+      side: "HOLD",
+      reason: "Short cover held: perps fee schedule missing",
+    };
   }
 
   const rsiShortMin = 100 - strategy.rsiBuyMax;
@@ -462,7 +515,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid or on an adverse time stop. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
@@ -471,8 +524,9 @@ export class BollingerStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, adxMax, rsiBuyMax } = this.params;
-    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax})`;
+    const { timeframe, period, stdDev, adxMax, rsiBuyMax, timeStopBars } = this.params;
+    const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
+    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax}${stop})`;
   }
 
   getId(): string {
@@ -572,6 +626,55 @@ export function isWorkDriftUp(input: {
     return false;
   }
   return close > emaFast && (plusDi > minusDi || emaFast > emaSlow);
+}
+
+/**
+ * Failed mean-reversion: after `timeStopBars`, the last **close** is at least
+ * `timeStopAtr` × ATR against the entry. The forming bar's wick does not count.
+ */
+function adverseTimeStopReason(input: {
+  side: "long" | "short";
+  entry: number;
+  close: number;
+  openedAt: Date | undefined;
+  at: Date;
+  timeframe: Timeframe;
+  atrNow: number | null | undefined;
+  timeStopBars: number;
+  timeStopAtr: number;
+}): string | null {
+  if (
+    input.timeStopBars <= 0 ||
+    !(input.timeStopAtr > 0) ||
+    input.openedAt == null ||
+    input.atrNow == null ||
+    !(input.atrNow > 0) ||
+    !(input.entry > 0)
+  ) {
+    return null;
+  }
+
+  const intervalSec = candleIntervalSeconds(input.timeframe);
+  if (intervalSec <= 0) {
+    return null;
+  }
+
+  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
+  const barsHeld = Math.floor(elapsedSec / intervalSec);
+  if (barsHeld < input.timeStopBars) {
+    return null;
+  }
+
+  const adverse = input.side === "long" ? input.entry - input.close : input.close - input.entry;
+  const minAdverse = input.timeStopAtr * input.atrNow;
+  if (!(adverse >= minAdverse)) {
+    return null;
+  }
+
+  return (
+    `Time stop: close ${fmt(input.close)} is ${fmt(adverse)} against entry ${fmt(input.entry)} ` +
+    `after ${input.timeStopBars} bars (>= ${fmt(minAdverse)} = ${input.timeStopAtr}×ATR)`
+  );
 }
 
 function fmt(n: number): string {

@@ -328,7 +328,7 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid / ATR still fire). Buys on a **closed** 15m **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range:
+Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid, the adverse time stop, and the ATR hard stop still fire). Buys on a **closed** 15m **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range:
 
 | Regime            | Entry                                                                                        | Exit                                       | ATR stop/trail |
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | -------------- |
@@ -338,7 +338,7 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 | flat / squeeze    | RSI &lt; 45; ADX ≤ 28; stdDev 1.4; reclaim depth ≥ 20%                                       | same                                       | 2.5× / 3×      |
 | bear or 1h high   | HOLD (no BUY)                                                                                | same                                       | regime ATR     |
 
-Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). After **2 closed 15m bars**, a long is sold and a short is covered when the last **close** is at least **1×ATR against the entry** (a wick through that level does not count), so a fade that is going the wrong way is scratched before the hard stop. A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
 ### Donchian breakout (`donchian`)
 

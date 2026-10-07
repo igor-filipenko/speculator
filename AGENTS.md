@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Grid on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** / **regime** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Donchian on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** / **regime** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
 
 Build/run: [README.md](./README.md).
 
@@ -42,7 +42,7 @@ src/ highlights:
   db/                   # Timescale access (portfolios, trades, signals, candles, tokens, pools)
   market/               # Gecko OHLCV + HTF/1h MarketIndicators
   exchange/             # emulated, or jupiter (spot long + perps short)
-  strategy/             # indicators + bollinger/grid/donchian + SVGs
+  strategy/             # indicators + bollinger/donchian + SVGs
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
@@ -53,7 +53,7 @@ src/ highlights:
 ## Conventions
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
-- Strategy knobs live on the mode `*Params` object (`gridParamsFor` / `bollingerParamsFor` / …). Do not add magic numbers inside `evaluate*`.
+- Strategy knobs live on the mode `*Params` object (`bollingerParamsFor` / `donchianParamsFor` / …). Do not add magic numbers inside `evaluate*`.
 - Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.

@@ -20,7 +20,6 @@ import type {
 } from "../types.js";
 import { BollingerStrategy } from "./mode/bollinger.js";
 import { DonchianStrategy } from "./mode/donchian.js";
-import { GridStrategy } from "./mode/grid.js";
 
 export {
   classifyHighLow,
@@ -41,7 +40,7 @@ export interface SimpleStrategyManagerOptions {
 
 /**
  * Active strategy id comes from env/CLI and must exist in `strategy.registry`.
- * Grid, Bollinger, and Donchian params follow HTF trend × 1h volatility.
+ * Bollinger and Donchian params follow HTF trend × 1h volatility.
  * The risk manager is the same in every regime: hard stop and max deposit.
  */
 export class SimpleStrategyManager implements StrategyManager {
@@ -125,7 +124,6 @@ type StrategyFactory = (trend: Trend, volatility: Volatility) => Strategy;
 const strategyFactories = new Map<string, StrategyFactory>([
   ["bollinger", (trend, volatility) => new BollingerStrategy(trend, volatility)],
   ["donchian", (trend, volatility) => new DonchianStrategy(trend, volatility)],
-  ["grid", (trend, volatility) => new GridStrategy(trend, volatility)],
 ]);
 
 const registeredById = new Map<string, RegisteredStrategy>();
@@ -133,8 +131,8 @@ const registeredById = new Map<string, RegisteredStrategy>();
 /**
  * Load `id` from `strategy.registry` and build the implementation tuned for HTF
  * `trend` and 1h `volatility`. The registry row is cached for the process.
- * Grid spacing / ATR, Bollinger ADX–RSI gates (no long in bear or 1h high vol;
- * short entries only in bear/flat), and Donchian volume SMA multiplier scale with both.
+ * Bollinger ADX–RSI gates (no long in bear or 1h high vol; short entries only
+ * in bear/flat) and Donchian volume SMA multiplier scale with both.
  */
 export async function loadStrategy(
   id: string,

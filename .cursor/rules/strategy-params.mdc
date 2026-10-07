@@ -6,15 +6,15 @@ alwaysApply: false
 
 # Strategy parameters
 
-Do not add constants used by signal/risk logic inside strategy implementations. Every knob belongs on the mode params object (`GridParams`, `BollingerParams`, `DonchianParams`) and is set in `*ParamsFor(trend, volatility)`.
+Do not add constants used by signal/risk logic inside strategy implementations. Every knob belongs on the mode params object (`BollingerParams`, `DonchianParams`) and is set in `*ParamsFor(trend, volatility)`.
 
-Regime lookup tables (`GRID_MULT`, `ADX_MAX`, …) are allowed only as the mapping that **fills** those params. `evaluate*` / `evaluateGrid` / `evaluateBollinger` must read `params.foo`, not a module `FOO`.
+Regime lookup tables (`ADX_MAX`, volume SMA multipliers, …) are allowed only as the mapping that **fills** those params. `evaluate*` / `evaluateBollinger` / `evaluateDonchian` must read `params.foo`, not a module `FOO`.
 
 ```typescript
 // BAD
-const CHASE_ATR_MULT = 0.5;
-const chaseFloor = lastSell.price - CHASE_ATR_MULT * currentAtr;
+const RECLAIM_DEPTH = 0.15;
+if (depth < RECLAIM_DEPTH) return hold;
 
 // GOOD
-const chaseFloor = lastSell.price - params.chaseAtrMult * currentAtr;
+if (depth < params.minReclaimDepth) return hold;
 ```

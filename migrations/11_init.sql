@@ -15,8 +15,7 @@ COMMENT ON COLUMN strategy.registry.type IS 'Strategy type';
 
 INSERT INTO strategy.registry (id, name, type) VALUES
   ('bollinger', 'Bollinger Bands', 'mean-reversion'),
-  ('donchian', 'Donchian Channel', 'trend-following'),
-  ('grid', 'Grid', 'mean-reversion')
+  ('donchian', 'Donchian Channel', 'trend-following')
 ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS bot.positions (

@@ -11,7 +11,7 @@ const START = 1_700_000_000;
 
 function makeConfig(): AppConfig {
   return {
-    strategy: "grid",
+    strategy: "bollinger",
     htf: "4h",
     jupiterApiKey: "",
     watchlist: ["SOL/USDC"],
@@ -93,7 +93,7 @@ describe("parseRegimeArgs", () => {
 
   it("rejects unknown flags and --ignore-trend", () => {
     assert.throws(() => parseRegimeArgs(["--unknown"]), /Unknown regime/);
-    assert.throws(() => parseRegimeArgs(["--strategy", "grid"]), /Unknown regime/);
+    assert.throws(() => parseRegimeArgs(["--strategy", "bollinger"]), /Unknown regime/);
     assert.throws(() => parseRegimeArgs(["--ignore-trend"]), /Unknown regime/);
     assert.throws(() => parseRegimeArgs(["--to", "2026-08-01"]), /requires --from/);
   });
@@ -108,7 +108,7 @@ describe("segmentsFromChanges", () => {
           at,
           price: 100,
           market: { pair: "SOL/USDC", price: 100, trend: "bullish", volatility: "low" },
-          strategyName: "grid",
+          strategyName: "bollinger",
           riskName: "generic",
         },
       ],
@@ -129,7 +129,7 @@ describe("runRegime", () => {
     const toTime = mtf[mtf.length - 1]!.time + 1;
     const [result] = await runRegime({
       config: makeConfig(),
-      strategyManager: await SimpleStrategyManager.create({ strategyId: "grid", htf: "4h" }),
+      strategyManager: await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" }),
       fromTime,
       toTime,
       htfCandles: htf,

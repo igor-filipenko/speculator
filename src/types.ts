@@ -117,7 +117,7 @@ export interface Signal {
   tpPrices: number[];
   /**
    * Minimum reward per unit of stop risk for an opening signal.
-   * Bollinger is 0.1; grid and Donchian are 2 (1:2).
+   * Bollinger is 0.1; Donchian is 2 (1:2).
    */
   minRewardRisk: number;
   meta?: {

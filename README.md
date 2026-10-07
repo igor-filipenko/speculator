@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal (candles for Bollinger / Grid)
+- **OHLCV:** GeckoTerminal (candles for Bollinger / Donchian)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default), `grid`, or `donchian`                                          |
+| `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
@@ -340,10 +340,6 @@ Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new 
 
 Reclaim depth is `(close − lower) / (mid − lower)`. Skips 15m **drift** (below EMA20 without a stacked oversold trend: -DI > +DI, EMA20 < EMA50, ADX >= 18). A short covers only when a perps fee schedule is present and price is at or below the mid **and** below entry by the open fee, close fee, and hourly borrow accrued since the fill. Without that schedule the short stays on hold and an upper-band short is not opened. When fees are present, an upper-band short is skipped when `(upper − mid) / close` cannot cover the open+close fee. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
 
-### Grid (`grid`)
-
-ATR-spaced ladder on 15m. Buys the nearest level **reclaim** when HTF is bullish or flat, ADX is under the regime cap, and the reclaimed level is a **dip** (at/below the grid anchor **and** `dipAtrMult`–`maxDipAtrMult` × ATR below the recent high over `reanchorBars`; skips waterfalls deeper than 2×ATR). **Skips squeeze entries within `chaseAtrMult` (0.5×ATR) of the last take-profit**, **skips bullish/low entries within the same buffer of the last SELL**, and **skips a new long for `atrReentryBars` (96 = 24h) after an ATR stop/trail**. Sells at entry + one grid spacing, or earlier at the nearest HTF/1h resistance, or if HTF is not bullish and close falls back through the reclaimed level (capped at `failReclaimAtrMult` 0.75×ATR below entry). Grid lines clip to the S/R corridor (`max` nearest support, `min` nearest resistance). **Grid spacing and ADX cap follow HTF trend × 1h volatility** (bullish/high → ×8 and ADX 30; bullish/low → ×5 and ADX 22; flat/high → ×6 and ADX 22; flat/low or squeeze → ×5 and ADX 20; bearish → ×2). ATR stop is 3× in bullish, 1.5× otherwise; trail tightens to 6× in bullish high/squeeze, otherwise 8× (4× bearish). Cooldown 8 bars.
-
 ### Donchian breakout (`donchian`)
 
 Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or flat.** Entry is a **closed** 15m close **crossing above the prior 20-bar high by at least 0.25–0.35×ATR**, with last volume above `k × SMA(volume)` of the previous 20 bars and close above trend EMA 50. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range. Sells when a closed close **crosses below the prior 40-bar low**, when price **gives back 3×ATR from the hold's peak**, or on a **1-bar time stop**: if no later **close** reaches the breakout bar's high **minus 1×ATR**, the long is sold at the current price (wicks alone do not count). Volume/EMA do not block exits. ATR stop/trail still apply. Bearish/unknown HTF skip new BUYs (exits still fire).
@@ -380,12 +376,10 @@ src/
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
-  strategy/mode/grid.ts
   strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart
-  strategy/mode/grid-svg.ts      # grid SVG for /chart
   strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   portfolio/paper/         # simulated cash book + Timescale mode=paper

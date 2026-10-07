@@ -120,8 +120,8 @@ describe("htfParamsFor / getRequiredCandles", () => {
 
 describe("SimpleStrategyManager defaults", () => {
   it("returns env-style strategy and GenericRiskManager from that strategy", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "grid", htf: "4h" });
-    assert.equal(manager.getActiveStrategy().getId(), "grid");
+    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getId(), "bollinger");
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
     assert.equal(manager.getActiveRiskManager(), manager.getActiveRiskManager());
   });
@@ -170,27 +170,6 @@ describe("applyMarketIndicators", () => {
     assert.equal(await manager.applyMarketIndicators(squeezed, squeezed), false);
   });
 
-  it("recreates GridStrategy with wide params (gridMult=8) when trend is bullish and vol is high", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "grid", htf: "4h" });
-    const strategyBefore = manager.getActiveStrategy();
-    const mtfCandles = highVolMtf(140);
-    const high = evaluateMarketIndicators({
-      pair: "SOL/USDC",
-      candles: series(250, 50, 0.8),
-      mtfCandles,
-      price: mtfCandles[mtfCandles.length - 1]!.close,
-      at,
-      params,
-      mtfParams,
-    });
-    assert.equal(high.trend, "bullish");
-    assert.equal(high.volatility, "high");
-    await manager.applyMarketIndicators(high);
-    assert.notEqual(manager.getActiveStrategy(), strategyBefore);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×8"));
-    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
-  });
-
   it("recreates BollingerStrategy with high-vol ADX when trend is bullish and vol is high", async () => {
     const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const strategyBefore = manager.getActiveStrategy();
@@ -233,10 +212,9 @@ describe("applyMarketIndicators", () => {
 });
 
 describe("loadStrategy", () => {
-  it("builds bollinger, donchian, and grid from strategy.registry", async () => {
+  it("builds bollinger and donchian from strategy.registry", async () => {
     assert.equal((await loadStrategy("bollinger", "flat", "low")).getId(), "bollinger");
     assert.equal((await loadStrategy("donchian", "flat", "low")).getId(), "donchian");
-    assert.equal((await loadStrategy("grid", "bearish", "high")).getId(), "grid");
   });
 
   it("rejects an id that is not in strategy.registry", async () => {

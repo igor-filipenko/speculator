@@ -34,7 +34,7 @@ function rowToStrategy(row: Record<string, unknown>): RegisteredStrategy {
   };
 }
 
-/** Load one strategy by registry id (e.g. bollinger, donchian, grid). */
+/** Load one strategy by registry id (e.g. bollinger, donchian). */
 export async function getStrategy(id: string): Promise<RegisteredStrategy | null> {
   const rows = await query<Record<string, unknown>>(
     `

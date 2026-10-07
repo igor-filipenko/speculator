@@ -38,19 +38,18 @@ function usage(): never {
   tsx src/index.ts positions close long
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
-  tsx src/index.ts backtest [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--ignore-trend] [--no-intrabar]
+  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--verbose]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
   --buy-sol         Buy SOL up to SOL_RESERVE_MAX when below SOL_RESERVE_MIN (wallet)
-  --days <n>        Replay lookback in days (default: 90)
+  --days <n>        Replay lookback in days (regime only; default: 90)
   --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Replay range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
-  --ignore-trend    Skip HTF market state (backtest only)
-  --no-intrabar     Evaluate only at candle close (backtest only)
+  --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
 `);
   process.exit(1);
 }
@@ -269,15 +268,12 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     config,
     strategyManager,
     forceRefresh: flags.forceRefresh,
-    ignoreTrend: flags.ignoreTrend,
-    noIntrabar: flags.noIntrabar,
-    ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
   });
 
   for (const result of results) {
-    await printBacktestReport(result);
+    await printBacktestReport(result, { verbose: flags.verbose });
   }
 }
 

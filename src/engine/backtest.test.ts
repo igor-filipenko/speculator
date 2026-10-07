@@ -23,6 +23,7 @@ import type {
   Trade,
 } from "../types.js";
 import {
+  countRoundTripsBySide,
   parseBacktestArgs,
   parseBacktestDate,
   runBacktest,
@@ -175,42 +176,27 @@ function htfSeries(count: number, startPrice: number, delta: number, start: numb
 }
 
 describe("parseBacktestArgs", () => {
-  it("parses --days and --force-refresh", () => {
-    assert.deepEqual(parseBacktestArgs(["--days", "14", "--force-refresh"]), {
-      days: 14,
+  it("parses --force-refresh and --verbose", () => {
+    assert.deepEqual(parseBacktestArgs(["--force-refresh"]), {
       forceRefresh: true,
-      ignoreTrend: false,
-      noIntrabar: false,
+      verbose: false,
     });
-    assert.deepEqual(parseBacktestArgs(["--days=7"]), {
-      days: 7,
+    assert.deepEqual(parseBacktestArgs(["--verbose"]), {
       forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: false,
+      verbose: true,
+    });
+    assert.deepEqual(parseBacktestArgs(["-v"]), {
+      forceRefresh: false,
+      verbose: true,
     });
     assert.deepEqual(parseBacktestArgs([]), {
-      days: 0,
       forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: false,
-    });
-    assert.deepEqual(parseBacktestArgs(["--ignore-trend"]), {
-      days: 0,
-      forceRefresh: false,
-      ignoreTrend: true,
-      noIntrabar: false,
-    });
-    assert.deepEqual(parseBacktestArgs(["--no-intrabar"]), {
-      days: 0,
-      forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: true,
+      verbose: false,
     });
   });
 
   it("parses --from/--to as DD-MM-YYYY and YYYY-MM-DD", () => {
     const dmy = parseBacktestArgs(["--from", "01-01-2026", "--to", "01-08-2026"]);
-    assert.equal(dmy.days, 0);
     assert.equal(dmy.fromTime, Date.UTC(2026, 0, 1) / 1000);
     // --to is exclusive end of next day after 01-08-2026 → 2026-08-02 00:00 UTC
     assert.equal(dmy.toTime, Date.UTC(2026, 7, 2) / 1000);
@@ -221,13 +207,9 @@ describe("parseBacktestArgs", () => {
   });
 
   it("rejects invalid flags and conflicting window options", () => {
-    assert.throws(() => parseBacktestArgs(["--days"]), /requires/);
     assert.throws(() => parseBacktestArgs(["--unknown"]), /Unknown/);
+    assert.throws(() => parseBacktestArgs(["--days", "7"]), /Unknown/);
     assert.throws(() => parseBacktestArgs(["--to", "2026-08-01"]), /requires --from/);
-    assert.throws(
-      () => parseBacktestArgs(["--days", "7", "--from", "2026-01-01"]),
-      /either --days or --from/,
-    );
     assert.throws(
       () => parseBacktestArgs(["--from", "01-08-2026", "--to", "01-01-2026"]),
       /from must be before/,
@@ -243,31 +225,46 @@ describe("parseBacktestDate", () => {
   });
 });
 
-describe("roundTripHoldMs", () => {
-  function fill(side: "BUY" | "SELL", at: string, realizedPnl?: number): Trade {
-    return {
-      pair: "SOL/USDC",
-      side,
-      price: 100,
-      size: 1,
-      at: new Date(at),
-      simulated: true,
-      ...(realizedPnl !== undefined ? { realizedPnl } : {}),
-    };
-  }
+function tradeFill(side: "BUY" | "SELL", at: string, realizedPnl?: number): Trade {
+  return {
+    pair: "SOL/USDC",
+    side,
+    price: 100,
+    size: 1,
+    at: new Date(at),
+    simulated: true,
+    ...(realizedPnl !== undefined ? { realizedPnl } : {}),
+  };
+}
 
+describe("roundTripHoldMs", () => {
   it("measures close minus open for each completed trip", () => {
     const holds = roundTripHoldMs([
-      fill("BUY", "2026-01-01T00:00:00.000Z"),
-      fill("SELL", "2026-01-01T01:30:00.000Z", 1),
-      fill("SELL", "2026-01-02T00:00:00.000Z"),
-      fill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
+      tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+      tradeFill("SELL", "2026-01-01T01:30:00.000Z", 1),
+      tradeFill("SELL", "2026-01-02T00:00:00.000Z"),
+      tradeFill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
     ]);
     assert.deepEqual(holds, [90 * 60 * 1000, 15 * 60 * 1000]);
   });
 
   it("ignores an open that never closes", () => {
-    assert.deepEqual(roundTripHoldMs([fill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+    assert.deepEqual(roundTripHoldMs([tradeFill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+  });
+});
+
+describe("countRoundTripsBySide", () => {
+  it("counts long and short completed trips", () => {
+    assert.deepEqual(
+      countRoundTripsBySide([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:30:00.000Z", 1),
+        tradeFill("SELL", "2026-01-02T00:00:00.000Z"),
+        tradeFill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
+        tradeFill("BUY", "2026-01-03T00:00:00.000Z"),
+      ]),
+      { longs: 1, shorts: 1 },
+    );
   });
 });
 
@@ -296,7 +293,6 @@ describe("runBacktest", () => {
       config: makeConfig(startingCash),
       strategyManager: managerFor(strategy),
       candles,
-      days: 30,
     });
 
     assert.ok(result);
@@ -304,7 +300,6 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
     assert.equal(result.metrics.strategy.getId(), "bollinger");
-    assert.equal(result.metrics.intrabar, true);
     assert.ok(result.equityCurve.length === candles.length);
 
     assert.ok(result.trades.length >= 1);
@@ -550,77 +545,6 @@ describe("runBacktest", () => {
     const emulated = emulateFillPrice({ side: "BUY", close: wickBar.low, tier: "liquid" });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
     assert.ok(buy.price < wickBar.close);
-  });
-
-  it("evaluates only at close with a fully closed last bar when noIntrabar is set", async () => {
-    const start = 1_700_000_000;
-    const interval = 15 * 60;
-    const green: Candle = {
-      time: start,
-      open: 100,
-      high: 104,
-      low: 98,
-      close: 103,
-      volume: 5,
-    };
-    const red: Candle = {
-      time: start + interval,
-      open: 103,
-      high: 105,
-      low: 97,
-      close: 99,
-      volume: 5,
-    };
-    const calls: { price: number; last: Candle }[] = [];
-    const strategy: Strategy = {
-      getDisplayName: () => "recorder",
-      getId: () => "bollinger",
-      getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
-      evaluateSignal: (pair, window, _market, price, at) => {
-        calls.push({ price, last: window[window.length - 1]! });
-        return {
-          pair,
-          strategyId: "bollinger",
-          side: "HOLD" as const,
-          reason: "record",
-          price,
-          at,
-          tpPrices: [],
-          minRewardRisk: 0.1,
-        };
-      },
-      buildChartSvg: () => "<svg></svg>",
-    };
-
-    const [result] = await runBacktest({
-      config: makeConfig(1000),
-      strategyManager: managerFor(strategy),
-      candles: [green, red],
-      noIntrabar: true,
-    });
-    assert.ok(result);
-    assert.equal(result.metrics.intrabar, false);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]!.price, green.close);
-    assert.deepEqual(calls[0]!.last, green);
-    assert.equal(calls[1]!.price, red.close);
-    assert.deepEqual(calls[1]!.last, red);
-  });
-
-  it("skips HTF apply and log when ignoreTrend is set", async () => {
-    const intervalHtf = 4 * 60 * 60;
-    const ltfStart = 1_700_000_000;
-    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
-    const ltf = series(20, 100, 0.1);
-    const [result] = await runBacktest({
-      config: makeConfig(1000),
-      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
-      candles: ltf,
-      htfCandles: htf,
-      ignoreTrend: true,
-    });
-    assert.ok(result);
-    assert.ok(result.trades.some((t) => t.side === "BUY"));
   });
 });
 

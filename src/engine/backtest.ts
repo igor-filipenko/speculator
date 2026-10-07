@@ -23,17 +23,13 @@ import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest
 export { parseReplayDate as parseBacktestDate, resolveReplayWindow as resolveBacktestWindow };
 
 export interface BacktestCliOptions {
-  /** Lookback window in calendar days (0 = 90-day default, ignored when from/to set). */
-  days: number;
-  /** Inclusive range start (Unix seconds). Mutually exclusive with `--days`. */
+  /** Inclusive range start (Unix seconds). When unset, default 90-day lookback. */
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
   toTime?: number;
   forceRefresh: boolean;
-  /** Skip HTF market indicators (no applyMarketIndicators, no MARKET logs). */
-  ignoreTrend: boolean;
-  /** Evaluate only at candle close with a fully closed last bar. */
-  noIntrabar: boolean;
+  /** Print simulated trades and chart; when false, metrics only. */
+  verbose: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
   strategy?: string;
 }
@@ -65,6 +61,10 @@ export interface BacktestMetrics {
   realizedPnl: number;
   tradeCount: number;
   roundTrips: number;
+  /** Completed BUY→SELL round-trips. */
+  longs: number;
+  /** Completed SELL→BUY round-trips. */
+  shorts: number;
   wins: number;
   winRate: number;
   /** Shortest completed round-trip (close − open), milliseconds. 0 when none closed. */
@@ -78,8 +78,6 @@ export interface BacktestMetrics {
   candleCount: number;
   fromTime: number;
   toTime: number;
-  /** False when replayed close-only (`--no-intrabar`). */
-  intrabar: boolean;
 }
 
 export interface BacktestResult {
@@ -93,16 +91,11 @@ export interface BacktestResult {
 export interface RunBacktestOptions {
   config: AppConfig;
   strategyManager: StrategyManager;
-  days?: number;
-  /** Inclusive range start (Unix seconds). Takes precedence over `--days`. */
+  /** Inclusive range start (Unix seconds). When unset, default 90-day lookback. */
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
   forceRefresh?: boolean;
-  /** Skip HTF evaluate/apply/log (strategy risk params stay as constructed). */
-  ignoreTrend?: boolean;
-  /** Evaluate only at candle close with a fully closed last bar. */
-  noIntrabar?: boolean;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
@@ -113,10 +106,9 @@ export interface RunBacktestOptions {
 
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
- * By default each signal-timeframe bar is walked as a forming candle so `evaluateSignal`
+ * Each signal-timeframe bar is walked as a forming candle so `evaluateSignal`
  * sees the same incomplete last bar as live. The path is fixed from the position at the
  * bar open: long visits the high last, short visits the low last, flat follows candle color.
- * Pass {@link RunBacktestOptions.noIntrabar} to evaluate once per bar at close.
  * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
@@ -148,31 +140,25 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       );
     }
 
-    const ignoreTrend = options.ignoreTrend ?? false;
-    const noIntrabar = options.noIntrabar ?? false;
     const skipNetwork = options.candles !== undefined;
-    const htfCandles = ignoreTrend
-      ? []
-      : await loadHtfCandles({
-          pair,
-          strategyManager,
-          fromTime,
-          toTime,
-          injected: options.htfCandles,
-          skipFetch: skipNetwork && options.htfCandles === undefined,
-          cacheOpts,
-        });
-    const mtfCandles = ignoreTrend
-      ? []
-      : await loadMtfCandles({
-          pair,
-          strategyManager,
-          fromTime,
-          toTime,
-          injected: options.mtfCandles,
-          skipFetch: skipNetwork && options.mtfCandles === undefined,
-          cacheOpts,
-        });
+    const htfCandles = await loadHtfCandles({
+      pair,
+      strategyManager,
+      fromTime,
+      toTime,
+      injected: options.htfCandles,
+      skipFetch: skipNetwork && options.htfCandles === undefined,
+      cacheOpts,
+    });
+    const mtfCandles = await loadMtfCandles({
+      pair,
+      strategyManager,
+      fromTime,
+      toTime,
+      injected: options.mtfCandles,
+      skipFetch: skipNetwork && options.mtfCandles === undefined,
+      cacheOpts,
+    });
 
     results.push(
       await replayPair({
@@ -181,8 +167,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
         candles,
         htfCandles,
         mtfCandles,
-        ignoreTrend,
-        noIntrabar,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: candles[0]!.time,
         toTime: candles[candles.length - 1]!.time + 1,
@@ -199,22 +183,11 @@ async function replayPair(args: {
   candles: Candle[];
   htfCandles: Candle[];
   mtfCandles: Candle[];
-  ignoreTrend: boolean;
-  noIntrabar: boolean;
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
 }): Promise<BacktestResult> {
-  const {
-    pair,
-    strategyManager,
-    candles,
-    htfCandles,
-    mtfCandles,
-    ignoreTrend,
-    noIntrabar,
-    startingCashUsdc,
-  } = args;
+  const { pair, strategyManager, candles, htfCandles, mtfCandles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -239,31 +212,27 @@ async function replayPair(args: {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
-    const ticks = noIntrabar
-      ? [{ price: candle.close, atSec: candle.time + barIntervalSec, forming: candle }]
-      : intraBarTicks(candle, barIntervalSec, positionSide);
+    const ticks = intraBarTicks(candle, barIntervalSec, positionSide);
 
     for (const tick of ticks) {
       const window = closed.concat(tick.forming);
       const price = tick.price;
       exchange.setMidPrice(price);
 
-      if (!ignoreTrend) {
-        const synced = await syncMarketIndicators({
-          pair: pair.symbol,
-          strategyManager,
-          htfCandles,
-          mtfCandles,
-          atTime: tick.atSec,
-          price,
-          htfEnd,
-          mtfEnd,
-          lastMarket,
-        });
-        htfEnd = synced.htfEnd;
-        mtfEnd = synced.mtfEnd;
-        lastMarket = synced.lastMarket;
-      }
+      const synced = await syncMarketIndicators({
+        pair: pair.symbol,
+        strategyManager,
+        htfCandles,
+        mtfCandles,
+        atTime: tick.atSec,
+        price,
+        htfEnd,
+        mtfEnd,
+        lastMarket,
+      });
+      htfEnd = synced.htfEnd;
+      mtfEnd = synced.mtfEnd;
+      lastMarket = synced.lastMarket;
 
       const strategy = strategyManager.getActiveStrategy();
       const riskManager = strategyManager.getActiveRiskManager();
@@ -317,9 +286,9 @@ async function replayPair(args: {
   const firstClose = candles[0]!.close;
   const lastClose = candles[candles.length - 1]!.close;
   const snap = portfolio.getSnapshot(lastClose);
-  const sells = snap.trades.filter((t) => t.side === "SELL");
+  const { longs, shorts } = countRoundTripsBySide(snap.trades);
+  const roundTrips = longs + shorts;
   const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
-  const roundTrips = sells.length;
   const holdMs = roundTripHoldMs(snap.trades);
   const holdStats = summarizeHoldMs(holdMs);
   const totalReturnPct =
@@ -342,6 +311,8 @@ async function replayPair(args: {
       realizedPnl: snap.realizedPnl,
       tradeCount: snap.trades.length,
       roundTrips,
+      longs,
+      shorts,
       wins,
       winRate: roundTrips > 0 ? wins / roundTrips : 0,
       roundTripMinMs: holdStats.minMs,
@@ -352,7 +323,6 @@ async function replayPair(args: {
       candleCount: candles.length,
       fromTime: args.fromTime,
       toTime: args.toTime,
-      intrabar: !noIntrabar,
     },
     trades: snap.trades,
     equityCurve,
@@ -406,6 +376,32 @@ export function roundTripHoldMs(trades: readonly Trade[]): number[] {
   return holds;
 }
 
+/**
+ * Count completed round-trips by direction: long = BUY→SELL, short = SELL→BUY.
+ * A close is a fill with `realizedPnl`; it pairs with the previous open.
+ */
+export function countRoundTripsBySide(trades: readonly Trade[]): {
+  longs: number;
+  shorts: number;
+} {
+  let longs = 0;
+  let shorts = 0;
+  let openSide: Trade["side"] | undefined;
+  for (const trade of trades) {
+    if (trade.realizedPnl === undefined) {
+      openSide = trade.side;
+      continue;
+    }
+    if (openSide === "BUY") {
+      longs += 1;
+    } else if (openSide === "SELL") {
+      shorts += 1;
+    }
+    openSide = undefined;
+  }
+  return { longs, shorts };
+}
+
 function summarizeHoldMs(holds: readonly number[]): {
   minMs: number;
   maxMs: number;
@@ -444,11 +440,8 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
 
 /** Parse CLI flags for `backtest`. */
 export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
-  let days = 0;
   let forceRefresh = false;
-  let ignoreTrend = false;
-  let noIntrabar = false;
-  let daysExplicit = false;
+  let verbose = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
   let strategy: string | undefined;
@@ -462,28 +455,13 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
       forceRefresh = true;
       continue;
     }
-    if (arg === "--ignore-trend") {
-      ignoreTrend = true;
-      continue;
-    }
-    if (arg === "--no-intrabar") {
-      noIntrabar = true;
+    if (arg === "--verbose" || arg === "-v") {
+      verbose = true;
       continue;
     }
     if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
       const { value, nextIndex } = readFlagValue(argv, i, "--strategy");
       strategy = value;
-      i = nextIndex;
-      continue;
-    }
-    if (arg === "--days" || arg?.startsWith("--days=")) {
-      const { value, nextIndex } = readFlagValue(argv, i, "--days");
-      const n = Number(value);
-      if (!Number.isInteger(n) || n <= 0) {
-        throw new Error(`Invalid --days value: ${value}`);
-      }
-      days = n;
-      daysExplicit = true;
       i = nextIndex;
       continue;
     }
@@ -504,9 +482,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
   }
 
-  if (fromTime !== undefined && daysExplicit) {
-    throw new Error("Use either --days or --from/--to, not both");
-  }
   if (toTime !== undefined && fromTime === undefined) {
     throw new Error("--to requires --from");
   }
@@ -515,10 +490,8 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
 
   const result: BacktestCliOptions = {
-    days: daysExplicit ? days : 0,
     forceRefresh,
-    ignoreTrend,
-    noIntrabar,
+    verbose,
   };
   if (fromTime !== undefined) {
     result.fromTime = fromTime;
@@ -532,9 +505,13 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   return result;
 }
 
-export async function printBacktestReport(result: BacktestResult): Promise<void> {
+export async function printBacktestReport(
+  result: BacktestResult,
+  options: { verbose?: boolean } = {},
+): Promise<void> {
   const { metrics, trades, candles } = result;
   const { strategy, costs } = metrics;
+  const verbose = options.verbose ?? false;
 
   console.log("");
   console.log(`=== Backtest ${metrics.pair} | ${strategy.getDisplayName()} ===`);
@@ -552,7 +529,8 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
   );
   console.log(
     `Realized P&L: ${metrics.realizedPnl.toFixed(4)} USDC | Trades: ${metrics.tradeCount} ` +
-      `(${metrics.roundTrips} round-trips, win rate ${fmtPct(metrics.winRate * 100)})`,
+      `(${metrics.roundTrips} round-trips: ${metrics.longs} long, ${metrics.shorts} short; ` +
+      `win rate ${fmtPct(metrics.winRate * 100)})`,
   );
   console.log(
     `Round-trip hold: min ${fmtDuration(metrics.roundTripMinMs)} | ` +
@@ -564,10 +542,13 @@ export async function printBacktestReport(result: BacktestResult): Promise<void>
       `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} | ` +
       `perps: ${costs.perpsFeeUsdc.toFixed(4)} USDC`,
   );
+
+  if (!verbose) {
+    return;
+  }
+
   console.log(
-    metrics.intrabar
-      ? "(Fills use emulated exchange costs on intra-bar OHLC ticks; last bar is forming, like live.)"
-      : "(Fills use emulated exchange costs on candle close; last bar is fully closed.)",
+    "(Fills use emulated exchange costs on intra-bar OHLC ticks; last bar is forming, like live.)",
   );
 
   if (trades.length === 0) {

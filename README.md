@@ -185,23 +185,21 @@ Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill c
 
 ```bash
 pnpm backtest
-pnpm backtest -- --days 14
 pnpm backtest -- --from 01-01-2026 --to 01-08-2026
 pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
+pnpm backtest -- --verbose
 ```
 
 | Flag              | Meaning                                                                |
 | ----------------- | ---------------------------------------------------------------------- |
-| `--days <n>`      | Lookback window (default **90** days)                                  |
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
 | `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
-| `--ignore-trend`  | Do not evaluate/apply HTF market state (no MARKET logs, no trend risk) |
-| `--no-intrabar`   | Evaluate only at candle close with a fully closed last bar             |
+| `--verbose`, `-v` | Print simulated trades and chart (default: metrics only)               |
 
-Use either `--days` or `--from`/`--to`, not both.
+Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. By default each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Pass `--no-intrabar` to evaluate once per bar at close. Fills use the intra-bar tick (or close) as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -210,7 +208,7 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 
 Short opens and covers skip the spot pool fee. They pay a perps schedule instead: open and close base fees plus hourly short borrow on entry notional for the time the short is open. Watch, paper, and trade load that schedule from [Jupiter pool-info](https://perps-api.jup.ag/v1/pool-info) (`openFeePercent`, `shortBorrowRatePercent`; close uses the same base rate) and reuse it for one hour. Backtest uses the offline snapshot (0.06% open, 0.06% close, 0.0007% per hour as of 2026-10-02) and does not call Jupiter. Price impact is not charged; pool-info only publishes its cap.
 
-The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, win rate, max drawdown, cost totals, and each simulated trade. Backtest never writes paper portfolio state.
+The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, long/short round-trip counts, win rate, max drawdown, and cost totals. Pass `--verbose` to also list each simulated trade and draw the console chart. Backtest never writes paper portfolio state.
 
 Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
 
@@ -220,7 +218,7 @@ pnpm regime -- --days 14
 pnpm regime -- --from 01-01-2026 --to 01-08-2026
 ```
 
-Same `--days` / `--from` / `--to` / `--force-refresh` flags as backtest. Strategy comes from env `STRATEGY`. Regime does not take `--ignore-trend` (market state is the whole point).
+Regime accepts `--days` / `--from` / `--to` / `--force-refresh`. Strategy comes from env `STRATEGY`.
 
 Single iteration (smoke test):
 
@@ -348,7 +346,7 @@ Trend-following channel breakout on 15m. **Buys while HTF trend is bullish or fl
 
 ATR stop is 3×; trail 6× bullish high/squeeze, 8× bullish low, 3× flat/bearish. Strategy also sells at 3×ATR giveback from the hold peak, and at the current price on a 1-bar time stop when no close reaches breakout high − ATR. Cooldown 8 bars (2h), minHold 0. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
-Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks by default (or candle close with `--no-intrabar`; stop level for ATR exits).
+Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 
 ## Project layout
 

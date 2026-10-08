@@ -474,22 +474,24 @@ describe("runBacktest", () => {
     const greenCalls = calls.filter((c) => c.last.time === green.time);
     assert.deepEqual(
       greenCalls.map((c) => c.price),
-      [100, 98, 104, 103],
+      [100, 98, 101, 104, 103],
     );
     assert.deepEqual(greenCalls[0]!.last, { ...green, high: 100, low: 100, close: 100 });
     assert.deepEqual(greenCalls[1]!.last, { ...green, high: 100, low: 98, close: 98 });
-    assert.deepEqual(greenCalls[2]!.last, { ...green, high: 104, low: 98, close: 104 });
-    assert.deepEqual(greenCalls[3]!.last, green);
+    assert.deepEqual(greenCalls[2]!.last, { ...green, high: 101, low: 98, close: 101 });
+    assert.deepEqual(greenCalls[3]!.last, { ...green, high: 104, low: 98, close: 104 });
+    assert.deepEqual(greenCalls[4]!.last, green);
 
     const redCalls = calls.filter((c) => c.last.time === red.time);
     assert.deepEqual(
       redCalls.map((c) => c.price),
-      [103, 105, 97, 99],
+      [103, 105, 101, 97, 99],
     );
     assert.deepEqual(redCalls[0]!.last, { ...red, high: 103, low: 103, close: 103 });
     assert.deepEqual(redCalls[1]!.last, { ...red, high: 105, low: 103, close: 105 });
-    assert.deepEqual(redCalls[2]!.last, { ...red, high: 105, low: 97, close: 97 });
-    assert.deepEqual(redCalls[3]!.last, red);
+    assert.deepEqual(redCalls[2]!.last, { ...red, high: 105, low: 101, close: 101 });
+    assert.deepEqual(redCalls[3]!.last, { ...red, high: 105, low: 97, close: 97 });
+    assert.deepEqual(redCalls[4]!.last, red);
   });
 
   it("fills a wick BUY at the intra-bar low, not the close", async () => {

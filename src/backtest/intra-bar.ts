@@ -12,32 +12,19 @@ export interface IntraBarTick {
 /**
  * Intra-bar trade path from OHLC. Consecutive duplicate prices are dropped.
  *
- * An open position walks the adverse extreme first so a stop can fire before
- * this bar's favorable extreme ratchets the trail:
- * - long: open → low → close → high (high last)
- * - short: open → high → close → low (low last)
+ * Inserts a mid-range sample between the extremes so the path is not only
+ * the four OHLC corners:
+ * - green (`close >= open`): open → low → mid → high → close
+ * - red (`close < open`): open → high → mid → low → close
  *
- * Flat keeps the candle-color path (no position to punish):
- * - green (`close >= open`): open → low → high → close
- * - red (`close < open`): open → high → low → close
+ * `side` is accepted for call-site compatibility and does not change the path.
  */
-export function intraBarPrices(candle: Candle, side: PositionSide = "flat"): number[] {
+export function intraBarPrices(candle: Candle, _side: PositionSide = "flat"): number[] {
   const { open, high, low, close } = candle;
-  const ordered =
-    side === "long"
-      ? [open, low, close, high]
-      : side === "short"
-        ? [open, high, close, low]
-        : close >= open
-          ? [open, low, high, close]
-          : [open, high, low, close];
-  const prices: number[] = [];
-  for (const price of ordered) {
-    if (prices.length === 0 || prices[prices.length - 1] !== price) {
-      prices.push(price);
-    }
-  }
-  return prices;
+  const midBody = low + (high - low) * 0.5;
+  const rawPath =
+    close >= open ? [open, low, midBody, high, close] : [open, high, midBody, low, close];
+  return rawPath.filter((price, index, arr) => index === 0 || price !== arr[index - 1]);
 }
 
 /**

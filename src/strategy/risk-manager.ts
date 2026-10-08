@@ -85,7 +85,7 @@ function rewardRiskReason(signal: Signal): string | null {
   if (!(risk > 0)) return null;
   const reward = bestTpReward(signal);
   if (reward == null || reward / risk < signal.minRewardRisk) {
-    return `reward:risk below 1:${signal.minRewardRisk}`;
+    return `reward:risk below 1:${signal.minRewardRisk} sl=${sl.toFixed(4)} risk=${risk.toFixed(4)} reward=${reward?.toFixed(4) ?? "null"}`;
   }
   return null;
 }

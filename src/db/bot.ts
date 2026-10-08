@@ -88,6 +88,10 @@ function overlayPosition(
   if (openedAt !== undefined) {
     next.openedAt = openedAt;
   }
+  const paidFee = Number(row["paid_fee"]);
+  if (paidFee > 0) {
+    next.paidFee = paidFee;
+  }
   return next;
 }
 
@@ -134,7 +138,7 @@ export async function loadAllPortfolios(
 
   const positionRows = await query<Record<string, unknown>>(
     `
-    SELECT pair, strategy_id, side, size, entry_price, sl_price, opened_at
+    SELECT pair, strategy_id, side, size, entry_price, sl_price, paid_fee, opened_at
     FROM bot.positions
     WHERE bot_id = $1 AND mode = $2
     `,
@@ -187,10 +191,10 @@ const UPSERT_PORTFOLIO_SQL = `
 
 const UPSERT_POSITION_SQL = `
   INSERT INTO bot.positions (
-    bot_id, mode, pair, strategy_id, strategy_data, side, size, entry_price, sl_price, opened_at, updated_at
+    bot_id, mode, pair, strategy_id, strategy_data, side, size, entry_price, sl_price, paid_fee, opened_at, updated_at
   )
   VALUES (
-    $1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, $8, $9::timestamptz, now()
+    $1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, $8, $9, $10::timestamptz, now()
   )
   ON CONFLICT (bot_id, mode, pair) DO UPDATE SET
     strategy_id = EXCLUDED.strategy_id,
@@ -199,6 +203,7 @@ const UPSERT_POSITION_SQL = `
     size = EXCLUDED.size,
     entry_price = EXCLUDED.entry_price,
     sl_price = EXCLUDED.sl_price,
+    paid_fee = EXCLUDED.paid_fee,
     opened_at = EXCLUDED.opened_at,
     updated_at = now()
 `;
@@ -253,6 +258,7 @@ function positionValues(
     position.size,
     position.entryPrice,
     position.slPrice,
+    position.paidFee ?? 0,
     position.openedAt ?? null,
   ];
 }

@@ -581,6 +581,6 @@ describe("PaperPortfolio applyOrder", () => {
     };
     const sell = portfolio.applyOrderSync(sellOrder);
     assert.ok(sell);
-    assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100);
+    assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100 - 10);
   });
 });

@@ -103,6 +103,9 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     if (data.position.openedAt !== undefined) {
       position.openedAt = new Date(data.position.openedAt);
     }
+    if (data.position.paidFee !== undefined && data.position.paidFee > 0) {
+      position.paidFee = data.position.paidFee;
+    }
     portfolio.position = position;
 
     for (const t of data.trades) {
@@ -137,6 +140,9 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
         : {}),
       ...(this.position.strategyId !== undefined ? { strategyId: this.position.strategyId } : {}),
       ...(this.position.slPrice !== undefined ? { slPrice: this.position.slPrice } : {}),
+      ...(this.position.paidFee !== undefined && this.position.paidFee > 0
+        ? { paidFee: this.position.paidFee }
+        : {}),
     };
 
     const trades: PersistedLiveTrade[] = this.trades.map((t) => {
@@ -335,9 +341,10 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     }
 
     const size = order.size;
+    const paidFee = this.position.paidFee ?? 0;
     const proceeds = size * order.price - order.priorityFeeUsdc;
     const cost = size * this.position.entryPrice;
-    const pnl = proceeds - cost;
+    const pnl = proceeds - cost - paidFee;
 
     const trade: Trade = {
       pair: order.pair,
@@ -395,7 +402,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       return null;
     }
     const size = order.size;
-    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc;
+    const paidFee = this.position.paidFee ?? 0;
+    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc - paidFee;
     const trade: Trade = {
       pair: order.pair,
       side: "BUY",
@@ -449,6 +457,9 @@ function openedPosition(pair: string, side: "long" | "short", order: Order): Pos
     strategyId: order.strategyId ?? "",
     slPrice: order.slPrice ?? 0,
   };
+  if (order.priorityFeeUsdc > 0) {
+    position.paidFee = order.priorityFeeUsdc;
+  }
   return position;
 }
 

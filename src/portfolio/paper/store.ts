@@ -9,6 +9,8 @@ export interface PersistedPosition {
   openedAt?: string;
   strategyId?: string;
   slPrice?: number;
+  /** Priority fee paid to open this position, in USDC. Absent when flat or zero. */
+  paidFee?: number;
 }
 
 /** Serializable trade (dates as ISO strings). */

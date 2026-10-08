@@ -92,6 +92,9 @@ export class PaperPortfolio implements Portfolio {
     if (data.position.openedAt !== undefined) {
       position.openedAt = new Date(data.position.openedAt);
     }
+    if (data.position.paidFee !== undefined && data.position.paidFee > 0) {
+      position.paidFee = data.position.paidFee;
+    }
     portfolio.position = position;
 
     for (const t of data.trades) {
@@ -128,6 +131,9 @@ export class PaperPortfolio implements Portfolio {
     }
     if (this.position.slPrice !== undefined) {
       position.slPrice = this.position.slPrice;
+    }
+    if (this.position.paidFee !== undefined && this.position.paidFee > 0) {
+      position.paidFee = this.position.paidFee;
     }
 
     const trades: PersistedTrade[] = this.trades.map((t) => {
@@ -239,9 +245,10 @@ export class PaperPortfolio implements Portfolio {
 
     const size = order.size;
     const priorityFeeUsdc = order.priorityFeeUsdc;
+    const paidFee = this.position.paidFee ?? 0;
     const proceeds = size * order.price - priorityFeeUsdc;
     const cost = size * this.position.entryPrice;
-    const pnl = proceeds - cost;
+    const pnl = proceeds - cost - paidFee;
 
     const trade: PaperTrade = {
       pair: order.pair,
@@ -302,8 +309,12 @@ export class PaperPortfolio implements Portfolio {
       this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
     const perps = order.fillCosts?.perps;
     const perpsFeeUsdc = perps != null ? notional * shortPositionFeePct({ ...perps, heldMs }) : 0;
+    const paidFee = this.position.paidFee ?? 0;
     const pnl =
-      size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc - perpsFeeUsdc;
+      size * (this.position.entryPrice - order.price) -
+      order.priorityFeeUsdc -
+      perpsFeeUsdc -
+      paidFee;
     const trade: PaperTrade = {
       pair: order.pair,
       side: "BUY",
@@ -341,6 +352,9 @@ function openedPosition(pair: string, side: "long" | "short", order: Order): Pos
     strategyId: order.strategyId ?? "",
     slPrice: order.slPrice ?? 0,
   };
+  if (order.priorityFeeUsdc > 0) {
+    position.paidFee = order.priorityFeeUsdc;
+  }
   return position;
 }
 

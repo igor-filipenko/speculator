@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS bot.positions (
   side           TEXT             NOT NULL,
   size           DOUBLE PRECISION NOT NULL,
   entry_price    DOUBLE PRECISION NOT NULL,
+  paid_fee       DOUBLE PRECISION NOT NULL DEFAULT 0,
   sl_price       DOUBLE PRECISION NOT NULL,
   opened_at      TIMESTAMPTZ      NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ      NOT NULL DEFAULT now(),
@@ -45,6 +46,7 @@ COMMENT ON COLUMN bot.positions.strategy_data IS 'Reserved strategy state. Alway
 COMMENT ON COLUMN bot.positions.side IS 'long or short';
 COMMENT ON COLUMN bot.positions.size IS 'Base size of the open position';
 COMMENT ON COLUMN bot.positions.entry_price IS 'Fill price of the open position';
+COMMENT ON COLUMN bot.positions.paid_fee IS 'Priority fee paid to open this position, in USDC. Included in realized PnL when the position closes.';
 COMMENT ON COLUMN bot.positions.sl_price IS 'Hard stop price set at open';
 COMMENT ON COLUMN bot.positions.opened_at IS 'When this position was opened (UTC)';
 COMMENT ON COLUMN bot.positions.updated_at IS 'Last position write time (UTC)';

@@ -130,6 +130,45 @@ describe("paper store", () => {
     assert.equal(loaded.portfolios["BONK/USDC"]?.cashUsdc, 0);
   });
 
+  it("reloads the long open priority fee and charges it on close", async () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const opened = portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "test buy",
+      price: 100,
+      size: 2,
+      at: new Date("2026-07-31T10:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 1.5,
+      strategyId: "bollinger",
+      slPrice: 90,
+    });
+    assert.ok(opened);
+    await savePaperState(new Map([["SOL/USDC", portfolio]]));
+
+    const loaded = await loadPaperState();
+    const persisted = loaded?.portfolios["SOL/USDC"];
+    assert.ok(persisted);
+    const restored = PaperPortfolio.fromPersisted(persisted);
+    assert.equal(restored.toPersisted().position.paidFee, 1.5);
+
+    const closed = restored.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "close-long",
+      reason: "test sell",
+      price: 110,
+      size: 2,
+      at: new Date("2026-07-31T11:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0.25,
+    });
+    assert.ok(closed);
+    assert.equal(closed.realizedPnl, 2 * 110 - 0.25 - 2 * 100 - 1.5);
+  });
+
   it("returns null when there are no paper rows for this bot", async () => {
     const otherBot = `empty-${randomUUID()}`;
     setBotId(otherBot);

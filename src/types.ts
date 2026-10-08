@@ -159,6 +159,11 @@ export interface Position {
   strategyId: string;
   /** Hard stop price from the opening signal. */
   slPrice: number;
+  /**
+   * Priority fee paid to open this position, in USDC.
+   * Included in `realizedPnl` on close.
+   */
+  paidFee?: number;
 }
 
 export interface PairConfig {

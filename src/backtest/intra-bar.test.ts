@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Candle } from "../types.js";
-import { formingCandle, intraBarPrices, intraBarTicks } from "./intra-bar.js";
+import { formingCandle, intraBarPrices, intraBarTicks, randomIntraBarPrices } from "./intra-bar.js";
 
 function bar(open: number, high: number, low: number, close: number): Candle {
   return { time: 1_700_000_000, open, high, low, close, volume: 10 };
@@ -88,5 +88,64 @@ describe("intraBarTicks", () => {
     assert.equal(ticks[3]!.forming.low, 98);
     assert.equal(ticks[3]!.forming.close, 98);
     assert.deepEqual(ticks[4]!.forming, closed);
+  });
+});
+
+describe("randomIntraBarPrices", () => {
+  /** Seeded deterministic RNG (Mulberry32 inline for the test). */
+  function seededRng(seed: number): () => number {
+    let s = seed >>> 0;
+    return function (): number {
+      s = (s + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it("starts at open and ends at close", () => {
+    const candle = bar(100, 110, 90, 105);
+    for (let seed = 0; seed < 20; seed++) {
+      const path = randomIntraBarPrices(candle, seededRng(seed));
+      assert.equal(path[0], candle.open, `seed ${seed}: first price should be open`);
+      assert.equal(path[path.length - 1], candle.close, `seed ${seed}: last price should be close`);
+    }
+  });
+
+  it("always visits both high and low", () => {
+    const candle = bar(100, 110, 90, 105);
+    for (let seed = 0; seed < 30; seed++) {
+      const path = randomIntraBarPrices(candle, seededRng(seed));
+      assert.ok(path.includes(candle.high), `seed ${seed}: path must include high`);
+      assert.ok(path.includes(candle.low), `seed ${seed}: path must include low`);
+    }
+  });
+
+  it("all prices stay within [low, high]", () => {
+    const candle = bar(100, 110, 90, 105);
+    for (let seed = 0; seed < 20; seed++) {
+      const path = randomIntraBarPrices(candle, seededRng(seed));
+      for (const p of path) {
+        assert.ok(p >= candle.low && p <= candle.high, `seed ${seed}: price ${p} out of range`);
+      }
+    }
+  });
+
+  it("produces different orderings across seeds", () => {
+    const candle = bar(100, 110, 90, 105);
+    const paths = new Set<string>();
+    for (let seed = 0; seed < 50; seed++) {
+      paths.add(JSON.stringify(randomIntraBarPrices(candle, seededRng(seed))));
+    }
+    // With 50 seeds, we expect multiple distinct orderings.
+    assert.ok(paths.size > 1, "expected more than one unique path across seeds");
+  });
+
+  it("drops consecutive duplicate prices", () => {
+    // All-equal candle: open=high=low=close → single-element path
+    const doji = bar(100, 100, 100, 100);
+    const path = randomIntraBarPrices(doji, seededRng(0));
+    assert.equal(path.length, 1);
+    assert.equal(path[0], 100);
   });
 });

@@ -270,6 +270,7 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     forceRefresh: flags.forceRefresh,
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
+    ...(flags.monteCarloRuns !== undefined ? { monteCarloRuns: flags.monteCarloRuns } : {}),
   });
 
   for (const result of results) {

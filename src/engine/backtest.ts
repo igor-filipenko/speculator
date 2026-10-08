@@ -32,6 +32,11 @@ export interface BacktestCliOptions {
   verbose: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
   strategy?: string;
+  /**
+   * Number of Monte Carlo runs with randomized intra-bar paths.
+   * When set, `BacktestResult.monteCarlo` is printed after the main report.
+   */
+  monteCarloRuns?: number;
 }
 
 export interface BacktestCostTotals {
@@ -106,6 +111,32 @@ export interface BacktestResult {
   equityCurve: number[];
   /** OHLCV series used for the replay (for console chart). */
   candles: Candle[];
+  /**
+   * Distribution of key metrics across Monte Carlo intra-bar path samples.
+   * Present only when `RunBacktestOptions.monteCarloRuns > 0`.
+   */
+  monteCarlo?: MonteCarloStats;
+}
+
+/** p5 / p50 / p95 / mean distribution of a single scalar metric across MC runs. */
+export interface MonteCarloDistribution {
+  p5: number;
+  p50: number;
+  p95: number;
+  mean: number;
+}
+
+/**
+ * Aggregate of per-run metrics from Monte Carlo intra-bar path sampling.
+ * Each run replays the same candle series with a different random OHLC ordering,
+ * providing a distribution of outcomes that accounts for intra-bar path uncertainty.
+ */
+export interface MonteCarloStats {
+  runs: number;
+  totalReturnPct: MonteCarloDistribution;
+  sharpeRatio: MonteCarloDistribution;
+  maxDrawdownPct: MonteCarloDistribution;
+  profitFactor: MonteCarloDistribution;
 }
 
 export interface RunBacktestOptions {
@@ -122,6 +153,12 @@ export interface RunBacktestOptions {
   htfCandles?: Candle[];
   /** Inject 1h candles for volatility; skips 1h fetch when set. */
   mtfCandles?: Candle[];
+  /**
+   * Number of additional Monte Carlo runs with randomized intra-bar paths.
+   * When > 0, `BacktestResult.monteCarlo` is populated with p5/p50/p95 distributions.
+   * Each run uses a deterministic seed so results are reproducible.
+   */
+  monteCarloRuns?: number;
 }
 
 /**
@@ -180,18 +217,27 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       cacheOpts,
     });
 
-    results.push(
-      await replayPair({
-        pair,
-        strategyManager,
-        candles,
-        htfCandles,
-        mtfCandles,
-        startingCashUsdc: options.config.paperCashUsdc,
-        fromTime: candles[0]!.time,
-        toTime: candles[candles.length - 1]!.time + 1,
-      }),
-    );
+    const pairArgs = {
+      pair,
+      strategyManager,
+      candles,
+      htfCandles,
+      mtfCandles,
+      startingCashUsdc: options.config.paperCashUsdc,
+      fromTime: candles[0]!.time,
+      toTime: candles[candles.length - 1]!.time + 1,
+    };
+    const result = await replayPair(pairArgs);
+
+    if (options.monteCarloRuns != null && options.monteCarloRuns > 0) {
+      const monteCarlo = await runMonteCarloForPair({
+        ...pairArgs,
+        runs: options.monteCarloRuns,
+      });
+      results.push({ ...result, monteCarlo });
+    } else {
+      results.push(result);
+    }
   }
 
   return results;
@@ -206,6 +252,8 @@ async function replayPair(args: {
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
+  /** When set, intra-bar prices use random OHLC orderings (Monte Carlo mode). */
+  rng?: () => number;
 }): Promise<BacktestResult> {
   const { pair, strategyManager, candles, htfCandles, mtfCandles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
@@ -232,7 +280,7 @@ async function replayPair(args: {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
-    const ticks = intraBarTicks(candle, barIntervalSec, positionSide);
+    const ticks = intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
 
     // Volume-weighted slippage: set bar USDC volume once per candle.
     // GeckoTerminal volume field is in base token units; multiply by close for USDC equivalent.
@@ -469,6 +517,89 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
 }
 
 // ---------------------------------------------------------------------------
+// Monte Carlo replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Mulberry32 — a fast, seedable 32-bit PRNG.
+ * Returns a closure that produces values in [0, 1) from the given seed.
+ * Using a deterministic seed per run makes Monte Carlo results reproducible.
+ */
+function mulberry32(seed: number): () => number {
+  let s = seed >>> 0;
+  return function (): number {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Run `args.runs` additional replays of the same pair with randomised intra-bar
+ * paths (one seeded PRNG per run) and aggregate metrics into a distribution.
+ */
+async function runMonteCarloForPair(args: {
+  pair: PairConfig;
+  strategyManager: StrategyManager;
+  candles: Candle[];
+  htfCandles: Candle[];
+  mtfCandles: Candle[];
+  startingCashUsdc: number;
+  fromTime: number;
+  toTime: number;
+  runs: number;
+}): Promise<MonteCarloStats> {
+  const { runs, ...replayArgs } = args;
+  const allMetrics: BacktestMetrics[] = [];
+  for (let run = 0; run < runs; run++) {
+    const rng = mulberry32(run); // seed 0..runs−1 → reproducible across calls
+    const result = await replayPair({ ...replayArgs, rng });
+    allMetrics.push(result.metrics);
+  }
+  return buildMonteCarloStats(allMetrics);
+}
+
+function buildMonteCarloStats(allMetrics: BacktestMetrics[]): MonteCarloStats {
+  const dist = (values: number[]): MonteCarloDistribution => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mean = sorted.reduce((s, v) => s + v, 0) / Math.max(sorted.length, 1);
+    return {
+      p5: mcPercentile(sorted, 0.05),
+      p50: mcPercentile(sorted, 0.5),
+      p95: mcPercentile(sorted, 0.95),
+      mean,
+    };
+  };
+  return {
+    runs: allMetrics.length,
+    totalReturnPct: dist(allMetrics.map((m) => m.totalReturnPct)),
+    sharpeRatio: dist(allMetrics.map((m) => m.sharpeRatio)),
+    maxDrawdownPct: dist(allMetrics.map((m) => m.maxDrawdownPct)),
+    // Cap Infinity (all-winning runs) at 999 so the distribution is always finite.
+    profitFactor: dist(
+      allMetrics.map((m) => (Number.isFinite(m.profitFactor) ? m.profitFactor : 999)),
+    ),
+  };
+}
+
+/** Linear-interpolated percentile on a pre-sorted array. `p` is in [0, 1].
+ *
+ * Uses the numerically stable form `loVal + frac * (hiVal − loVal)` so that
+ * when all values are identical, every percentile equals that value exactly.
+ */
+function mcPercentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = p * (sorted.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  const loVal = sorted[lo]!;
+  if (lo === hi) return loVal;
+  const frac = idx - lo;
+  return loVal + frac * (sorted[hi]! - loVal);
+}
+
+// ---------------------------------------------------------------------------
 // Risk-adjusted performance metrics
 // ---------------------------------------------------------------------------
 
@@ -617,6 +748,7 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let fromTime: number | undefined;
   let toTime: number | undefined;
   let strategy: string | undefined;
+  let monteCarloRuns: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -649,6 +781,14 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
       i = nextIndex;
       continue;
     }
+    if (arg === "--monte-carlo" || arg?.startsWith("--monte-carlo=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--monte-carlo");
+      const n = parseInt(value, 10);
+      if (!(n >= 1)) throw new Error("--monte-carlo requires a positive integer");
+      monteCarloRuns = n;
+      i = nextIndex;
+      continue;
+    }
     if (arg?.startsWith("-")) {
       throw new Error(`Unknown backtest option: ${arg}`);
     }
@@ -673,6 +813,9 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
   if (strategy !== undefined) {
     result.strategy = strategy;
+  }
+  if (monteCarloRuns !== undefined) {
+    result.monteCarloRuns = monteCarloRuns;
   }
   return result;
 }
@@ -721,6 +864,10 @@ export async function printBacktestReport(
       `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} | ` +
       `perps: ${costs.perpsFeeUsdc.toFixed(4)} USDC`,
   );
+
+  if (result.monteCarlo != null) {
+    printMonteCarloStats(result.monteCarlo);
+  }
 
   if (!verbose) {
     return;
@@ -809,4 +956,21 @@ function fmtRatio(n: number): string {
 function fmtFactor(n: number): string {
   if (!Number.isFinite(n)) return ">999";
   return n.toFixed(2);
+}
+
+function printMonteCarloStats(mc: MonteCarloStats): void {
+  const w = 7; // column width for values
+  const pad = (s: string) => s.padStart(w);
+  const pctDist = (d: MonteCarloDistribution) =>
+    `p5=${pad(fmtPct(d.p5))}  p50=${pad(fmtPct(d.p50))}  p95=${pad(fmtPct(d.p95))}  mean=${pad(fmtPct(d.mean))}`;
+  const ratioDist = (d: MonteCarloDistribution) =>
+    `p5=${pad(fmtRatio(d.p5))}  p50=${pad(fmtRatio(d.p50))}  p95=${pad(fmtRatio(d.p95))}  mean=${pad(fmtRatio(d.mean))}`;
+  const factorDist = (d: MonteCarloDistribution) =>
+    `p5=${pad(fmtFactor(d.p5))}  p50=${pad(fmtFactor(d.p50))}  p95=${pad(fmtFactor(d.p95))}  mean=${pad(fmtFactor(d.mean))}`;
+
+  console.log(`Monte Carlo (${mc.runs} runs, randomized intra-bar paths):`);
+  console.log(`  Return     ${pctDist(mc.totalReturnPct)}`);
+  console.log(`  Sharpe     ${ratioDist(mc.sharpeRatio)}`);
+  console.log(`  Max DD     ${pctDist(mc.maxDrawdownPct)}`);
+  console.log(`  Profit fac ${factorDist(mc.profitFactor)}`);
 }

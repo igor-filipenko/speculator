@@ -215,6 +215,13 @@ describe("parseBacktestArgs", () => {
       /from must be before/,
     );
   });
+
+  it("parses --monte-carlo as a positive integer", () => {
+    assert.equal(parseBacktestArgs(["--monte-carlo", "50"]).monteCarloRuns, 50);
+    assert.equal(parseBacktestArgs(["--monte-carlo=100"]).monteCarloRuns, 100);
+    assert.throws(() => parseBacktestArgs(["--monte-carlo", "0"]), /positive integer/);
+    assert.throws(() => parseBacktestArgs(["--monte-carlo", "abc"]), /positive integer/);
+  });
 });
 
 describe("parseBacktestDate", () => {
@@ -563,6 +570,44 @@ describe("runBacktest", () => {
     });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
     assert.ok(buy.price < wickBar.close);
+  });
+
+  it("populates monteCarlo distribution when monteCarloRuns > 0", async () => {
+    const candles = series(20, 100, 0.2);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: managerFor(scriptedStrategy({ buyIndex: 5 })),
+      candles,
+      monteCarloRuns: 10,
+    });
+    assert.ok(result);
+    const mc = result.monteCarlo;
+    assert.ok(mc, "monteCarlo should be present");
+    assert.equal(mc.runs, 10);
+
+    // All distribution values must be finite (no NaN from edge cases).
+    for (const dist of [mc.totalReturnPct, mc.sharpeRatio, mc.maxDrawdownPct, mc.profitFactor]) {
+      assert.ok(Number.isFinite(dist.p5), `p5 is not finite: ${dist.p5}`);
+      assert.ok(Number.isFinite(dist.p50), `p50 is not finite: ${dist.p50}`);
+      assert.ok(Number.isFinite(dist.p95), `p95 is not finite: ${dist.p95}`);
+      assert.ok(Number.isFinite(dist.mean), `mean is not finite: ${dist.mean}`);
+      // Sorted-distribution invariant: extreme percentiles must be ordered.
+      assert.ok(dist.p5 <= dist.p95, `p5 (${dist.p5}) > p95 (${dist.p95})`);
+    }
+    // Drawdown is non-negative.
+    assert.ok(mc.maxDrawdownPct.p5 >= 0);
+    assert.ok(mc.profitFactor.p5 >= 0);
+  });
+
+  it("does not populate monteCarlo when monteCarloRuns is absent", async () => {
+    const candles = series(20, 100, 0.2);
+    const [result] = await runBacktest({
+      config: makeConfig(1000),
+      strategyManager: managerFor(scriptedStrategy({ buyIndex: 5 })),
+      candles,
+    });
+    assert.ok(result);
+    assert.equal(result.monteCarlo, undefined);
   });
 });
 

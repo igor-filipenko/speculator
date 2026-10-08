@@ -1,6 +1,12 @@
 import { loadConfig } from "./config.js";
 import { closeDbPool } from "./db/db.js";
-import { parseBacktestArgs, printBacktestReport, runBacktest } from "./engine/backtest.js";
+import {
+  parseBacktestArgs,
+  printBacktestReport,
+  printWalkForwardReport,
+  runBacktest,
+  runWalkForward,
+} from "./engine/backtest.js";
 import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
 import { runPaper } from "./engine/paper.js";
 import { positionsUsage, runPositions } from "./engine/positions.js";
@@ -38,7 +44,7 @@ function usage(): never {
   tsx src/index.ts positions close long
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
-  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--verbose]
+  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--verbose] [--monte-carlo <n> | --walk-forward <n>]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
 
 Options:
@@ -50,6 +56,8 @@ Options:
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
   --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
+  --monte-carlo <n> Run N Monte Carlo intra-bar path samples (backtest only; ≥ 1)
+  --walk-forward <n> Walk-forward N-fold temporal validation (backtest only; ≥ 2; excludes --monte-carlo)
 `);
   process.exit(1);
 }
@@ -264,6 +272,22 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     strategyId: flags.strategy ?? config.strategy,
     htf: config.htf,
   });
+
+  if (flags.walkForwardFolds !== undefined) {
+    const results = await runWalkForward({
+      config,
+      strategyManager,
+      forceRefresh: flags.forceRefresh,
+      walkForwardFolds: flags.walkForwardFolds,
+      ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
+      ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
+    });
+    for (const result of results) {
+      printWalkForwardReport(result);
+    }
+    return;
+  }
+
   const results = await runBacktest({
     config,
     strategyManager,

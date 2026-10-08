@@ -27,6 +27,8 @@ import {
   parseBacktestArgs,
   parseBacktestDate,
   runBacktest,
+  runWalkForward,
+  splitCandlesIntoFolds,
   computeBuyHoldEquity,
   roundTripHoldMs,
 } from "./backtest.js";
@@ -643,5 +645,111 @@ describe("PaperPortfolio applyOrder", () => {
     const sell = portfolio.applyOrderSync(sellOrder);
     assert.ok(sell);
     assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100 - 10);
+  });
+});
+
+describe("splitCandlesIntoFolds", () => {
+  it("divides candles into N sequential non-overlapping slices covering all input", () => {
+    const candles = series(10, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 4);
+    // Math.ceil(10/4) = 3 → slices of [3,3,3,1]
+    assert.equal(folds.length, 4);
+    assert.equal(folds[0]!.length, 3);
+    assert.equal(folds[1]!.length, 3);
+    assert.equal(folds[2]!.length, 3);
+    assert.equal(folds[3]!.length, 1);
+    // All candles accounted for, in order
+    const flat = folds.flat();
+    assert.equal(flat.length, candles.length);
+    for (let i = 0; i < flat.length; i++) {
+      assert.strictEqual(flat[i], candles[i]);
+    }
+  });
+
+  it("returns fewer folds than requested when candles < nFolds", () => {
+    const candles = series(3, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 10);
+    assert.equal(folds.length, 3);
+    assert.equal(folds.flat().length, 3);
+  });
+
+  it("returns 1 fold when nFolds = 1", () => {
+    const candles = series(5, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 1);
+    assert.equal(folds.length, 1);
+    assert.equal(folds[0]!.length, 5);
+  });
+});
+
+describe("parseBacktestArgs --walk-forward", () => {
+  it("parses --walk-forward as an integer ≥ 2", () => {
+    assert.equal(parseBacktestArgs(["--walk-forward", "4"]).walkForwardFolds, 4);
+    assert.equal(parseBacktestArgs(["--walk-forward=8"]).walkForwardFolds, 8);
+  });
+
+  it("rejects --walk-forward with value < 2", () => {
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "1"]), /≥ 2/);
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "0"]), /≥ 2/);
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "abc"]), /≥ 2/);
+  });
+
+  it("rejects combining --walk-forward with --monte-carlo", () => {
+    assert.throws(
+      () => parseBacktestArgs(["--monte-carlo", "10", "--walk-forward", "4"]),
+      /cannot be combined/,
+    );
+  });
+});
+
+describe("runWalkForward", () => {
+  it("runs independent replays per fold and returns consistent aggregate metrics", async () => {
+    // 40 candles → 2 folds of 20 each; scripted BUY fires in fold 1 (candle index 5)
+    const candles = series(40, 100, 0.2);
+    const startingCash = 500;
+    const strategy = scriptedStrategy({ buyIndex: 5 });
+
+    const [wfResult] = await runWalkForward({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(strategy),
+      walkForwardFolds: 2,
+      candles,
+    });
+    assert.ok(wfResult);
+    assert.equal(wfResult.folds.length, 2);
+    assert.equal(wfResult.folds[0]!.fold, 1);
+    assert.equal(wfResult.folds[1]!.fold, 2);
+    assert.equal(wfResult.folds[0]!.metrics.candleCount, 20);
+    assert.equal(wfResult.folds[1]!.metrics.candleCount, 20);
+
+    // Verify compound OOS return equals product of fold returns
+    const r1 = wfResult.folds[0]!.metrics.totalReturnPct / 100;
+    const r2 = wfResult.folds[1]!.metrics.totalReturnPct / 100;
+    const expectedCompound = ((1 + r1) * (1 + r2) - 1) * 100;
+    assert.ok(Math.abs(wfResult.oosReturnPct - expectedCompound) < 1e-9);
+
+    // Verify fold 1 is consistent with an independent runBacktest on the same slice
+    const [standalone1] = await runBacktest({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(strategy),
+      candles: candles.slice(0, 20),
+    });
+    assert.ok(standalone1);
+    assert.ok(
+      Math.abs(wfResult.folds[0]!.metrics.totalReturnPct - standalone1.metrics.totalReturnPct) <
+        1e-9,
+    );
+
+    // oosHoldEquity is computed on the full candle range, not per-fold
+    const fullHold = computeBuyHoldEquity(
+      startingCash,
+      candles[0]!.close,
+      candles[39]!.close,
+      "SOL/USDC",
+    );
+    assert.ok(Math.abs(wfResult.oosHoldEquity - fullHold) < 1e-9);
+
+    // positiveFolds and beatsHoldFolds are bounded
+    assert.ok(wfResult.positiveFolds >= 0 && wfResult.positiveFolds <= 2);
+    assert.ok(wfResult.beatsHoldFolds >= 0 && wfResult.beatsHoldFolds <= 2);
   });
 });

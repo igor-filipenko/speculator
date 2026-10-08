@@ -37,6 +37,12 @@ export interface BacktestCliOptions {
    * When set, `BacktestResult.monteCarlo` is printed after the main report.
    */
   monteCarloRuns?: number;
+  /**
+   * Split the replay period into N sequential folds and run independent
+   * replays on each to assess temporal consistency of the strategy.
+   * Mutually exclusive with `monteCarloRuns`. Requires N ≥ 2.
+   */
+  walkForwardFolds?: number;
 }
 
 export interface BacktestCostTotals {
@@ -137,6 +143,67 @@ export interface MonteCarloStats {
   sharpeRatio: MonteCarloDistribution;
   maxDrawdownPct: MonteCarloDistribution;
   profitFactor: MonteCarloDistribution;
+}
+
+// ---------------------------------------------------------------------------
+// Walk-forward validation interfaces
+// ---------------------------------------------------------------------------
+
+/** Metrics and time range for one fold in a walk-forward validation run. */
+export interface WalkForwardFoldResult {
+  /** 1-indexed fold number. */
+  fold: number;
+  fromTime: number;
+  /** Exclusive end (open time of the last bar + 1 s). */
+  toTime: number;
+  metrics: BacktestMetrics;
+}
+
+/**
+ * Walk-forward result for one trading pair: N independent sequential replays
+ * with the same fixed strategy parameters to assess temporal consistency.
+ */
+export interface WalkForwardResult {
+  pair: string;
+  strategy: Strategy;
+  fromTime: number;
+  /** Exclusive end (open time of the last bar + 1 s). */
+  toTime: number;
+  folds: WalkForwardFoldResult[];
+  /** Compounded return across all folds, as if capital were reinvested each fold. */
+  oosReturnPct: number;
+  /** oosReturnPct − full-period buy-and-hold return pct (percentage points). */
+  oosVsHoldPct: number;
+  /** Full-period buy-and-hold ending equity starting from `startingCashUsdc`. */
+  oosHoldEquity: number;
+  oosHoldReturnPct: number;
+  /** Arithmetic mean of per-fold Sharpe ratios. */
+  oosSharpe: number;
+  /** Maximum of per-fold max drawdowns (lower bound on true OOS drawdown). */
+  oosMaxDrawdownPct: number;
+  /** Arithmetic mean of per-fold profit factors (Infinity folds capped at 999). */
+  oosProfitFactor: number;
+  positiveFolds: number;
+  beatsHoldFolds: number;
+  startingCashUsdc: number;
+}
+
+export interface RunWalkForwardOptions {
+  config: AppConfig;
+  strategyManager: StrategyManager;
+  /** Inclusive range start (Unix seconds). When unset, default 90-day lookback. */
+  fromTime?: number;
+  /** Exclusive range end (Unix seconds). Defaults to now. */
+  toTime?: number;
+  forceRefresh?: boolean;
+  /** Number of sequential folds. Must be ≥ 2. */
+  walkForwardFolds: number;
+  /** Inject signal-timeframe candles (skips network/cache; tests). */
+  candles?: Candle[];
+  /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
+  htfCandles?: Candle[];
+  /** Inject 1h candles for volatility; skips 1h fetch when set. */
+  mtfCandles?: Candle[];
 }
 
 export interface RunBacktestOptions {
@@ -241,6 +308,163 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   }
 
   return results;
+}
+
+/**
+ * Walk-forward validation: split the replay window into `options.walkForwardFolds`
+ * sequential folds and run an independent backtest on each fold with the same fixed
+ * strategy parameters.  Returns one {@link WalkForwardResult} per pair.
+ *
+ * HTF/MTF candles spanning the full window are shared across all folds so that
+ * indicator state from earlier folds primes later ones — matching live behaviour
+ * where indicators are computed from all available history.
+ */
+export async function runWalkForward(options: RunWalkForwardOptions): Promise<WalkForwardResult[]> {
+  const { strategyManager } = options;
+  const strategy = strategyManager.getActiveStrategy();
+  const { fromTime, toTime } = resolveReplayWindow(options);
+  const timeframe = strategy.getRequiredCandles().timeframe;
+  const cacheOpts = { forceRefresh: options.forceRefresh ?? false };
+
+  const results: WalkForwardResult[] = [];
+
+  for (const pair of options.config.pairs) {
+    const allCandles =
+      options.candles ??
+      (await loadCachedCandles({
+        symbol: pair.symbol,
+        poolAddress: pair.geckoPoolAddress,
+        timeframe,
+        fromTime,
+        toTime,
+        ...cacheOpts,
+      }));
+
+    if (allCandles.length === 0) {
+      throw new Error(
+        `No candles for ${pair.symbol} (${timeframe}) in ` +
+          `${new Date(fromTime * 1000).toISOString()} → ${new Date(toTime * 1000).toISOString()}`,
+      );
+    }
+
+    // Load HTF/MTF with warmup spanning the full window.  Each fold's replayPair
+    // call receives the same arrays; syncMarketIndicators advances by atTime, so
+    // HTF/MTF history from earlier folds naturally primes later ones.
+    const fullFrom = allCandles[0]!.time;
+    const fullTo = allCandles[allCandles.length - 1]!.time + 1;
+    const skipNetwork = options.candles !== undefined;
+    const htfCandles = await loadHtfCandles({
+      pair,
+      strategyManager,
+      fromTime: fullFrom,
+      toTime: fullTo,
+      injected: options.htfCandles,
+      skipFetch: skipNetwork && options.htfCandles === undefined,
+      cacheOpts,
+    });
+    const mtfCandles = await loadMtfCandles({
+      pair,
+      strategyManager,
+      fromTime: fullFrom,
+      toTime: fullTo,
+      injected: options.mtfCandles,
+      skipFetch: skipNetwork && options.mtfCandles === undefined,
+      cacheOpts,
+    });
+
+    const foldSlices = splitCandlesIntoFolds(allCandles, options.walkForwardFolds);
+    if (foldSlices.length < 2) {
+      throw new Error(
+        `Walk-forward requires at least 2 non-empty folds but got ${foldSlices.length} ` +
+          `(only ${allCandles.length} candles for ${options.walkForwardFolds} folds)`,
+      );
+    }
+
+    const foldResults: WalkForwardFoldResult[] = [];
+    for (let fi = 0; fi < foldSlices.length; fi++) {
+      const fc = foldSlices[fi]!;
+      const foldFrom = fc[0]!.time;
+      const foldTo = fc[fc.length - 1]!.time + 1;
+      const result = await replayPair({
+        pair,
+        strategyManager,
+        candles: fc,
+        htfCandles,
+        mtfCandles,
+        startingCashUsdc: options.config.paperCashUsdc,
+        fromTime: foldFrom,
+        toTime: foldTo,
+      });
+      foldResults.push({
+        fold: fi + 1,
+        fromTime: foldFrom,
+        toTime: foldTo,
+        metrics: result.metrics,
+      });
+    }
+
+    // OOS aggregate ──────────────────────────────────────────────────────────
+    const startingCash = options.config.paperCashUsdc;
+
+    // Compound return: chain fold returns as if capital were reinvested each fold.
+    let oosMultiplier = 1;
+    for (const fr of foldResults) {
+      oosMultiplier *= 1 + fr.metrics.totalReturnPct / 100;
+    }
+    const oosReturnPct = (oosMultiplier - 1) * 100;
+
+    // Full-period B&H
+    const firstClose = allCandles[0]!.close;
+    const lastClose = allCandles[allCandles.length - 1]!.close;
+    const oosHoldEquity = computeBuyHoldEquity(startingCash, firstClose, lastClose, pair.symbol);
+    const oosHoldReturnPct =
+      startingCash > 0 ? ((oosHoldEquity - startingCash) / startingCash) * 100 : 0;
+    const oosVsHoldPct = oosReturnPct - oosHoldReturnPct;
+
+    const n = foldResults.length;
+    const oosSharpe = foldResults.reduce((s, fr) => s + fr.metrics.sharpeRatio, 0) / n;
+    const oosMaxDrawdownPct = Math.max(...foldResults.map((fr) => fr.metrics.maxDrawdownPct));
+    const oosProfitFactor =
+      foldResults.reduce((s, fr) => {
+        return s + (Number.isFinite(fr.metrics.profitFactor) ? fr.metrics.profitFactor : 999);
+      }, 0) / n;
+
+    results.push({
+      pair: pair.symbol,
+      strategy,
+      fromTime: fullFrom,
+      toTime: fullTo,
+      folds: foldResults,
+      oosReturnPct,
+      oosVsHoldPct,
+      oosHoldEquity,
+      oosHoldReturnPct,
+      oosSharpe,
+      oosMaxDrawdownPct,
+      oosProfitFactor,
+      positiveFolds: foldResults.filter((fr) => fr.metrics.totalReturnPct > 0).length,
+      beatsHoldFolds: foldResults.filter((fr) => fr.metrics.vsHoldReturnPct > 0).length,
+      startingCashUsdc: startingCash,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Divide `candles` into `nFolds` roughly equal sequential slices.
+ * The last slice may be slightly shorter when `candles.length` is not divisible by `nFolds`.
+ * Returns fewer slices than requested when `candles.length < nFolds`.
+ */
+export function splitCandlesIntoFolds(candles: Candle[], nFolds: number): Candle[][] {
+  const size = Math.ceil(candles.length / nFolds);
+  const folds: Candle[][] = [];
+  for (let i = 0; i < nFolds; i++) {
+    const start = i * size;
+    if (start >= candles.length) break;
+    folds.push(candles.slice(start, Math.min(start + size, candles.length)));
+  }
+  return folds;
 }
 
 async function replayPair(args: {
@@ -749,6 +973,7 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let toTime: number | undefined;
   let strategy: string | undefined;
   let monteCarloRuns: number | undefined;
+  let walkForwardFolds: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -789,6 +1014,14 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
       i = nextIndex;
       continue;
     }
+    if (arg === "--walk-forward" || arg?.startsWith("--walk-forward=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--walk-forward");
+      const n = parseInt(value, 10);
+      if (!(n >= 2)) throw new Error("--walk-forward requires an integer ≥ 2");
+      walkForwardFolds = n;
+      i = nextIndex;
+      continue;
+    }
     if (arg?.startsWith("-")) {
       throw new Error(`Unknown backtest option: ${arg}`);
     }
@@ -816,6 +1049,12 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
   if (monteCarloRuns !== undefined) {
     result.monteCarloRuns = monteCarloRuns;
+  }
+  if (walkForwardFolds !== undefined) {
+    if (monteCarloRuns !== undefined) {
+      throw new Error("--walk-forward and --monte-carlo cannot be combined");
+    }
+    result.walkForwardFolds = walkForwardFolds;
   }
   return result;
 }
@@ -973,4 +1212,82 @@ function printMonteCarloStats(mc: MonteCarloStats): void {
   console.log(`  Sharpe     ${ratioDist(mc.sharpeRatio)}`);
   console.log(`  Max DD     ${pctDist(mc.maxDrawdownPct)}`);
   console.log(`  Profit fac ${factorDist(mc.profitFactor)}`);
+}
+
+/**
+ * Print a compact walk-forward validation report: per-fold metric table, OOS
+ * aggregate row, and a one-line consistency summary.
+ */
+export function printWalkForwardReport(result: WalkForwardResult): void {
+  const { folds, strategy } = result;
+  const nFolds = folds.length;
+  const totalCandles = folds.reduce((s, f) => s + f.metrics.candleCount, 0);
+  const avgCandles = nFolds > 0 ? Math.round(totalCandles / nFolds) : 0;
+  const fmtDate = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+
+  console.log("");
+  console.log(`=== Walk-Forward ${result.pair} | ${strategy.getDisplayName()} ===`);
+  console.log(
+    `Period: ${fmtDate(result.fromTime)} → ${fmtDate(result.toTime - 1)} | ` +
+      `${nFolds} folds × ~${avgCandles} candles each`,
+  );
+  console.log("");
+
+  // ── Table ──────────────────────────────────────────────────────────────────
+  const COL = { fold: 4, period: 23, candles: 7, ret: 9, vsBh: 12, sharpe: 7, dd: 7, pf: 5 };
+  const SEP = "  ";
+
+  const hdr = [
+    "Fold".padStart(COL.fold),
+    "Period".padEnd(COL.period),
+    "Candles".padStart(COL.candles),
+    "Return".padStart(COL.ret),
+    "vs B&H".padStart(COL.vsBh),
+    "Sharpe".padStart(COL.sharpe),
+    "Max DD".padStart(COL.dd),
+    "PF".padStart(COL.pf),
+  ].join(SEP);
+  console.log(hdr);
+  console.log("─".repeat(hdr.length));
+
+  for (const fr of folds) {
+    const m = fr.metrics;
+    const period = `${fmtDate(fr.fromTime)} → ${fmtDate(fr.toTime - 1)}`;
+    console.log(
+      [
+        String(fr.fold).padStart(COL.fold),
+        period.padEnd(COL.period),
+        String(m.candleCount).padStart(COL.candles),
+        fmtPct(m.totalReturnPct).padStart(COL.ret),
+        (fmtSignedPct(m.vsHoldReturnPct) + " pp").padStart(COL.vsBh),
+        fmtRatio(m.sharpeRatio).padStart(COL.sharpe),
+        (m.maxDrawdownPct.toFixed(2) + "%").padStart(COL.dd),
+        fmtFactor(m.profitFactor).padStart(COL.pf),
+      ].join(SEP),
+    );
+  }
+
+  console.log("─".repeat(hdr.length));
+  console.log(
+    [
+      "OOS".padStart(COL.fold),
+      `${nFolds}-fold compound`.padEnd(COL.period),
+      String(totalCandles).padStart(COL.candles),
+      fmtPct(result.oosReturnPct).padStart(COL.ret),
+      (fmtSignedPct(result.oosVsHoldPct) + " pp").padStart(COL.vsBh),
+      fmtRatio(result.oosSharpe).padStart(COL.sharpe),
+      (result.oosMaxDrawdownPct.toFixed(2) + "%").padStart(COL.dd),
+      fmtFactor(result.oosProfitFactor).padStart(COL.pf),
+    ].join(SEP),
+  );
+  console.log("");
+
+  const worstFold = folds.reduce((a, b) =>
+    a.metrics.vsHoldReturnPct < b.metrics.vsHoldReturnPct ? a : b,
+  );
+  console.log(
+    `Consistency: ${result.beatsHoldFolds}/${nFolds} folds beat B&H | ` +
+      `${result.positiveFolds}/${nFolds} positive returns | ` +
+      `Worst: fold ${worstFold.fold} (${fmtSignedPct(worstFold.metrics.vsHoldReturnPct)} pp vs B&H)`,
+  );
 }

@@ -74,10 +74,30 @@ export interface BacktestMetrics {
   /** Mean completed round-trip (close − open), milliseconds. 0 when none closed. */
   roundTripAvgMs: number;
   maxDrawdownPct: number;
+  /**
+   * Longest continuous period below the equity peak, in milliseconds.
+   * 0 when there was no drawdown.
+   */
+  maxDrawdownDurationMs: number;
   costs: BacktestCostTotals;
   candleCount: number;
   fromTime: number;
   toTime: number;
+  /**
+   * Annualized Sharpe ratio (risk-free rate = 0), computed from per-bar equity returns.
+   * 0 when fewer than 2 bars or zero standard deviation.
+   */
+  sharpeRatio: number;
+  /**
+   * Annualized Sortino ratio (target return = 0, downside deviation only).
+   * 0 when no negative return bars.
+   */
+  sortinoRatio: number;
+  /**
+   * Sum of winning round-trip P&L divided by absolute sum of losing P&L.
+   * 0 when no completed round-trips exist. Infinity when all round-trips are wins.
+   */
+  profitFactor: number;
 }
 
 export interface BacktestResult {
@@ -214,6 +234,10 @@ async function replayPair(args: {
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks = intraBarTicks(candle, barIntervalSec, positionSide);
 
+    // Volume-weighted slippage: set bar USDC volume once per candle.
+    // GeckoTerminal volume field is in base token units; multiply by close for USDC equivalent.
+    exchange.setCandleVolumeUsdc(candle.volume * candle.close);
+
     for (const tick of ticks) {
       const window = closed.concat(tick.forming);
       const price = tick.price;
@@ -297,6 +321,8 @@ async function replayPair(args: {
   const holdReturnPct =
     startingCashUsdc > 0 ? ((holdEquity - startingCashUsdc) / startingCashUsdc) * 100 : 0;
 
+  const riskMetrics = computeRiskMetrics(equityCurve, snap.trades, barIntervalSec);
+
   return {
     metrics: {
       pair: pair.symbol,
@@ -319,10 +345,14 @@ async function replayPair(args: {
       roundTripMaxMs: holdStats.maxMs,
       roundTripAvgMs: holdStats.avgMs,
       maxDrawdownPct,
+      maxDrawdownDurationMs: riskMetrics.maxDrawdownDurationMs,
       costs,
       candleCount: candles.length,
       fromTime: args.fromTime,
       toTime: args.toTime,
+      sharpeRatio: riskMetrics.sharpeRatio,
+      sortinoRatio: riskMetrics.sortinoRatio,
+      profitFactor: riskMetrics.profitFactor,
     },
     trades: snap.trades,
     equityCurve,
@@ -438,6 +468,148 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
   totals.perpsFeeUsdc += trade.perpsFeeUsdc ?? 0;
 }
 
+// ---------------------------------------------------------------------------
+// Risk-adjusted performance metrics
+// ---------------------------------------------------------------------------
+
+const SECONDS_PER_YEAR = 365 * 24 * 3600;
+
+interface RiskMetrics {
+  sharpeRatio: number;
+  sortinoRatio: number;
+  profitFactor: number;
+  maxDrawdownDurationMs: number;
+}
+
+/**
+ * Compute Sharpe ratio, Sortino ratio, profit factor, and max drawdown duration
+ * from a bar-level equity curve and completed round-trip trades.
+ *
+ * Sharpe / Sortino are annualized assuming `barIntervalSec`-spaced equity samples.
+ * Risk-free rate is 0.
+ */
+export function computeRiskMetrics(
+  equityCurve: readonly number[],
+  trades: readonly Trade[],
+  barIntervalSec: number,
+): RiskMetrics {
+  return {
+    sharpeRatio: computeSharpeRatio(equityCurve, barIntervalSec),
+    sortinoRatio: computeSortinoRatio(equityCurve, barIntervalSec),
+    profitFactor: computeProfitFactor(trades),
+    maxDrawdownDurationMs: computeMaxDrawdownDurationMs(equityCurve, barIntervalSec),
+  };
+}
+
+/**
+ * Annualized Sharpe ratio from per-bar equity returns (risk-free rate = 0).
+ * Returns 0 when there are fewer than 2 bars or standard deviation is zero.
+ */
+function computeSharpeRatio(equityCurve: readonly number[], barIntervalSec: number): number {
+  const returns = barReturns(equityCurve);
+  if (returns.length === 0) return 0;
+  const { mean, stdDev } = meanAndStd(returns);
+  if (!(stdDev > 0)) return 0;
+  const barsPerYear = SECONDS_PER_YEAR / barIntervalSec;
+  return (mean / stdDev) * Math.sqrt(barsPerYear);
+}
+
+/**
+ * Annualized Sortino ratio from per-bar equity returns (target = 0).
+ * Downside deviation uses the same denominator as Sharpe (total N of bars),
+ * matching the standard Sortino formula.
+ * Returns 0 when there are no negative-return bars.
+ */
+function computeSortinoRatio(equityCurve: readonly number[], barIntervalSec: number): number {
+  const returns = barReturns(equityCurve);
+  if (returns.length === 0) return 0;
+  const { mean } = meanAndStd(returns);
+  // Downside variance: sum(min(r, 0)^2) / N
+  const sumDownSq = returns.reduce((s, r) => s + (r < 0 ? r * r : 0), 0);
+  const downsideDev = Math.sqrt(sumDownSq / returns.length);
+  if (!(downsideDev > 0)) return 0;
+  const barsPerYear = SECONDS_PER_YEAR / barIntervalSec;
+  return (mean / downsideDev) * Math.sqrt(barsPerYear);
+}
+
+/**
+ * Profit factor: sum of winning round-trip P&L / |sum of losing round-trip P&L|.
+ * Returns 0 when no completed round-trips exist.
+ * Returns Infinity when every completed round-trip is a winner.
+ */
+function computeProfitFactor(trades: readonly Trade[]): number {
+  let sumWins = 0;
+  let sumLosses = 0;
+  for (const t of trades) {
+    if (t.realizedPnl == null) continue;
+    if (t.realizedPnl > 0) {
+      sumWins += t.realizedPnl;
+    } else if (t.realizedPnl < 0) {
+      sumLosses += Math.abs(t.realizedPnl);
+    }
+  }
+  if (sumWins === 0 && sumLosses === 0) return 0;
+  if (sumLosses === 0) return Infinity;
+  return sumWins / sumLosses;
+}
+
+/**
+ * Longest continuous period below the equity peak, in milliseconds.
+ * Returns 0 when there was never a drawdown.
+ */
+function computeMaxDrawdownDurationMs(
+  equityCurve: readonly number[],
+  barIntervalSec: number,
+): number {
+  let peak = 0;
+  let drawdownStartBar = -1;
+  let maxDurationMs = 0;
+
+  for (let i = 0; i < equityCurve.length; i++) {
+    const eq = equityCurve[i]!;
+    if (eq >= peak) {
+      // Recover or new peak: close any open drawdown window.
+      if (drawdownStartBar >= 0) {
+        const durationMs = (i - drawdownStartBar) * barIntervalSec * 1000;
+        if (durationMs > maxDurationMs) maxDurationMs = durationMs;
+        drawdownStartBar = -1;
+      }
+      peak = eq;
+    } else {
+      // Below peak: start drawdown window if not already started.
+      if (drawdownStartBar < 0) drawdownStartBar = i;
+    }
+  }
+
+  // Handle an ongoing drawdown that reaches the end of the curve.
+  if (drawdownStartBar >= 0) {
+    const durationMs = (equityCurve.length - drawdownStartBar) * barIntervalSec * 1000;
+    if (durationMs > maxDurationMs) maxDurationMs = durationMs;
+  }
+
+  return maxDurationMs;
+}
+
+/** Per-bar log-like simple returns from an equity curve. */
+function barReturns(equityCurve: readonly number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < equityCurve.length; i++) {
+    const prev = equityCurve[i - 1]!;
+    if (prev > 0) {
+      out.push((equityCurve[i]! - prev) / prev);
+    }
+  }
+  return out;
+}
+
+/** Population mean and standard deviation of an array. */
+function meanAndStd(values: number[]): { mean: number; stdDev: number } {
+  if (values.length === 0) return { mean: 0, stdDev: 0 };
+  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  return { mean, stdDev: Math.sqrt(variance) };
+}
+
 /** Parse CLI flags for `backtest`. */
 export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let forceRefresh = false;
@@ -536,7 +708,14 @@ export async function printBacktestReport(
     `Round-trip hold: min ${fmtDuration(metrics.roundTripMinMs)} | ` +
       `max ${fmtDuration(metrics.roundTripMaxMs)} | avg ${fmtDuration(metrics.roundTripAvgMs)}`,
   );
-  console.log(`Max drawdown: ${metrics.maxDrawdownPct.toFixed(2)}%`);
+  console.log(
+    `Max drawdown: ${metrics.maxDrawdownPct.toFixed(2)}% | duration: ${fmtDuration(metrics.maxDrawdownDurationMs)}`,
+  );
+  console.log(
+    `Risk metrics — Sharpe: ${fmtRatio(metrics.sharpeRatio)} | ` +
+      `Sortino: ${fmtRatio(metrics.sortinoRatio)} | ` +
+      `Profit factor: ${fmtFactor(metrics.profitFactor)}`,
+  );
   console.log(
     `Simulated costs — slippage: ${costs.slippageUsdc.toFixed(4)} | ` +
       `pool fees: ${costs.poolFeeUsdc.toFixed(4)} | priority: ${costs.priorityFeeUsdc.toFixed(4)} | ` +
@@ -617,4 +796,17 @@ function fmtSignedPct(n: number): string {
 function fmtSignedUsdc(n: number): string {
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(2)} USDC`;
+}
+
+/** Format a ratio like Sharpe/Sortino to 2 decimal places. */
+function fmtRatio(n: number): string {
+  if (!Number.isFinite(n)) return "∞";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
+}
+
+/** Format profit factor; Infinity displays as ">999". */
+function fmtFactor(n: number): string {
+  if (!Number.isFinite(n)) return ">999";
+  return n.toFixed(2);
 }

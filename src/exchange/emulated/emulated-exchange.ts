@@ -14,12 +14,23 @@ import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 /**
  * Offline exchange: fills from candle mid + Jupiter-like fee/slippage model.
  * Call {@link setMidPrice} before each tick's spotPrice/execute.
+ * Optionally call {@link setCandleVolumeUsdc} once per bar to enable volume-weighted slippage.
  */
 export class EmulatedExchange implements Exchange {
   private mid = 0;
+  private candleVolumeUsdc = 0;
 
   setMidPrice(mid: number): void {
     this.mid = mid;
+  }
+
+  /**
+   * Set the current bar's USDC volume (base token volume × close price).
+   * Called once per candle before the intra-bar tick loop in backtest replay.
+   * Enables AMM price-impact slippage in {@link execute}.
+   */
+  setCandleVolumeUsdc(volumeUsdc: number): void {
+    this.candleVolumeUsdc = volumeUsdc > 0 ? volumeUsdc : 0;
   }
 
   /** Offline snapshot. Backtest does not call Jupiter. */
@@ -50,10 +61,18 @@ export class EmulatedExchange implements Exchange {
 
     const tier = liquidityTierForPair(pair.symbol);
     const perps = command.intent === "open-short" || command.intent === "close-short";
+    const opens = command.intent === "open-long" || command.intent === "open-short";
+
+    // Estimate trade size in USDC for volume-impact slippage.
+    // Opens: the quote budget; closes: baseSize × current mid.
+    const tradeUsdc = opens ? (command.quoteBudgetUsdc ?? 0) : (command.baseSize ?? 0) * this.mid;
+
     const emulated = emulateFillPrice({
       side: fillSide(command.intent),
       close: this.mid,
       tier,
+      tradeUsdc,
+      candleVolumeUsdc: this.candleVolumeUsdc,
       ...(perps ? { venue: "perps" as const } : {}),
     });
     const { fillPrice, priorityFeeUsdc, breakdown } = emulated;
@@ -65,7 +84,6 @@ export class EmulatedExchange implements Exchange {
       ...(breakdown.perps != null ? { perps: breakdown.perps } : {}),
     };
 
-    const opens = command.intent === "open-long" || command.intent === "open-short";
     if (opens) {
       const budget = command.quoteBudgetUsdc ?? 0;
       const spendable = budget - priorityFeeUsdc;

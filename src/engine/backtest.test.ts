@@ -313,7 +313,15 @@ describe("runBacktest", () => {
     assert.equal(Math.floor(buy.at.getTime() / 1000), buyBar.time);
     const firstTick = intraBarPrices(buyBar)[0];
     assert.ok(firstTick);
-    const emulated = emulateFillPrice({ side: "BUY", close: firstTick, tier: "liquid" });
+    // Volume-weighted slippage: pass the same candleVolumeUsdc the exchange saw.
+    // No stop set → full cash budget is the tradeUsdc.
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: firstTick,
+      tier: "liquid",
+      tradeUsdc: startingCash,
+      candleVolumeUsdc: buyBar.volume * buyBar.close,
+    });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
 
     const midSize = startingCash / firstTick;
@@ -544,7 +552,15 @@ describe("runBacktest", () => {
     assert.ok(result);
     const buy = result.trades.find((t) => t.side === "BUY");
     assert.ok(buy);
-    const emulated = emulateFillPrice({ side: "BUY", close: wickBar.low, tier: "liquid" });
+    // Volume-weighted slippage: pass the same candleVolumeUsdc the exchange saw.
+    // No stop set → full starting cash (1000) is the tradeUsdc.
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: wickBar.low,
+      tier: "liquid",
+      tradeUsdc: 1000,
+      candleVolumeUsdc: wickBar.volume * wickBar.close,
+    });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
     assert.ok(buy.price < wickBar.close);
   });

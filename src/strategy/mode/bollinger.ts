@@ -13,7 +13,7 @@ import type {
   Trend,
   Volatility,
 } from "../../types.js";
-import { atr, bollinger, dmi, ema, rsi } from "../indicators.js";
+import { atr, bollinger, dmi, rsi } from "../indicators.js";
 import { buildBollingerSvg } from "./bollinger-svg.js";
 
 export interface BollingerParams {
@@ -46,17 +46,6 @@ export interface BollingerParams {
    * cannot book a "TP" at a loss. ATR still stops failed reversion.
    */
   minExitAboveEntryPct: number;
-  /** Fast EMA for the 15m work-trend gate. */
-  workTrendEmaFast: number;
-  /** Slow EMA for the 15m work-trend gate. */
-  workTrendEmaSlow: number;
-  /**
-   * ADX floor for a tradable 15m downtrend (stacked oversold reclaim).
-   * Below this, close under the fast EMA with -DI > +DI is treated as drift and skipped.
-   */
-  workTrendAdxFlatMax: number;
-  /** When false, 15m drift does not block a reclaim or an upper rejection. */
-  driftFilter: boolean;
   /** Wilder RSI period (oversold gate on lower-band reclaim). */
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
@@ -166,10 +155,6 @@ export function bollingerParamsFor(
     minBandToMidPct: MIN_BAND_TO_MID[trend][volatility],
     minReclaimDepth: MIN_RECLAIM_DEPTH[trend][volatility],
     minExitAboveEntryPct: 0.001,
-    workTrendEmaFast: 20,
-    workTrendEmaSlow: 50,
-    workTrendAdxFlatMax: 20,
-    driftFilter: false,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
     minRewardRisk: 0.2,
@@ -217,8 +202,6 @@ export interface BollingerInput {
  * and band→mid must still cover the open+close fee.
  * Above `adxMax` a long still passes when +DI > −DI, and a short when −DI > +DI.
  * Regime / ADX / RSI do not block exits.
- * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
- * is allowed; other below-fast-EMA sells are drift and skipped unless `driftFilter` is false.
  * An opening signal sets `tpPrices` to the middle band.
  * After `timeStopBars` closed bars, exit when the last close is at least
  * `timeStopAtr` × ATR against the entry. Wicks do not count.
@@ -236,8 +219,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const atrSeries = atr(signalCandles, strategy.atrPeriod);
   const dmiNow = dmi(signalCandles, strategy.adxPeriod);
   const rsiSeries = rsi(closes, strategy.rsiPeriod);
-  const workEmaFast = ema(closes, strategy.workTrendEmaFast);
-  const workEmaSlow = ema(closes, strategy.workTrendEmaSlow);
 
   const i = closes.length - 1;
   const prev = i - 1;
@@ -251,8 +232,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   const plusDi = dmiNow.plusDi[i];
   const minusDi = dmiNow.minusDi[i];
   const rsiNow = rsiSeries[i];
-  const emaFastNow = workEmaFast[i];
-  const emaSlowNow = workEmaSlow[i];
   const lastBar = signalCandles[i];
 
   const meta: NonNullable<Signal["meta"]> = {};
@@ -438,22 +417,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
     } else if (rsiNow >= strategy.rsiBuyMax) {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
-    } else if (
-      strategy.driftFilter &&
-      isWorkDriftDown({
-        close,
-        emaFast: emaFastNow,
-        emaSlow: emaSlowNow,
-        adxNow,
-        plusDi,
-        minusDi,
-        adxFlatMax: strategy.workTrendAdxFlatMax,
-      })
-    ) {
-      reason =
-        `Lower reclaim ignored: 15m drift down ` +
-        `(ADX ${fmt(adxNow)} < ${strategy.workTrendAdxFlatMax} or EMAs not stacked oversold; ` +
-        `+DI ${fmt(plusDi ?? 0)} −DI ${fmt(minusDi ?? 0)})`;
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
@@ -516,22 +479,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
           `(close ${fmt(close)} vs upper ${fmt(bbUpper)} → mid ${fmt(bbMid)})`;
       } else if (rsiNow <= rsiShortMin) {
         reason = `Upper rejection ignored: RSI ${fmt(rsiNow)} <= ${fmt(rsiShortMin)} (not overbought)`;
-      } else if (
-        strategy.driftFilter &&
-        isWorkDriftUp({
-          close,
-          emaFast: emaFastNow,
-          emaSlow: emaSlowNow,
-          adxNow,
-          plusDi,
-          minusDi,
-          adxFlatMax: strategy.workTrendAdxFlatMax,
-        })
-      ) {
-        reason =
-          `Upper rejection ignored: 15m drift up ` +
-          `(ADX ${fmt(adxNow)} < ${strategy.workTrendAdxFlatMax} or EMAs not stacked overbought; ` +
-          `+DI ${fmt(plusDi ?? 0)} −DI ${fmt(minusDi ?? 0)})`;
       } else {
         side = "SELL";
         const how = wickReject ? "wick rejection" : "close rejection";
@@ -567,7 +514,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid or on an adverse time stop. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear or 1h high vol; exit at mid or on an adverse time stop. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
@@ -586,8 +533,8 @@ export class BollingerStrategy implements Strategy {
   }
 
   getRequiredCandles(): RequiredCandles {
-    const { timeframe, period, atrPeriod, adxPeriod, rsiPeriod, workTrendEmaSlow } = this.params;
-    const warm = Math.max(period, atrPeriod, adxPeriod * 2, rsiPeriod, workTrendEmaSlow) + 5;
+    const { timeframe, period, atrPeriod, adxPeriod, rsiPeriod } = this.params;
+    const warm = Math.max(period, atrPeriod, adxPeriod * 2, rsiPeriod) + 5;
     return {
       timeframe,
       count: Math.max(warm, 160),
@@ -685,54 +632,6 @@ function adxGateNote(
   return side === "long"
     ? `ADX ${fmt(adxNow)} > ${adxMax} but +DI ${fmt(plusDi)} > −DI ${fmt(minusDi)}`
     : `ADX ${fmt(adxNow)} > ${adxMax} but −DI ${fmt(minusDi)} > +DI ${fmt(plusDi)}`;
-}
-
-/**
- * Skip 15m lower-band sells that are drift/chop, not a stacked oversold trend.
- * Stacked oversold (close < EMA fast < slow, -DI > +DI, ADX >= floor) is the
- * mean-reversion setup and is allowed.
- */
-export function isWorkDriftDown(input: {
-  close: number;
-  emaFast: number | null | undefined;
-  emaSlow: number | null | undefined;
-  adxNow: number | null | undefined;
-  plusDi: number | null | undefined;
-  minusDi: number | null | undefined;
-  adxFlatMax: number;
-}): boolean {
-  const { close, emaFast, emaSlow, adxNow, plusDi, minusDi, adxFlatMax } = input;
-  if (emaFast == null || emaSlow == null || adxNow == null || plusDi == null || minusDi == null) {
-    return false;
-  }
-  const stackedOversold =
-    close < emaFast && emaFast < emaSlow && minusDi > plusDi && adxNow >= adxFlatMax;
-  if (stackedOversold) {
-    return false;
-  }
-  return close < emaFast && (minusDi > plusDi || emaFast < emaSlow);
-}
-
-/** Mirror of {@link isWorkDriftDown} for upper-band shorts. */
-export function isWorkDriftUp(input: {
-  close: number;
-  emaFast: number | null | undefined;
-  emaSlow: number | null | undefined;
-  adxNow: number | null | undefined;
-  plusDi: number | null | undefined;
-  minusDi: number | null | undefined;
-  adxFlatMax: number;
-}): boolean {
-  const { close, emaFast, emaSlow, adxNow, plusDi, minusDi, adxFlatMax } = input;
-  if (emaFast == null || emaSlow == null || adxNow == null || plusDi == null || minusDi == null) {
-    return false;
-  }
-  const stackedOverbought =
-    close > emaFast && emaFast > emaSlow && plusDi > minusDi && adxNow >= adxFlatMax;
-  if (stackedOverbought) {
-    return false;
-  }
-  return close > emaFast && (plusDi > minusDi || emaFast > emaSlow);
 }
 
 /**

@@ -7,7 +7,6 @@ import {
   bollingerParamsFor,
   bollingerStopPrice,
   isAdxTrendAgainst,
-  isWorkDriftDown,
   type BollingerInput,
   type BollingerParams,
 } from "./bollinger.js";
@@ -27,8 +26,6 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
     adxMax: 100,
     minBandToMidPct: 0.001,
     minReclaimDepth: 0,
-    workTrendEmaFast: 1000,
-    workTrendEmaSlow: 1000,
     rsiPeriod: 5,
     rsiBuyMax: 100,
     diDomRatio: 0,
@@ -93,7 +90,6 @@ function rejectionFilters(): BollingerParams {
     minBandToMidPct: 0.001,
     minReclaimDepth: 0,
     rsiBuyMax: 100,
-    driftFilter: false,
   });
 }
 
@@ -709,56 +705,6 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /RSI/);
   });
 
-  it("lets a drifted reclaim through when driftFilter is false", () => {
-    const start = 1_700_000_000;
-    const candles: Candle[] = [];
-    for (let i = 0; i < 70; i++) {
-      const price = 100 + i * 0.2;
-      candles.push(bar(start + i * INTERVAL, price));
-    }
-    const prev = candles[candles.length - 1]!.close;
-    const t = start + 70 * INTERVAL;
-    candles.push({
-      time: t,
-      open: prev,
-      high: prev + 0.2,
-      low: prev - 3.2,
-      close: prev - 3,
-      volume: 10,
-    });
-    candles.push({
-      time: t + INTERVAL,
-      open: prev - 3,
-      high: prev - 2.05,
-      low: prev - 3.15,
-      close: prev - 2.2,
-      volume: 10,
-    });
-    const strategy = looseFilters({
-      workTrendEmaFast: 8,
-      workTrendEmaSlow: 21,
-      workTrendAdxFlatMax: 20,
-      driftFilter: true,
-    });
-    const last = candles[candles.length - 1]!;
-    const blocked = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy,
-      price: last.close,
-    });
-    assert.equal(blocked.side, "HOLD", blocked.reason);
-    assert.match(blocked.reason, /drift down/);
-
-    const passed = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: { ...strategy, driftFilter: false },
-      price: last.close,
-    });
-    assert.equal(passed.side, "BUY", passed.reason);
-  });
-
   it("ignores reclaim when depth is below minReclaimDepth", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({
@@ -781,10 +727,6 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").minBandToMidPct, 0.0025);
     assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.1);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
-    assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
-    assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
-    assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
-    assert.equal(bollingerParamsFor("flat", "low").driftFilter, false);
     assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);
@@ -834,37 +776,6 @@ describe("isAdxTrendAgainst", () => {
   });
 });
 
-describe("isWorkDriftDown", () => {
-  const stackedOversold = {
-    close: 99,
-    emaFast: 100,
-    emaSlow: 101,
-    adxNow: 22,
-    plusDi: 10,
-    minusDi: 16,
-    adxFlatMax: 18,
-  };
-
-  it("allows a stacked 15m oversold trend (the MR setup)", () => {
-    assert.equal(isWorkDriftDown(stackedOversold), false);
-  });
-
-  it("blocks close below fast EMA when ADX is too low to count as oversold", () => {
-    assert.equal(isWorkDriftDown({ ...stackedOversold, adxNow: 12 }), true);
-  });
-
-  it("blocks a non-stacked dip with -DI > +DI", () => {
-    assert.equal(
-      isWorkDriftDown({ ...stackedOversold, emaFast: 101, emaSlow: 100, adxNow: 26 }),
-      true,
-    );
-  });
-
-  it("does not block when indicators are not warm", () => {
-    assert.equal(isWorkDriftDown({ ...stackedOversold, emaSlow: undefined }), false);
-  });
-});
-
 describe("diDomRatio gate", () => {
   const fees = { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 };
   /** All gates disabled except diDomRatio. */
@@ -874,7 +785,6 @@ describe("diDomRatio gate", () => {
       minBandToMidPct: 0.001,
       minReclaimDepth: 0,
       rsiBuyMax: 100,
-      driftFilter: false,
       diDomRatio,
     });
   }

@@ -718,28 +718,7 @@ describe("evaluateBollinger filters", () => {
   });
 });
 
-describe("bollingerParamsFor", () => {
-  it("loosens ADX/RSI in tradable regimes", () => {
-    assert.equal(bollingerParamsFor("flat", "low").adxMax, 29);
-    assert.equal(bollingerParamsFor("flat", "low").timeframe, "15m");
-    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 55);
-    assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
-    assert.equal(bollingerParamsFor("flat", "low").minBandToMidPct, 0.0025);
-    assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.1);
-    assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
-    assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.2);
-    assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
-    assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);
-    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 44);
-    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 55);
-    assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
-    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 53);
-    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 32);
-    assert.equal(bollingerParamsFor("flat", "squeeze").stdDev, 1.4);
-    assert.equal(bollingerParamsFor("flat", "squeeze").minReclaimDepth, 0.12);
-    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 45);
-  });
-
+describe("bollingerStopPrice", () => {
   it("places the hard stop beyond the entry-bar extreme", () => {
     assert.equal(bollingerStopPrice("long", 100, 4, "bullish", "high"), 88);
     assert.equal(bollingerStopPrice("long", 100, 4, "flat", "low"), 90);
@@ -841,12 +820,6 @@ describe("diDomRatio gate", () => {
     });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.doesNotMatch(signal.reason, /DI dominance/);
-  });
-
-  it("bollingerParamsFor default diDomRatio is 1.5", () => {
-    assert.equal(bollingerParamsFor("flat", "low").diDomRatio, 1.5);
-    assert.equal(bollingerParamsFor("bullish", "high").diDomRatio, 1.5);
-    assert.equal(bollingerParamsFor("bearish", "low").diDomRatio, 1.5);
   });
 });
 

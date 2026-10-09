@@ -71,6 +71,14 @@ export interface BollingerParams {
   timeStopBars: number;
   /** Last closed bar must be at least this many ATRs against the entry. */
   timeStopAtr: number;
+  /**
+   * DI dominance ratio gate — always-active, independent of `adxMax`.
+   * A BUY (long open) is blocked when −DI > +DI × diDomRatio (bearish dominance).
+   * A SELL (short open) is blocked when +DI > −DI × diDomRatio (bullish dominance).
+   * Symmetric: same threshold suppresses counter-trend entries in both directions.
+   * 0 = disabled. Useful range: 1.3–2.0 (1.5 ≈ one DI leads by 50 %).
+   */
+  diDomRatio: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -84,7 +92,7 @@ const STD_DEV: Record<Trend, Record<Volatility, number>> = {
 /** Looser ADX in tradable regimes so 15m dips still count as mean-reversion. */
 const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
-  flat: { high: 32, low: 39, squeeze: 32, unknown: 36 },
+  flat: { high: 32, low: 29, squeeze: 32, unknown: 36 },
   bearish: { high: 29, low: 29, squeeze: 29, unknown: 29 },
   unknown: { high: 29, low: 29, squeeze: 29, unknown: 29 },
 };
@@ -164,9 +172,10 @@ export function bollingerParamsFor(
     driftFilter: false,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
-    minRewardRisk: 0.1,
+    minRewardRisk: 0.2,
     timeStopBars: 2,
     timeStopAtr: 1,
+    diDomRatio: 1.5,
   };
 }
 
@@ -412,6 +421,15 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       })
     ) {
       reason = adxTrendAgainstReason("long", adxNow, strategy.adxMax, plusDi, minusDi);
+    } else if (
+      strategy.diDomRatio > 0 &&
+      plusDi != null &&
+      minusDi != null &&
+      minusDi > plusDi * strategy.diDomRatio
+    ) {
+      reason =
+        `Lower reclaim ignored: bearish DI dominance ` +
+        `(−DI ${fmt(minusDi)} > +DI ${fmt(plusDi)} × ${strategy.diDomRatio})`;
     } else if (bandToMidPct < strategy.minBandToMidPct) {
       reason = `Lower reclaim ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
     } else if (reclaimDepth < strategy.minReclaimDepth) {
@@ -478,6 +496,15 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         })
       ) {
         reason = adxTrendAgainstReason("short", adxNow, strategy.adxMax, plusDi, minusDi);
+      } else if (
+        strategy.diDomRatio > 0 &&
+        plusDi != null &&
+        minusDi != null &&
+        plusDi > minusDi * strategy.diDomRatio
+      ) {
+        reason =
+          `Upper rejection ignored: bullish DI dominance ` +
+          `(+DI ${fmt(plusDi)} > −DI ${fmt(minusDi)} × ${strategy.diDomRatio})`;
       } else if (bandToMidPct < minShortBand) {
         reason =
           shortRoundTripPct > strategy.minBandToMidPct

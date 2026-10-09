@@ -31,6 +31,7 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
     workTrendEmaSlow: 1000,
     rsiPeriod: 5,
     rsiBuyMax: 100,
+    diDomRatio: 0,
     ...overrides,
   });
 }
@@ -141,6 +142,44 @@ function trendThenUpperWick(direction: "up" | "down"): Candle[] {
     high: base + 2.5,
     low: base - 0.2,
     close: base,
+    volume: 10,
+  });
+  return candles;
+}
+
+/**
+ * Mirror of {@link trendThenUpperWick}: 40-bar trend then an immediate lower-band wick
+ * reclaim (no tight range — keeps BB wide so the hammer stays below mid).
+ * "up" → uptrend (+DI dominant), "down" → downtrend (-DI dominant).
+ */
+function trendThenLowerWick(direction: "up" | "down"): Candle[] {
+  const start = 1_700_000_000;
+  const interval = 15 * 60;
+  const candles: Candle[] = [];
+  let price = direction === "up" ? 50 : 150;
+  const step = direction === "up" ? 1.1 : -1.1;
+  for (let i = 0; i < 40; i++) {
+    const open = price;
+    price += step;
+    const close = price;
+    candles.push({
+      time: start + candles.length * interval,
+      open,
+      high: Math.max(open, close) + 0.15,
+      low: Math.min(open, close) - 0.05,
+      close,
+      volume: 10,
+    });
+  }
+  // Hammer directly after the trend — BB is still wide, close stays below mid
+  const base = candles[candles.length - 1]!.close;
+  const t = candles[candles.length - 1]!.time;
+  candles.push({
+    time: t + interval,
+    open: base,
+    high: base + 0.2,
+    low: base - 4.5, // pierce the lower band
+    close: base + 0.8, // reclaim: above lower, well below mid
     volume: 10,
   });
   return candles;
@@ -735,7 +774,7 @@ describe("evaluateBollinger filters", () => {
 
 describe("bollingerParamsFor", () => {
   it("loosens ADX/RSI in tradable regimes", () => {
-    assert.equal(bollingerParamsFor("flat", "low").adxMax, 39);
+    assert.equal(bollingerParamsFor("flat", "low").adxMax, 29);
     assert.equal(bollingerParamsFor("flat", "low").timeframe, "15m");
     assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 55);
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
@@ -823,6 +862,81 @@ describe("isWorkDriftDown", () => {
 
   it("does not block when indicators are not warm", () => {
     assert.equal(isWorkDriftDown({ ...stackedOversold, emaSlow: undefined }), false);
+  });
+});
+
+describe("diDomRatio gate", () => {
+  const fees = { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 };
+  /** All gates disabled except diDomRatio. */
+  function diDomBase(diDomRatio: number): BollingerParams {
+    return baseParams({
+      adxMax: 100,
+      minBandToMidPct: 0.001,
+      minReclaimDepth: 0,
+      rsiBuyMax: 100,
+      driftFilter: false,
+      diDomRatio,
+    });
+  }
+
+  it("blocks SELL when +DI dominates even below adxMax (bullish dominance)", () => {
+    // trendThenUpperWick("up") → uptrend → +DI >> −DI
+    const candles = trendThenUpperWick("up");
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const common = { pair: "SOL/USDC", candles, price: last.close, at, perpsFees: fees };
+
+    // diDomRatio disabled → SELL fires (adxMax:100 doesn't block low-ADX trend)
+    const passed = evalBb({ ...common, strategy: diDomBase(0) });
+    assert.equal(passed.side, "SELL", passed.reason);
+    assert.ok((passed.meta?.plusDi ?? 0) > (passed.meta?.minusDi ?? 0));
+
+    // diDomRatio: 1.0 → +DI > −DI × 1.0 is always true when +DI dominant → blocks
+    const blocked = evalBb({ ...common, strategy: diDomBase(1.0) });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /bullish DI dominance/);
+  });
+
+  it("blocks BUY when −DI dominates even below adxMax (bearish dominance)", () => {
+    // trendThenLowerWick("down") → downtrend → −DI >> +DI
+    const candles = trendThenLowerWick("down");
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const common = { pair: "SOL/USDC", candles, price: last.close, at };
+
+    // diDomRatio disabled → BUY fires
+    const passed = evalBb({ ...common, strategy: diDomBase(0) });
+    assert.equal(passed.side, "BUY", passed.reason);
+    assert.ok((passed.meta?.minusDi ?? 0) > (passed.meta?.plusDi ?? 0));
+
+    // diDomRatio: 1.0 → −DI > +DI × 1.0 → blocks BUY
+    const blocked = evalBb({ ...common, strategy: diDomBase(1.0) });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /bearish DI dominance/);
+  });
+
+  it("does not block when DI values are roughly equal (no dominant direction)", () => {
+    // rejectUpperBand() is a flat oscillating range — DI values stay close to each other.
+    // Even with diDomRatio: 1.5 the SELL fires because neither DI leads by 50 %.
+    const candles = rejectUpperBand();
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at,
+      perpsFees: fees,
+      strategy: diDomBase(1.5),
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.doesNotMatch(signal.reason, /DI dominance/);
+  });
+
+  it("bollingerParamsFor default diDomRatio is 1.5", () => {
+    assert.equal(bollingerParamsFor("flat", "low").diDomRatio, 1.5);
+    assert.equal(bollingerParamsFor("bullish", "high").diDomRatio, 1.5);
+    assert.equal(bollingerParamsFor("bearish", "low").diDomRatio, 1.5);
   });
 });
 

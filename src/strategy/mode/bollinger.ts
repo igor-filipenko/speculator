@@ -74,7 +74,7 @@ export interface BollingerParams {
 const STD_DEV: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
   flat: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
-  bearish: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
+  bearish: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
   unknown: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
 };
 
@@ -82,7 +82,7 @@ const STD_DEV: Record<Trend, Record<Volatility, number>> = {
 const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
   flat: { high: 32, low: 29, squeeze: 32, unknown: 36 },
-  bearish: { high: 29, low: 29, squeeze: 29, unknown: 29 },
+  bearish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
   unknown: { high: 29, low: 29, squeeze: 29, unknown: 29 },
 };
 
@@ -90,15 +90,15 @@ const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
 const MIN_BAND_TO_MID: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
   flat: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
-  bearish: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
-  unknown: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
+  bearish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
+  unknown: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
 };
 
 /** Fraction of band width the close must reclaim; kisses stay out. */
 const MIN_RECLAIM_DEPTH: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
   flat: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
-  bearish: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
+  bearish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
   unknown: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
 };
 
@@ -106,16 +106,16 @@ const MIN_RECLAIM_DEPTH: Record<Trend, Record<Volatility, number>> = {
 const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
   flat: { high: 45, low: 55, squeeze: 50, unknown: 50 },
-  bearish: { high: 45, low: 45, squeeze: 45, unknown: 45 },
-  unknown: { high: 45, low: 45, squeeze: 45, unknown: 45 },
+  bearish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
+  unknown: { high: 45, low: 55, squeeze: 50, unknown: 50 },
 };
 
 /** Stop distance beyond the entry-bar extreme, in ATRs. */
 const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
   flat: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
-  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
-  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
+  bearish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
+  unknown: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
 };
 
 /**

@@ -247,12 +247,14 @@ async function processPair(args: {
   };
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   logPerpsFees(pair.symbol, perpsFees);
+  // Wall clock, not candle open: otherwise a just-closed bar (next candle not
+  // published yet) is treated as still forming and stripped from the signal.
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
     market,
     price,
-    new Date(candles[candles.length - 1]!.time * 1000),
+    new Date(),
     portfolio?.getSnapshot(price),
     perpsFees,
   );

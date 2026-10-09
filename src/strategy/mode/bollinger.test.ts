@@ -607,6 +607,23 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /wick reclaim/i);
   });
 
+  it("BUYs when the reclaim bar is closed by time before the next candle appears", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const interval = 15 * 60;
+    // Gap after close: Gecko has not published the new forming bar yet.
+    const at = new Date((last.time + interval + 30) * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      at,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /wick reclaim/i);
+  });
+
   it("ignores reclaim when 1h volatility is high", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({

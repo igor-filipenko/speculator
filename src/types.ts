@@ -111,13 +111,13 @@ export interface Signal {
   slPrice?: number;
   /**
    * Take-profit prices, nearest first.
-   * Bollinger sets the middle band. Other strategies leave this empty.
+   * Bollinger sets the middle band. Donchian sets none (empty).
    * The risk manager uses the furthest price for the reward:risk gate.
    */
   tpPrices: number[];
   /**
    * Minimum reward per unit of stop risk for an opening signal.
-   * Bollinger is 0.1; Donchian is 2 (1:2).
+   * Bollinger is 0.2. Unused when `tpPrices` is empty (Donchian sets 0).
    */
   minRewardRisk: number;
   meta?: {
@@ -134,9 +134,9 @@ export interface Signal {
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;
-    /** Prior Donchian entry-channel high (breakout level). */
+    /** Prior Donchian entry-channel high (long breakout level). */
     donchianUpper?: number;
-    /** Prior Donchian exit-channel low. */
+    /** Prior Donchian entry-channel low (short breakout level). */
     donchianLower?: number;
     /** Prior-bar SMA of volume (breakout filter baseline). */
     volumeSma?: number;

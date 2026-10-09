@@ -35,6 +35,12 @@ function asCommand(command: Command): RequiredCommand {
 /** Max loss at the hard stop, as a percent of equity. */
 export const MAX_RISK_PERCENT = 2;
 
+/**
+ * Float slack for the reward:risk gate. `(price + 9a - price) / (price - (price - 3a))`
+ * can land a few ULPs under an exact 3, which would block a signal sitting on the floor.
+ */
+const REWARD_RISK_EPSILON = 1e-9;
+
 /** Minimum USDC to spend on an opening order. */
 export const MIN_OPEN_DEPOSIT_USDC = 10;
 
@@ -84,7 +90,7 @@ function rewardRiskReason(signal: Signal): string | null {
   const risk = Math.abs(signal.price - sl);
   if (!(risk > 0)) return null;
   const reward = bestTpReward(signal);
-  if (reward == null || reward / risk < signal.minRewardRisk) {
+  if (reward == null || reward / risk < signal.minRewardRisk - REWARD_RISK_EPSILON) {
     return `reward:risk below 1:${signal.minRewardRisk} sl=${sl.toFixed(4)} risk=${risk.toFixed(4)} reward=${reward?.toFixed(4) ?? "null"}`;
   }
   return null;

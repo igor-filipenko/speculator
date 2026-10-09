@@ -198,6 +198,30 @@ describe("opening command", () => {
     }
   });
 
+  it("does not block a target exactly on the floor because of float rounding", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const price = 100.3151;
+    const atr = 0.52093;
+    // (price + 9 * atr - price) / (price - (price - 3 * atr)) is just under 3 in floats.
+    assert.ok((price + 9 * atr - price) / Math.abs(price - (price - 3 * atr)) < 3);
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "test",
+      side: "BUY",
+      reason: "breakout",
+      price,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: price - 3 * atr,
+      tpPrices: [price + 9 * atr],
+      minRewardRisk: 3,
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "open-long");
+    }
+  });
+
   it("uses the signal minimum, so a Bollinger 0.2 floor allows a target below 1:2", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const price = 100;

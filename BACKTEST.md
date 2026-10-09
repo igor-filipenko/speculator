@@ -25,14 +25,14 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 
 ## CLI flags
 
-| Flag | Description |
-|---|---|
-| `--from <date>` | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC) |
-| `--to <date>` | Range end inclusive (exclusive in code). Requires `--from` |
-| `--strategy <name>` | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`) |
-| `--force-refresh` | Delete cached candles and re-fetch from GeckoTerminal |
-| `--verbose` / `-v` | Print every simulated fill + ASCII chart |
-| `--monte-carlo <n>` | Run N additional replays with randomised intra-bar paths (≥ 1) |
+| Flag                 | Description                                                                         |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
+| `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
+| `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`)                         |
+| `--force-refresh`    | Delete cached candles and re-fetch from GeckoTerminal                               |
+| `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
+| `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |
 
 ---
@@ -51,18 +51,18 @@ Risk metrics — Sharpe: +28.37 | Sortino: +51.53 | Profit factor: 4.00
 Simulated costs — slippage: 34.7892 | pool fees: 16.1122 | priority: 6.2229 | perps: 16.9952 USDC
 ```
 
-| Field | What it means |
-|---|---|
-| **End equity** | Portfolio value at last candle close |
-| **Buy & hold** | Same capital deployed at first bar close, exited at last — same emulated costs |
-| **vs hold** | Strategy return minus B&H return (percentage points) |
-| **win rate** | Completed round-trips with positive P&L / total round-trips |
-| **Round-trip hold** | Duration between open fill and close fill (min / max / avg) |
-| **Max drawdown** | Peak-to-trough drop from equity peak; `duration` = longest time below peak |
-| **Sharpe** | Annualised Sharpe from per-bar returns (risk-free = 0) |
-| **Sortino** | Same but only penalises downside returns |
-| **Profit factor** | Sum of winning P&L / \|sum of losing P&L\|; > 1.5 is acceptable, > 3 is strong |
-| **Simulated costs** | Broken out: slippage + pool fee + Solana priority fee + Jupiter perps fee |
+| Field               | What it means                                                                  |
+| ------------------- | ------------------------------------------------------------------------------ |
+| **End equity**      | Portfolio value at last candle close                                           |
+| **Buy & hold**      | Same capital deployed at first bar close, exited at last — same emulated costs |
+| **vs hold**         | Strategy return minus B&H return (percentage points)                           |
+| **win rate**        | Completed round-trips with positive P&L / total round-trips                    |
+| **Round-trip hold** | Duration between open fill and close fill (min / max / avg)                    |
+| **Max drawdown**    | Peak-to-trough drop from equity peak; `duration` = longest time below peak     |
+| **Sharpe**          | Annualised Sharpe from per-bar returns (risk-free = 0)                         |
+| **Sortino**         | Same but only penalises downside returns                                       |
+| **Profit factor**   | Sum of winning P&L / \|sum of losing P&L\|; > 1.5 is acceptable, > 3 is strong |
+| **Simulated costs** | Broken out: slippage + pool fee + Solana priority fee + Jupiter perps fee      |
 
 ---
 
@@ -139,16 +139,16 @@ Consistency: 5/6 folds beat B&H | 6/6 positive returns | Worst: fold 2 (-1.23% p
 
 ### How to read
 
-| Column | Meaning |
-|---|---|
-| **Return** | Strategy return for that fold only (independent portfolio) |
-| **vs B&H** | Strategy return minus B&H for **that fold's sub-period** (pp) |
-| **Sharpe / Max DD / PF** | Per-fold values |
-| **OOS compound** | `(1+r₁) × (1+r₂) × … × (1+rₙ) − 1` as if reinvesting capital each fold |
-| **OOS vs B&H** | OOS compound return minus B&H for the **full period** |
-| **OOS Sharpe** | Arithmetic mean of fold Sharpes (approximation) |
-| **OOS Max DD** | Maximum of fold max DDs (lower bound — portfolios reset between folds) |
-| **OOS PF** | Arithmetic mean of fold profit factors |
+| Column                   | Meaning                                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| **Return**               | Strategy return for that fold only (independent portfolio)             |
+| **vs B&H**               | Strategy return minus B&H for **that fold's sub-period** (pp)          |
+| **Sharpe / Max DD / PF** | Per-fold values                                                        |
+| **OOS compound**         | `(1+r₁) × (1+r₂) × … × (1+rₙ) − 1` as if reinvesting capital each fold |
+| **OOS vs B&H**           | OOS compound return minus B&H for the **full period**                  |
+| **OOS Sharpe**           | Arithmetic mean of fold Sharpes (approximation)                        |
+| **OOS Max DD**           | Maximum of fold max DDs (lower bound — portfolios reset between folds) |
+| **OOS PF**               | Arithmetic mean of fold profit factors                                 |
 
 ### Consistency line
 
@@ -175,6 +175,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --verbose
 ```
 
 Check:
+
 - `vs B&H` positive?
 - `avg hold` > 15 minutes? (shorter → transaction costs dominate in live trading)
 - `Profit factor` > 1.5?
@@ -187,6 +188,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --monte-carlo 200
 ```
 
 Check:
+
 - `p5 Return` > 0%?
 - Ratio `p50 / base` < 3×? (larger → high path dependence)
 - `p95 − p5` range reasonable (< 100 pp for monthly period)?
@@ -198,6 +200,7 @@ pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --walk-forward 6
 ```
 
 Check:
+
 - `≥ 4/6 folds beat B&H` (≥ 67%)?
 - `6/6 positive returns`?
 - Look at the worst fold — which market regime caused it?

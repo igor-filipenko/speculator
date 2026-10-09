@@ -252,7 +252,7 @@ describe("evaluateBollinger filters", () => {
     const mid = signal.meta?.bbMid;
     assert.ok(mid != null && mid > signal.price);
     assert.deepEqual(signal.tpPrices, [mid]);
-    assert.equal(signal.minRewardRisk, 0.1);
+    assert.equal(signal.minRewardRisk, 0.2);
   });
 
   it("does not pyramid when already long below mid", () => {
@@ -546,7 +546,7 @@ describe("evaluateBollinger filters", () => {
     const mid = withFees.meta?.bbMid;
     assert.ok(mid != null && mid < withFees.price);
     assert.deepEqual(withFees.tpPrices, [mid]);
-    assert.equal(withFees.minRewardRisk, 0.1);
+    assert.equal(withFees.minRewardRisk, 0.2);
 
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -785,7 +785,7 @@ describe("bollingerParamsFor", () => {
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
     assert.equal(bollingerParamsFor("flat", "low").driftFilter, false);
-    assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.1);
+    assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
     assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);
     assert.equal(bollingerParamsFor("bullish", "high").adxMax, 44);

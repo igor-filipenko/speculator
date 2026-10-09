@@ -104,17 +104,20 @@ describe("PaperPortfolio short", () => {
     });
     assert.ok(opened);
     assert.equal(portfolio.getSnapshot(100).cashUsdc, 1000);
+    const notional = 10 * 100;
+    const openFee = notional * 0.0006;
+    assert.equal(portfolio.getSnapshot(100).position.paidFee, openFee);
+    assert.equal(opened.perpsFeeUsdc, openFee);
 
     const closed = portfolio.applyOrderSync({
       ...order("close-short", 90, 10),
       at: new Date("2026-01-01T02:00:00.000Z"),
-      fillCosts: { ...fill, mid: 90 },
+      fillCosts: { ...fill, mid: 90, perps: { ...perps, openFeePct: 0.01 } },
     });
-    const notional = 10 * 100;
-    const fees = notional * (0.0006 + 0.0006 + 2 * 0.000007);
+    const holdFee = notional * (0.0006 + 2 * 0.000007);
     assert.ok(closed);
-    assert.equal(closed.perpsFeeUsdc, fees);
-    assert.equal(closed.realizedPnl, 100 - fees);
-    assert.equal(portfolio.getSnapshot(90).cashUsdc, 1000 + 100 - fees);
+    assert.equal(closed.perpsFeeUsdc, holdFee);
+    assert.equal(closed.realizedPnl, 100 - openFee - holdFee);
+    assert.equal(portfolio.getSnapshot(90).cashUsdc, 1000 + 100 - openFee - holdFee);
   });
 });

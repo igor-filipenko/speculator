@@ -160,8 +160,8 @@ export interface Position {
   /** Hard stop price from the opening signal. */
   slPrice: number;
   /**
-   * Priority fee paid to open this position, in USDC.
-   * Included in `realizedPnl` on close.
+   * Fees paid to open this position, in USDC: the network priority fee plus
+   * the perps open fee on a short. Included in `realizedPnl` on close.
    */
   paidFee?: number;
 }

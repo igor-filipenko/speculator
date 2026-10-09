@@ -91,6 +91,53 @@ describe("LivePortfolio", () => {
     assert.equal(persisted.trades[0]?.txSignature, "BuySig");
   });
 
+  it("charges perps open, close, and hourly borrow on a short cover", async () => {
+    const portfolio = new LivePortfolio(PAIR, new FakeBalances(), {
+      solReserveMin: 0.03,
+      solReserveMax: 0.05,
+    });
+    const perps = {
+      openFeePct: 0.0006,
+      closeFeePct: 0.0006,
+      borrowFeePctPerHour: 0.000007,
+    };
+    const opened = await portfolio.applyOrder(
+      buyOrder({
+        intent: "open-short",
+        price: 100,
+        size: 10,
+        at: new Date("2026-08-20T10:00:00.000Z"),
+        txSignature: "OpenShortSig",
+        fillCosts: { mid: 100, slippageUsdcPerBase: 0, poolFeeUsdcPerBase: 0, perps },
+      }),
+    );
+    assert.ok(opened);
+    assert.equal(portfolio.getSnapshot(100).position.paidFee, 10 * 100 * 0.0006);
+
+    const closed = await portfolio.applyOrder(
+      buyOrder({
+        intent: "close-short",
+        price: 90,
+        size: 10,
+        at: new Date("2026-08-20T12:00:00.000Z"),
+        priorityFeeUsdc: 0.25,
+        txSignature: "CoverSig",
+        fillCosts: {
+          mid: 90,
+          slippageUsdcPerBase: 0,
+          poolFeeUsdcPerBase: 0,
+          perps: { ...perps, openFeePct: 0.01 },
+        },
+      }),
+    );
+    const notional = 10 * 100;
+    const openFee = notional * 0.0006;
+    const holdFee = notional * (0.0006 + 2 * 0.000007);
+    assert.ok(closed);
+    assert.equal(closed.perpsFeeUsdc, holdFee);
+    assert.equal(closed.realizedPnl, notional - 10 * 90 - 0.25 - openFee - holdFee);
+  });
+
   it("reconciles unexpected on-chain inventory as long at mark (no phantom PnL)", async () => {
     const extra = new FakeBalances();
     extra.native = 1.05;

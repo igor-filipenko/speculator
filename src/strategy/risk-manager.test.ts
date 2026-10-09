@@ -198,7 +198,7 @@ describe("opening command", () => {
     }
   });
 
-  it("uses the signal minimum, so a Bollinger 0.1 floor allows a target below 1:2", () => {
+  it("uses the signal minimum, so a Bollinger 0.2 floor allows a target below 1:2", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const price = 100;
     const riskDistance = 4;
@@ -210,8 +210,8 @@ describe("opening command", () => {
       price,
       at: new Date("2026-01-01T00:00:00.000Z"),
       slPrice: price - riskDistance,
-      tpPrices: [price + riskDistance * 0.1],
-      minRewardRisk: 0.1,
+      tpPrices: [price + 1],
+      minRewardRisk: 0.2,
     };
     const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(price), []);
     assert.equal(result.kind, "command");

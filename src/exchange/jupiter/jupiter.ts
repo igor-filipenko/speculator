@@ -462,7 +462,8 @@ export class JupiterExchange implements Exchange, PositionSource {
       if (!(opened.price > 0) || !(opened.size > 0)) {
         return new ExchangeError("jupiter perps increase returned unusable fill");
       }
-      return this.filledShort(command, opened.price, opened.size, txid);
+      const perps = await this.perpsFeeSchedule(pair).catch(() => undefined);
+      return this.filledShort(command, opened.price, opened.size, txid, perps);
     }
 
     const closed = await this.perps.decreaseShort({
@@ -477,7 +478,8 @@ export class JupiterExchange implements Exchange, PositionSource {
     if (!(price > 0) || !(size > 0)) {
       return new ExchangeError("jupiter perps decrease has no size or price");
     }
-    return this.filledShort(command, price, size, txid);
+    const perps = await this.perpsFeeSchedule(pair).catch(() => undefined);
+    return this.filledShort(command, price, size, txid, perps);
   }
 
   private filledShort(
@@ -485,6 +487,7 @@ export class JupiterExchange implements Exchange, PositionSource {
     price: number,
     size: number,
     txid: string | undefined,
+    perps?: PerpsFees,
   ): Order {
     const filled: Order = {
       pair: command.pair,
@@ -497,6 +500,16 @@ export class JupiterExchange implements Exchange, PositionSource {
       reason: command.reason,
       priorityFeeUsdc: 0,
       ...orderPosition(command),
+      ...(perps !== undefined
+        ? {
+            fillCosts: {
+              mid: price,
+              slippageUsdcPerBase: 0,
+              poolFeeUsdcPerBase: 0,
+              perps,
+            },
+          }
+        : {}),
     };
     if (txid !== undefined && txid.length > 0) {
       filled.txSignature = txid;

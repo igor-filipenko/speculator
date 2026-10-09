@@ -1,6 +1,7 @@
 import { match } from "ts-pattern";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
 import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
+import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
 import type {
   BalanceSource,
   Order,
@@ -380,6 +381,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     if (order.size <= 0 || order.price <= 0) {
       return null;
     }
+    const openFeeUsdc = perpsOpenFeeUsdc(order);
     const trade: Trade = {
       pair: order.pair,
       side: "SELL",
@@ -388,6 +390,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       at: order.at,
       simulated: false,
       reason: order.reason,
+      ...(openFeeUsdc > 0 ? { perpsFeeUsdc: openFeeUsdc } : {}),
     };
     if (order.txSignature !== undefined) {
       trade.txSignature = order.txSignature;
@@ -402,8 +405,17 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       return null;
     }
     const size = order.size;
+    const notional = size * this.position.entryPrice;
+    const heldMs =
+      this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
+    const perps = order.fillCosts?.perps;
+    const perpsFeeUsdc = perps != null ? notional * shortCloseFeePct({ ...perps, heldMs }) : 0;
     const paidFee = this.position.paidFee ?? 0;
-    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc - paidFee;
+    const pnl =
+      size * (this.position.entryPrice - order.price) -
+      order.priorityFeeUsdc -
+      perpsFeeUsdc -
+      paidFee;
     const trade: Trade = {
       pair: order.pair,
       side: "BUY",
@@ -413,6 +425,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       at: order.at,
       simulated: false,
       reason: order.reason,
+      ...(perpsFeeUsdc > 0 ? { perpsFeeUsdc } : {}),
     };
     if (order.txSignature !== undefined) {
       trade.txSignature = order.txSignature;
@@ -457,8 +470,9 @@ function openedPosition(pair: string, side: "long" | "short", order: Order): Pos
     strategyId: order.strategyId ?? "",
     slPrice: order.slPrice ?? 0,
   };
-  if (order.priorityFeeUsdc > 0) {
-    position.paidFee = order.priorityFeeUsdc;
+  const paidFee = order.priorityFeeUsdc + (side === "short" ? perpsOpenFeeUsdc(order) : 0);
+  if (paidFee > 0) {
+    position.paidFee = paidFee;
   }
   return position;
 }

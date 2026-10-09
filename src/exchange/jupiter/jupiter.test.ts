@@ -352,6 +352,56 @@ describe("JupiterExchange.execute", () => {
     assert.ok(calls.some((call) => call.includes("/positions/increase")));
   });
 
+  it("attaches the perps fee schedule on a live short cover", async () => {
+    const fetchImpl: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/positions") && !url.includes("/decrease")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              dataList: [
+                {
+                  positionPubkey: "pos",
+                  side: "short",
+                  asset: "SOL",
+                  sizeTokenAmount: "1000000000",
+                  entryPriceUsd: "100000000",
+                  collateralUsd: "100000000",
+                },
+              ],
+            }),
+          ),
+        );
+      }
+      if (url.includes("/positions/decrease")) {
+        return Promise.resolve(new Response(JSON.stringify({ serializedTxBase64: "dHh4" })));
+      }
+      if (url.includes("/transaction/execute")) {
+        return Promise.resolve(new Response(JSON.stringify({ txid: "CoverSig" })));
+      }
+      if (url.includes("/pool-info")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ openFeePercent: "0.06", shortBorrowRatePercent: "0.0007" }),
+          ),
+        );
+      }
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    };
+    const exchange = new JupiterExchange({
+      keypair: Keypair.generate(),
+      balances: new FakeBalances(),
+      fetchImpl,
+      signTransaction: (tx) => tx,
+      perpsBaseUrl: "https://perps.test/v1",
+    });
+    const order = await exchange.execute({ ...sellCommand(), intent: "close-short" }, PAIR);
+    assert.ok(isOrder(order));
+    assert.equal(order.fillCosts?.perps?.openFeePct, 0.06 / 100);
+    assert.equal(order.fillCosts?.perps?.closeFeePct, 0.06 / 100);
+    assert.equal(order.fillCosts?.perps?.borrowFeePctPerHour, 0.0007 / 100);
+  });
+
   it("rejects a perps short on a market jupiter does not list", async () => {
     const exchange = new JupiterExchange({
       keypair: Keypair.generate(),

@@ -1,5 +1,5 @@
 import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
-import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
 import type {
   Order,
   PairConfig,
@@ -283,6 +283,7 @@ export class PaperPortfolio implements Portfolio {
       return null;
     }
 
+    const openFeeUsdc = perpsOpenFeeUsdc(order);
     const trade: PaperTrade = {
       pair: order.pair,
       side: "SELL",
@@ -291,6 +292,7 @@ export class PaperPortfolio implements Portfolio {
       at: order.at,
       simulated: true,
       reason: order.reason,
+      ...(openFeeUsdc > 0 ? { perpsFeeUsdc: openFeeUsdc } : {}),
     };
 
     this.position = openedPosition(order.pair, "short", order);
@@ -308,7 +310,7 @@ export class PaperPortfolio implements Portfolio {
     const heldMs =
       this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
     const perps = order.fillCosts?.perps;
-    const perpsFeeUsdc = perps != null ? notional * shortPositionFeePct({ ...perps, heldMs }) : 0;
+    const perpsFeeUsdc = perps != null ? notional * shortCloseFeePct({ ...perps, heldMs }) : 0;
     const paidFee = this.position.paidFee ?? 0;
     const pnl =
       size * (this.position.entryPrice - order.price) -
@@ -352,8 +354,9 @@ function openedPosition(pair: string, side: "long" | "short", order: Order): Pos
     strategyId: order.strategyId ?? "",
     slPrice: order.slPrice ?? 0,
   };
-  if (order.priorityFeeUsdc > 0) {
-    position.paidFee = order.priorityFeeUsdc;
+  const paidFee = order.priorityFeeUsdc + (side === "short" ? perpsOpenFeeUsdc(order) : 0);
+  if (paidFee > 0) {
+    position.paidFee = paidFee;
   }
   return position;
 }

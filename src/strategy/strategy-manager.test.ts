@@ -295,7 +295,9 @@ describe("evaluateMarketIndicators", () => {
     assert.ok(indicators.htf.adx == null || indicators.htf.adx < params.adxFlatMax);
   });
 
-  it("is flat when close is above EMA200 but EMA50 is still below EMA200", () => {
+  it("is bullish after a strong bounce even when EMA50 is still below EMA200 (no golden-cross required)", () => {
+    // Variant 1: classifyTrend no longer requires ema50 > ema200.
+    // A short-term recovery with close > ema50 + +DI > -DI + ADX trending is enough.
     const down = series(230, 400, -1);
     const lastTime = down[down.length - 1]!.time;
     const interval = 4 * 60 * 60;
@@ -313,10 +315,11 @@ describe("evaluateMarketIndicators", () => {
       at,
       params,
     });
+    // EMA50 is still below EMA200 (golden cross hasn't happened yet)
     assert.ok(indicators.htf?.ema200 != null && indicators.htf.ema50 != null);
     assert.ok(indicators.htf.ema50 < indicators.htf.ema200);
-    assert.ok(candles[candles.length - 1]!.close > indicators.htf.ema200);
-    assert.equal(indicators.trend, "flat");
+    // but close > ema50 + DI confirm → now classified as bullish
+    assert.equal(indicators.trend, "bullish");
   });
 
   it("keeps the previous HTF trend through a one-bar stack break", () => {

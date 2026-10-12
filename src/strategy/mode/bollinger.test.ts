@@ -701,7 +701,7 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /wick reclaim/i);
   });
 
-  it("ignores reclaim when 1h volatility is high", () => {
+  it("still emits BUY on a reclaim when 1h volatility is high", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -710,8 +710,8 @@ describe("evaluateBollinger filters", () => {
       price: candles[candles.length - 1]!.close,
       volatility: "high",
     });
-    assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /1h volatility high/);
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /Lower BB .+ reclaim/i);
   });
 
   it("still emits SELL at mid when long and 1h volatility is high", () => {
@@ -871,22 +871,30 @@ describe("diDomRatio gate", () => {
   });
 });
 
-describe("BollingerStrategy high-vol gate", () => {
-  it("holds a reclaim when 1h vol is high", () => {
+describe("BollingerStrategy", () => {
+  it("does not gate entries on 1h volatility", () => {
     const candles = reclaimLowerBand();
     const last = candles[candles.length - 1]!;
     const price = last.close;
     const at = new Date((last.time + 15 * 60) * 1000);
     const strategy = new BollingerStrategy("bullish", "low");
-    const blockedHigh = strategy.evaluateSignal(
+    const low = strategy.evaluateSignal(
+      "SOL/USDC",
+      candles,
+      marketState("bullish", "low", price),
+      price,
+      at,
+    );
+    const high = strategy.evaluateSignal(
       "SOL/USDC",
       candles,
       marketState("bullish", "high", price),
       price,
       at,
     );
-    assert.equal(blockedHigh.side, "HOLD", blockedHigh.reason);
-    assert.match(blockedHigh.reason, /volatility high/);
+    assert.equal(high.side, low.side);
+    assert.equal(high.reason, low.reason);
+    assert.doesNotMatch(high.reason, /volatility high/);
   });
 
   it("names BB params in the display name", () => {

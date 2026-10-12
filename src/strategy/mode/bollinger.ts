@@ -1,3 +1,4 @@
+import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import { candleIntervalSeconds, isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
@@ -32,25 +33,18 @@ export interface BollingerParams {
    */
   adxMax: number;
   /**
-   * Minimum (mid − lower) / close for a BUY.
-   * Skips setups where mean-reversion distance cannot cover ~RT fees.
-   */
-  minBandToMidPct: number;
-  /**
    * Minimum (close − lower) / (mid − lower) after a reclaim.
    * Skips kisses that close only a tick back inside the band.
    */
   minReclaimDepth: number;
-  /**
-   * Mid-exit must clear the buy fill by this fraction so a falling SMA
-   * cannot book a "TP" at a loss. ATR still stops failed reversion.
-   */
-  minExitAboveEntryPct: number;
   /** Wilder RSI period (oversold gate on lower-band reclaim). */
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
   rsiBuyMax: number;
-  /** Minimum reward per unit of stop risk. Mean-reversion targets sit close to the stop. */
+  /**
+   * Minimum fee-adjusted reward per unit of stop risk.
+   * Mean-reversion targets sit close to the stop. 0 still requires reward > 0.
+   */
   minRewardRisk: number;
   /** Stop distance beyond the entry-bar extreme, in ATRs. */
   stopAtr: number;
@@ -80,7 +74,7 @@ export function bollingerStopPrice(
   side: "long" | "short",
   barExtreme: number,
   atrValue: number,
-  stopAtr: number
+  stopAtr: number,
 ): number {
   const distance = stopAtr * atrValue;
   return side === "long" ? barExtreme - distance : barExtreme + distance;
@@ -93,6 +87,86 @@ export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: 
   return beyond ? [bbMid] : [];
 }
 
+/**
+ * Float slack so a ratio that lands a few ULPs under the floor still passes.
+ * Same idea as the risk manager's reward:risk gate.
+ */
+const REWARD_RISK_EPSILON = 1e-9;
+
+/** Slippage + pool fee on a spot leg. Perps legs pay slippage only (no pool fee). */
+function legFeePct(pair: string, venue: "spot" | "perps"): number {
+  const costs = TIER_COSTS[liquidityTierForPair(pair)];
+  return venue === "spot" ? costs.slippage + costs.poolFee : costs.slippage;
+}
+
+/**
+ * Quote-to-target reward per 1 base unit after round-trip fees.
+ * A long buys above the quote and sells below the mid (spot slippage + pool each leg).
+ * A short sells below the quote and covers above the mid (perps slippage each leg)
+ * and pays open + close on entry notional. Borrow starts at zero; the exit gate
+ * charges it once the hold is known. Priority and volume impact depend on size,
+ * which is chosen after the signal, so they are not in this ratio.
+ */
+export function bollingerNetReward(input: {
+  side: "long" | "short";
+  price: number;
+  tp: number;
+  pair: string;
+  perpsFees?: PerpsFees;
+}): number | null {
+  const { side, price, tp } = input;
+  if (!(price > 0) || !(tp > 0)) return null;
+  if (side === "long") {
+    const fee = legFeePct(input.pair, "spot");
+    return tp * (1 - fee) - price * (1 + fee);
+  }
+  const fees = input.perpsFees;
+  if (fees == null) return null;
+  const slip = legFeePct(input.pair, "perps");
+  return price * (1 - slip - fees.openFeePct - fees.closeFeePct) - tp * (1 + slip);
+}
+
+/** HOLD reason when the fee-adjusted target fails reward > 0 or reward/risk. */
+function openingRewardHoldReason(input: {
+  side: "long" | "short";
+  price: number;
+  sl: number;
+  tp: number | undefined;
+  pair: string;
+  minRewardRisk: number;
+  perpsFees?: PerpsFees;
+}): string | null {
+  const head = input.side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  if (input.tp == null || !(input.tp > 0)) {
+    return `${head}: reward <= 0 (mid is not beyond the quote)`;
+  }
+  const reward = bollingerNetReward({
+    side: input.side,
+    price: input.price,
+    tp: input.tp,
+    pair: input.pair,
+    ...(input.perpsFees !== undefined ? { perpsFees: input.perpsFees } : {}),
+  });
+  if (reward == null || !(reward > 0)) {
+    return (
+      `${head}: reward ${fmt(reward ?? 0)} <= 0 after fees ` +
+      `(price=${fmt(input.price)}, tp=${fmt(input.tp)})`
+    );
+  }
+  const risk = Math.abs(input.price - input.sl);
+  if (!(risk > 0)) {
+    return `${head}: stop is at the entry price`;
+  }
+  const ratio = reward / risk;
+  if (ratio < input.minRewardRisk - REWARD_RISK_EPSILON) {
+    return (
+      `${head}: reward:risk ${ratio.toFixed(2)} < ${input.minRewardRisk} ` +
+      `(reward=${fmt(reward)}, risk=${fmt(risk)}, sl=${fmt(input.sl)})`
+    );
+  }
+  return null;
+}
+
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(): BollingerParams {
   return {
@@ -102,9 +176,7 @@ export function bollingerParamsFor(): BollingerParams {
     atrPeriod: 14,
     adxPeriod: 14,
     adxMax: 40,
-    minBandToMidPct: 0.0025,
     minReclaimDepth: 0.1,
-    minExitAboveEntryPct: 0.001,
     rsiPeriod: 14,
     rsiBuyMax: 50,
     minRewardRisk: 0.2,
@@ -143,17 +215,19 @@ export interface BollingerInput {
  * Mean-reversion Bollinger for bullish/flat × low/squeeze.
  * BUY on a **closed** lower-band reclaim: same-bar wick (low ≤ lower, close back inside, green)
  * or prior close ≤ prior lower then close > lower, when the ADX gate passes, close < mid,
- * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
+ * reclaim depth ≥ minReclaimDepth, and RSI < rsiBuyMax.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
- * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
- * **and** close is above the open fill after costs. Flat → HOLD on mid.
+ * Already long → HOLD on reclaim (no pyramid). SELL when long and price ≥ middle
+ * **and** the quote is high enough that the sell fill clears the entry after the exit-leg fee.
+ * Flat → HOLD on mid.
  * Already short → BUY when perps fees are present, price is at or below the mid,
- * **and** price is below entry by the open fee, close fee, and hourly borrow since `openedAt`.
- * Missing fees keep the short on HOLD. An upper-band short is not opened without that schedule,
- * and band→mid must still cover the open+close fee.
+ * **and** the quote is low enough to clear the open fee, close fee, hourly borrow since
+ * `openedAt`, and cover slippage. Missing fees keep the short on HOLD.
+ * An upper-band short is not opened without that schedule.
  * Above `adxMax` a long still passes when +DI > −DI, and a short when −DI > +DI.
  * Regime / ADX / RSI do not block exits.
- * An opening signal sets `tpPrices` to the middle band.
+ * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
+ * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
  * After `timeStopBars` closed bars, exit when the last close is at least
  * `timeStopAtr` × ATR against the entry. Wicks do not count.
  */
@@ -237,13 +311,14 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   let side: SignalSide = "HOLD";
 
   if (long) {
-    const minExit = entry * (1 + strategy.minExitAboveEntryPct);
+    const exitFee = legFeePct(pair, "spot");
+    const minExit = exitFee < 1 ? entry / (1 - exitFee) : entry;
     const profitablePrice = Math.max(bbMid, minExit);
     if (price >= profitablePrice) {
       return {
         ...base,
         side: "SELL",
-        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`,
+        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
       };
     }
     const timed = adverseTimeStopReason({
@@ -263,7 +338,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     return {
       ...base,
       side: "HOLD",
-      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`,
+      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)}`,
     };
   }
 
@@ -288,7 +363,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         borrowFeePctPerHour: fees.borrowFeePctPerHour,
         heldMs,
       });
-      const minExit = entry * (1 - feePct);
+      const slip = legFeePct(pair, "perps");
+      const minExit = slip > -1 ? (entry * (1 - feePct)) / (1 + slip) : entry * (1 - feePct);
       const profitablePrice = Math.min(bbMid, minExit);
       if (price <= profitablePrice) {
         return {
@@ -330,7 +406,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
   if (belowMid && reclaimedLower) {
     const bandWidth = bbMid - bbLower;
-    const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
     const blockedLong =
       input.volatility == "squeeze" && input.trend == "bearish"
@@ -360,8 +435,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason =
         `Lower reclaim ignored: bearish DI dominance ` +
         `(−DI ${fmt(minusDi)} > +DI ${fmt(plusDi)} × ${strategy.diDomRatio})`;
-    } else if (bandToMidPct < strategy.minBandToMidPct) {
-      reason = `Lower reclaim ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
     } else if (reclaimDepth < strategy.minReclaimDepth) {
       reason =
         `Lower reclaim ignored: depth ${pct(reclaimDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
@@ -373,7 +446,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `${adxGateNote("long", adxNow, strategy.adxMax, plusDi, minusDi)}; band→mid ${pct(bandToMidPct)}; ` +
+        `${adxGateNote("long", adxNow, strategy.adxMax, plusDi, minusDi)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
   }
@@ -392,10 +465,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = "Upper rejection ignored: perps fee schedule missing";
     } else if (rejectedUpper && fees != null) {
       const bandWidth = bbUpper - bbMid;
-      const bandToMidPct = bandWidth / close;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
-      const shortRoundTripPct = fees.openFeePct + fees.closeFeePct;
-      const minShortBand = Math.max(strategy.minBandToMidPct, shortRoundTripPct);
       if (blocked != null) {
         reason = `Upper rejection ignored: ${blocked}`;
       } else if (blockedShort) {
@@ -419,11 +489,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         reason =
           `Upper rejection ignored: bullish DI dominance ` +
           `(+DI ${fmt(plusDi)} > −DI ${fmt(minusDi)} × ${strategy.diDomRatio})`;
-      } else if (bandToMidPct < minShortBand) {
-        reason =
-          shortRoundTripPct > strategy.minBandToMidPct
-            ? `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < perps open+close ${pct(shortRoundTripPct)}`
-            : `Upper rejection ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
       } else if (rejectDepth < strategy.minReclaimDepth) {
         reason =
           `Upper rejection ignored: depth ${pct(rejectDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
@@ -435,7 +500,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
-          `${adxGateNote("short", adxNow, strategy.adxMax, plusDi, minusDi)}; band→mid ${pct(bandToMidPct)}; ` +
+          `${adxGateNote("short", adxNow, strategy.adxMax, plusDi, minusDi)}; ` +
           `depth ${pct(rejectDepth)}; RSI ${fmt(rsiNow)} > ${fmt(rsiShortMin)}`;
       }
     } else {
@@ -456,12 +521,26 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
   const extreme = side === "BUY" ? lastBar.low : lastBar.high;
   const positionSide = side === "BUY" ? "long" : "short";
+  const slPrice = bollingerStopPrice(positionSide, extreme, atrNow, strategy.stopAtr);
+  const tpPrices = bollingerTpPrices(positionSide, price, bbMid);
+  const rewardHold = openingRewardHoldReason({
+    side: positionSide,
+    price,
+    sl: slPrice,
+    tp: tpPrices[0],
+    pair,
+    minRewardRisk: strategy.minRewardRisk,
+    ...(input.perpsFees !== undefined ? { perpsFees: input.perpsFees } : {}),
+  });
+  if (rewardHold != null) {
+    return { ...base, side: "HOLD", reason: rewardHold };
+  }
   return {
     ...base,
     side,
     reason,
-    slPrice: bollingerStopPrice(positionSide, extreme, atrNow, strategy.stopAtr),
-    tpPrices: bollingerTpPrices(positionSide, price, bbMid),
+    slPrice,
+    tpPrices,
   };
 }
 
@@ -469,7 +548,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
-  constructor() {
+  constructor(_trend: Trend = "flat", _volatility: Volatility = "low") {
     this.params = bollingerParamsFor();
   }
 

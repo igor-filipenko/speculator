@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
+import { TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import {
   evaluateBollinger,
   BollingerStrategy,
+  bollingerNetReward,
   bollingerParamsFor,
   bollingerStopPrice,
   isAdxTrendAgainst,
@@ -24,10 +26,10 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
     atrPeriod: 5,
     adxPeriod: 5,
     adxMax: 100,
-    minBandToMidPct: 0.001,
     minReclaimDepth: 0,
     rsiPeriod: 5,
     rsiBuyMax: 100,
+    minRewardRisk: 0,
     diDomRatio: 0,
     ...overrides,
   });
@@ -87,9 +89,9 @@ function rejectUpperBand(): Candle[] {
 /** Filters loose enough that only the ADX direction gate can block this wick. */
 function rejectionFilters(): BollingerParams {
   return baseParams({
-    minBandToMidPct: 0.001,
     minReclaimDepth: 0,
     rsiBuyMax: 100,
+    minRewardRisk: 0,
   });
 }
 
@@ -248,7 +250,8 @@ describe("evaluateBollinger filters", () => {
     const mid = signal.meta?.bbMid;
     assert.ok(mid != null && mid > signal.price);
     assert.deepEqual(signal.tpPrices, [mid]);
-    assert.equal(signal.minRewardRisk, 0.2);
+    assert.equal(signal.minRewardRisk, 0);
+    assert.equal(bollingerParamsFor().minRewardRisk, 0.2);
   });
 
   it("does not pyramid when already long below mid", () => {
@@ -300,7 +303,9 @@ describe("evaluateBollinger filters", () => {
       pair: "SOL/USDC",
       candles,
       strategy: rejectionFilters(),
-      price: last.close,
+      // The wick closes only a tick above the mid; the quote has to sit further
+      // out or round-trip fees consume the reward.
+      price: last.close + 0.5,
       at: new Date((last.time + 15 * 60) * 1000),
       perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
     });
@@ -326,17 +331,54 @@ describe("evaluateBollinger filters", () => {
     assert.ok((signal.meta?.plusDi ?? 0) > (signal.meta?.minusDi ?? 0));
   });
 
-  it("ignores reclaim when band→mid distance is too small", () => {
+  it("holds a reclaim when fees consume the move to the mid", () => {
     const candles = reclaimLowerBand();
-    const strategy = looseFilters({ minBandToMidPct: 0.5 });
+    const last = candles[candles.length - 1]!;
+    const probe = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters({ minRewardRisk: 0 }),
+      price: last.close,
+    });
+    const mid = probe.meta?.bbMid;
+    assert.ok(mid != null && mid > last.close);
     const signal = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy,
+      strategy: looseFilters({ minRewardRisk: 0 }),
+      price: mid * (1 - 0.0001),
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /reward .* <= 0 after fees/);
+  });
+
+  it("holds a reclaim when fee-adjusted reward:risk is below minRewardRisk", () => {
+    const candles = reclaimLowerBand();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters({ minRewardRisk: 100 }),
       price: candles[candles.length - 1]!.close,
     });
-    assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /band→mid/);
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /reward:risk .* < 100/);
+  });
+
+  it("decreases reward by both legs of fees", () => {
+    const spot = TIER_COSTS.liquid.slippage + TIER_COSTS.liquid.poolFee;
+    const long = bollingerNetReward({ side: "long", price: 100, tp: 101, pair: "SOL/USDC" });
+    assert.equal(long, 101 * (1 - spot) - 100 * (1 + spot));
+
+    const slip = TIER_COSTS.liquid.slippage;
+    const short = bollingerNetReward({
+      side: "short",
+      price: 100,
+      tp: 99,
+      pair: "SOL/USDC",
+      perpsFees: { openFeePct: 0.01, closeFeePct: 0.02, borrowFeePctPerHour: 0.5 },
+    });
+    assert.equal(short, 100 * (1 - slip - 0.01 - 0.02) - 99 * (1 + slip));
+    assert.equal(bollingerNetReward({ side: "short", price: 100, tp: 99, pair: "SOL/USDC" }), null);
   });
 
   it("emits SELL when long and price reaches max(mid, minExit)", () => {
@@ -542,7 +584,7 @@ describe("evaluateBollinger filters", () => {
     const mid = withFees.meta?.bbMid;
     assert.ok(mid != null && mid < withFees.price);
     assert.deepEqual(withFees.tpPrices, [mid]);
-    assert.equal(withFees.minRewardRisk, 0.2);
+    assert.equal(withFees.minRewardRisk, 0);
 
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -720,9 +762,9 @@ describe("evaluateBollinger filters", () => {
 
 describe("bollingerStopPrice", () => {
   it("places the hard stop beyond the entry-bar extreme", () => {
-    assert.equal(bollingerStopPrice("long", 100, 4, "bullish", "high"), 88);
-    assert.equal(bollingerStopPrice("long", 100, 4, "flat", "low"), 90);
-    assert.equal(bollingerStopPrice("short", 100, 4, "flat", "low"), 110);
+    assert.equal(bollingerStopPrice("long", 100, 4, 3), 88);
+    assert.equal(bollingerStopPrice("long", 100, 4, 2.5), 90);
+    assert.equal(bollingerStopPrice("short", 100, 4, 2.5), 110);
   });
 });
 
@@ -761,9 +803,9 @@ describe("diDomRatio gate", () => {
   function diDomBase(diDomRatio: number): BollingerParams {
     return baseParams({
       adxMax: 100,
-      minBandToMidPct: 0.001,
       minReclaimDepth: 0,
       rsiBuyMax: 100,
+      minRewardRisk: 0,
       diDomRatio,
     });
   }
@@ -773,7 +815,13 @@ describe("diDomRatio gate", () => {
     const candles = trendThenUpperWick("up");
     const last = candles[candles.length - 1]!;
     const at = new Date((last.time + 15 * 60) * 1000);
-    const common = { pair: "SOL/USDC", candles, price: last.close, at, perpsFees: fees };
+    const common = {
+      pair: "SOL/USDC",
+      candles,
+      price: last.close + 0.5,
+      at,
+      perpsFees: fees,
+    };
 
     // diDomRatio disabled → SELL fires (adxMax:100 doesn't block low-ADX trend)
     const passed = evalBb({ ...common, strategy: diDomBase(0) });

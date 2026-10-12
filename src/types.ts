@@ -117,7 +117,8 @@ export interface Signal {
   tpPrices: number[];
   /**
    * Minimum reward per unit of stop risk for an opening signal.
-   * Bollinger is 0.2. Unused when `tpPrices` is empty (Donchian sets 0).
+   * Bollinger holds below 0.2 after round-trip fees. The risk manager applies
+   * the same floor to the gross target. Unused when `tpPrices` is empty (Donchian sets 0).
    */
   minRewardRisk: number;
   meta?: {

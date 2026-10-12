@@ -52,6 +52,8 @@ export interface BollingerParams {
   rsiBuyMax: number;
   /** Minimum reward per unit of stop risk. Mean-reversion targets sit close to the stop. */
   minRewardRisk: number;
+  /** Stop distance beyond the entry-bar extreme, in ATRs. */
+  stopAtr: number;
   /**
    * Closed bars to wait before an adverse time stop. 0 disables.
    * Mean-reversion that is still going the wrong way is scratched here,
@@ -70,54 +72,6 @@ export interface BollingerParams {
   diDomRatio: number;
 }
 
-/** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
-const STD_DEV: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
-  flat: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
-  bearish: { high: 1.6, low: 1.5, squeeze: 1.4, unknown: 1.5 },
-  unknown: { high: 1.6, low: 1.5, squeeze: 1.5, unknown: 1.5 },
-};
-
-/** Looser ADX in tradable regimes so 15m dips still count as mean-reversion. */
-const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
-  flat: { high: 32, low: 29, squeeze: 32, unknown: 36 },
-  bearish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
-  unknown: { high: 29, low: 29, squeeze: 29, unknown: 29 },
-};
-
-/** Skip tiny squeeze TPs; high vol is no-buy so the row is unused for entries. */
-const MIN_BAND_TO_MID: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
-  flat: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
-  bearish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
-  unknown: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
-};
-
-/** Fraction of band width the close must reclaim; kisses stay out. */
-const MIN_RECLAIM_DEPTH: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
-  flat: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
-  bearish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
-  unknown: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
-};
-
-/** HTF already gates trend; RSI just skips momentum touches that are not oversold. */
-const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
-  flat: { high: 45, low: 55, squeeze: 50, unknown: 50 },
-  bearish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
-  unknown: { high: 45, low: 55, squeeze: 50, unknown: 50 },
-};
-
-/** Stop distance beyond the entry-bar extreme, in ATRs. */
-const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
-  flat: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
-  bearish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
-  unknown: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
-};
-
 /**
  * Hard stop beyond the signal bar. Longs sit under the bar low; shorts sit over
  * the bar high. Using the close would leave the reclaim wick already through the stop.
@@ -126,10 +80,9 @@ export function bollingerStopPrice(
   side: "long" | "short",
   barExtreme: number,
   atrValue: number,
-  trend: Trend = "flat",
-  volatility: Volatility = "low",
+  stopAtr: number
 ): number {
-  const distance = ATR_STOP[trend][volatility] * atrValue;
+  const distance = stopAtr * atrValue;
   return side === "long" ? barExtreme - distance : barExtreme + distance;
 }
 
@@ -141,23 +94,21 @@ export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: 
 }
 
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
-export function bollingerParamsFor(
-  trend: Trend = "flat",
-  volatility: Volatility = "low",
-): BollingerParams {
+export function bollingerParamsFor(): BollingerParams {
   return {
     timeframe: "15m",
     period: 14,
-    stdDev: STD_DEV[trend][volatility],
+    stdDev: 1.5,
     atrPeriod: 14,
     adxPeriod: 14,
-    adxMax: ADX_MAX[trend][volatility],
-    minBandToMidPct: MIN_BAND_TO_MID[trend][volatility],
-    minReclaimDepth: MIN_RECLAIM_DEPTH[trend][volatility],
+    adxMax: 40,
+    minBandToMidPct: 0.0025,
+    minReclaimDepth: 0.1,
     minExitAboveEntryPct: 0.001,
     rsiPeriod: 14,
-    rsiBuyMax: RSI_BUY_MAX[trend][volatility],
+    rsiBuyMax: 50,
     minRewardRisk: 0.2,
+    stopAtr: 2.5,
     timeStopBars: 2,
     timeStopAtr: 1,
     diDomRatio: 1.5,
@@ -509,7 +460,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     ...base,
     side,
     reason,
-    slPrice: bollingerStopPrice(positionSide, extreme, atrNow, input.trend, input.volatility),
+    slPrice: bollingerStopPrice(positionSide, extreme, atrNow, strategy.stopAtr),
     tpPrices: bollingerTpPrices(positionSide, price, bbMid),
   };
 }
@@ -518,8 +469,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
-  constructor(trend: Trend = "flat", volatility: Volatility = "low") {
-    this.params = bollingerParamsFor(trend, volatility);
+  constructor() {
+    this.params = bollingerParamsFor();
   }
 
   getDisplayName(): string {

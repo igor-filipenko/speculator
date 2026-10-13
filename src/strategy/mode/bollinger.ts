@@ -56,14 +56,6 @@ export interface BollingerParams {
   timeStopBars: number;
   /** Last closed bar must be at least this many ATRs against the entry. */
   timeStopAtr: number;
-  /**
-   * DI dominance ratio gate — always-active, independent of `adxMax`.
-   * A BUY (long open) is blocked when −DI > +DI × diDomRatio (bearish dominance).
-   * A SELL (short open) is blocked when +DI > −DI × diDomRatio (bullish dominance).
-   * Symmetric: same threshold suppresses counter-trend entries in both directions.
-   * 0 = disabled. Useful range: 1.3–2.0 (1.5 ≈ one DI leads by 50 %).
-   */
-  diDomRatio: number;
 }
 
 /**
@@ -183,7 +175,6 @@ export function bollingerParamsFor(): BollingerParams {
     stopAtr: 2.5,
     timeStopBars: 2,
     timeStopAtr: 1,
-    diDomRatio: 1.5,
   };
 }
 
@@ -224,7 +215,6 @@ export interface BollingerInput {
  * **and** the quote is low enough to clear the open fee, close fee, hourly borrow since
  * `openedAt`, and cover slippage. Missing fees keep the short on HOLD.
  * An upper-band short is not opened without that schedule.
- * Above `adxMax` a long still passes when +DI > −DI, and a short when −DI > +DI.
  * Regime / ADX / RSI do not block exits.
  * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
  * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
@@ -407,25 +397,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const bandWidth = bbMid - bbLower;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
 
-    if (
-      isAdxTrendAgainst({
-        side: "long",
-        adxNow,
-        adxMax: strategy.adxMax,
-        plusDi,
-        minusDi,
-      })
-    ) {
-      reason = adxTrendAgainstReason("long", adxNow, strategy.adxMax, plusDi, minusDi);
-    } else if (
-      strategy.diDomRatio > 0 &&
-      plusDi != null &&
-      minusDi != null &&
-      minusDi > plusDi * strategy.diDomRatio
-    ) {
-      reason =
-        `Lower reclaim ignored: bearish DI dominance ` +
-        `(−DI ${fmt(minusDi)} > +DI ${fmt(plusDi)} × ${strategy.diDomRatio})`;
+    if (isAdxTrendAgainst({ adxNow, adxMax: strategy.adxMax })) {
+      reason = adxTrendAgainstReason("long", adxNow, strategy.adxMax);
     } else if (reclaimDepth < strategy.minReclaimDepth) {
       reason =
         `Lower reclaim ignored: depth ${pct(reclaimDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
@@ -437,7 +410,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `${adxGateNote("long", adxNow, strategy.adxMax, plusDi, minusDi)}; ` +
+        `${adxGateNote(adxNow, strategy.adxMax)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
   }
@@ -453,25 +426,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     } else if (rejectedUpper && fees != null) {
       const bandWidth = bbUpper - bbMid;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
-      if (
-        isAdxTrendAgainst({
-          side: "short",
-          adxNow,
-          adxMax: strategy.adxMax,
-          plusDi,
-          minusDi,
-        })
-      ) {
-        reason = adxTrendAgainstReason("short", adxNow, strategy.adxMax, plusDi, minusDi);
-      } else if (
-        strategy.diDomRatio > 0 &&
-        plusDi != null &&
-        minusDi != null &&
-        plusDi > minusDi * strategy.diDomRatio
-      ) {
-        reason =
-          `Upper rejection ignored: bullish DI dominance ` +
-          `(+DI ${fmt(plusDi)} > −DI ${fmt(minusDi)} × ${strategy.diDomRatio})`;
+      if (isAdxTrendAgainst({ adxNow, adxMax: strategy.adxMax })) {
+        reason = adxTrendAgainstReason("short", adxNow, strategy.adxMax);
       } else if (rejectDepth < strategy.minReclaimDepth) {
         reason =
           `Upper rejection ignored: depth ${pct(rejectDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
@@ -483,7 +439,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
-          `${adxGateNote("short", adxNow, strategy.adxMax, plusDi, minusDi)}; ` +
+          `${adxGateNote(adxNow, strategy.adxMax)}; ` +
           `depth ${pct(rejectDepth)}; RSI ${fmt(rsiNow)} > ${fmt(rsiShortMin)}`;
       }
     } else {
@@ -593,58 +549,20 @@ export class BollingerStrategy implements Strategy {
 }
 
 /**
- * High ADX blocks a mean-reversion entry only when +DI/−DI does not support it.
- * A long needs +DI > −DI (dip in an uptrend). A short needs −DI > +DI (rally in a downtrend).
- * ADX at or below `adxMax` is flat and does not block.
+ * High ADX blocks a mean-reversion entry. ADX at or below `adxMax` does not block.
+ * +DI/−DI are not part of this gate.
  */
-export function isAdxTrendAgainst(input: {
-  side: "long" | "short";
-  adxNow: number;
-  adxMax: number;
-  plusDi: number | null | undefined;
-  minusDi: number | null | undefined;
-}): boolean {
-  const { side, adxNow, adxMax, plusDi, minusDi } = input;
-  if (!(adxNow > adxMax)) {
-    return false;
-  }
-  if (plusDi == null || minusDi == null) {
-    return true;
-  }
-  return side === "long" ? !(plusDi > minusDi) : !(minusDi > plusDi);
+export function isAdxTrendAgainst(input: { adxNow: number; adxMax: number }): boolean {
+  return input.adxNow > input.adxMax;
 }
 
-function adxTrendAgainstReason(
-  side: "long" | "short",
-  adxNow: number,
-  adxMax: number,
-  plusDi: number | null | undefined,
-  minusDi: number | null | undefined,
-): string {
+function adxTrendAgainstReason(side: "long" | "short", adxNow: number, adxMax: number): string {
   const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
-  if (plusDi == null || minusDi == null) {
-    return `${head}: ADX ${fmt(adxNow)} > ${adxMax} (not flat)`;
-  }
-  const di =
-    side === "long"
-      ? `+DI ${fmt(plusDi)} <= −DI ${fmt(minusDi)}`
-      : `−DI ${fmt(minusDi)} <= +DI ${fmt(plusDi)}`;
-  return `${head}: ADX ${fmt(adxNow)} > ${adxMax}, ${di}`;
+  return `${head}: ADX ${fmt(adxNow)} > ${adxMax}`;
 }
 
-function adxGateNote(
-  side: "long" | "short",
-  adxNow: number,
-  adxMax: number,
-  plusDi: number | null | undefined,
-  minusDi: number | null | undefined,
-): string {
-  if (!(adxNow > adxMax) || plusDi == null || minusDi == null) {
-    return `ADX ${fmt(adxNow)} <= ${adxMax}`;
-  }
-  return side === "long"
-    ? `ADX ${fmt(adxNow)} > ${adxMax} but +DI ${fmt(plusDi)} > −DI ${fmt(minusDi)}`
-    : `ADX ${fmt(adxNow)} > ${adxMax} but −DI ${fmt(minusDi)} > +DI ${fmt(plusDi)}`;
+function adxGateNote(adxNow: number, adxMax: number): string {
+  return `ADX ${fmt(adxNow)} <= ${adxMax}`;
 }
 
 /**

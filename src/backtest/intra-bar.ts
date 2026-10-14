@@ -72,12 +72,11 @@ export function formingCandle(closed: Candle, pricesSeen: readonly number[]): Ca
     }
   }
   return {
-    time: closed.time,
+    ...closed,
     open,
     high,
     low,
     close: last,
-    volume: closed.volume,
   };
 }
 

@@ -55,7 +55,7 @@ describe("solana.tokens", () => {
     assert.equal(pair.quoteMint, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
     assert.equal(pair.baseDecimals, 9);
     assert.equal(pair.quoteDecimals, 6);
-    assert.equal(pair.geckoPoolAddress, "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj");
+    assert.equal(pair.poolAddress, "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj");
   });
 
   it("getToken returns null for unknown symbols", async () => {

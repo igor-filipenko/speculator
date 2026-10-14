@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal (candles for Bollinger / Donchian)
+- **OHLCV:** GeckoTerminal or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -35,6 +35,7 @@ Edit `.env`:
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
+| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default) or `binance`                                 |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
 | `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
@@ -181,12 +182,12 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
-Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
+Offline backtest (replay cached/fetched OHLCV with emulated fill costs):
 
 ```bash
 pnpm backtest
 pnpm backtest -- --from 01-01-2026 --to 01-08-2026
-pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
+pnpm backtest -- --from 2026-01-01 --to 2026-08-01
 pnpm backtest -- --verbose
 ```
 
@@ -194,12 +195,11 @@ pnpm backtest -- --verbose
 | ----------------- | ---------------------------------------------------------------------- |
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
-| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
 | `--verbose`, `-v` | Print simulated trades and chart (default: metrics only)               |
 
 Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -218,7 +218,7 @@ pnpm regime -- --days 14
 pnpm regime -- --from 01-01-2026 --to 01-08-2026
 ```
 
-Regime accepts `--days` / `--from` / `--to` / `--force-refresh`. Strategy comes from env `STRATEGY`.
+Regime accepts `--days` / `--from` / `--to`. Strategy comes from env `STRATEGY`. Candles come from `CANDLE_SOURCE`.
 
 Single iteration (smoke test):
 
@@ -367,7 +367,10 @@ src/
   config.ts                # zod + env
   types.ts
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
-  market/gecko-terminal.ts
+  market/gecko/            # GeckoTerminalMarket
+  market/binance/          # BinanceMarket spot klines
+  market/cached/           # CachedMarket (Timescale gap fill)
+  market/manager.ts        # createMarket(CandleSource)
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters

@@ -1,4 +1,4 @@
-import { candleIntervalSeconds, isCandleClosed } from "../../market/gecko-terminal.js";
+import { candleIntervalSeconds } from "../../market/candle.js";
 import type {
   Candle,
   MarketIndicators,
@@ -176,8 +176,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   const { pair, candles, strategy, price } = input;
   const at = input.at ?? new Date();
   const forming = candles[candles.length - 1];
-  const lastIsClosed =
-    forming != null && isCandleClosed(forming, at.getTime() / 1000, strategy.timeframe);
+  const lastIsClosed = forming?.isClosed(at.getTime() / 1000) === true;
   const signalCandles = lastIsClosed || forming == null ? candles : candles.slice(0, -1);
   const closes = signalCandles.map((c) => c.close);
   const volumes = signalCandles.map((c) => c.volume);

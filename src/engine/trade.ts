@@ -1,8 +1,9 @@
 import { Connection } from "@solana/web3.js";
 import { assertTradeConfig, isPublicSolanaRpc, type AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
-import { candleIntervalSeconds, fetchCandles } from "../market/gecko-terminal.js";
+import { candleIntervalSeconds } from "../market/candle.js";
 import { refreshMarketIndicators } from "../market/htf-indicators.js";
+import { createMarket } from "../market/manager.js";
 import {
   logMarket,
   logPerpsFees,
@@ -20,6 +21,7 @@ import {
   isOrder,
   type Candle,
   type Exchange,
+  type Market,
   type MarketIndicators,
   type PairConfig,
   type Portfolio,
@@ -112,6 +114,7 @@ export async function runTrade(options: TradeOptions): Promise<void> {
  */
 export async function runTradingLoop(options: TradingLoopOptions): Promise<void> {
   const { config, strategyManager, exchange, once = false, modeLabel } = options;
+  const market = createMarket(config.candleSource);
   const strategy = strategyManager.getActiveStrategy();
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
@@ -133,6 +136,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
       try {
         const requiredNextDelay = await processPair({
           pair,
+          market,
           strategyManager,
           exchange,
           portfolios,
@@ -171,6 +175,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
  */
 async function processPair(args: {
   pair: PairConfig;
+  market: Market;
   strategyManager: StrategyManager;
   exchange: Exchange;
   portfolios: Map<string, Portfolio>;
@@ -181,6 +186,7 @@ async function processPair(args: {
 }): Promise<Delay> {
   const {
     pair,
+    market,
     strategyManager,
     exchange,
     portfolios,
@@ -194,27 +200,28 @@ async function processPair(args: {
 
   try {
     const previous = lastMarketIndicators.get(pair.symbol);
-    const market = await refreshMarketIndicators({
+    const indicators = await refreshMarketIndicators({
       pair,
+      market,
       required: strategyManager.getRequiredHtfCandles(),
       mtfRequired: strategyManager.getRequiredMtfCandles(),
       price,
       at: new Date(),
     });
-    logMarket(market);
+    logMarket(indicators);
     const marketChanged =
       previous !== undefined
-        ? await strategyManager.applyMarketIndicators(market, previous)
-        : await strategyManager.applyMarketIndicators(market);
-    lastMarketIndicators.set(pair.symbol, market);
+        ? await strategyManager.applyMarketIndicators(indicators, previous)
+        : await strategyManager.applyMarketIndicators(indicators);
+    lastMarketIndicators.set(pair.symbol, indicators);
     if (marketChanged) {
       console.log(
-        `[${pair.symbol}] market changed trend=${previous?.trend}→${market.trend}` +
-          ` vol=${previous?.volatility}→${market.volatility}`,
+        `[${pair.symbol}] market changed trend=${previous?.trend}→${indicators.trend}` +
+          ` vol=${previous?.volatility}→${indicators.volatility}`,
       );
       await telegram.notify({
         type: "market",
-        market,
+        market: indicators,
         ...(previous !== undefined ? { previous: previous.trend } : {}),
       });
     }
@@ -227,10 +234,13 @@ async function processPair(args: {
   const riskManager = strategyManager.getActiveRiskManager();
 
   const requiredCandles = strategy.getRequiredCandles();
-  const candles = await fetchCandles({
-    poolAddress: pair.geckoPoolAddress,
+  const nowSec = Math.floor(Date.now() / 1000);
+  const interval = candleIntervalSeconds(requiredCandles.timeframe);
+  const candles = await market.fetchCandles({
+    pair,
     timeframe: requiredCandles.timeframe,
-    limit: requiredCandles.count,
+    fromTime: nowSec - requiredCandles.count * interval,
+    toTime: nowSec,
   });
   const lastCandle = candles[candles.length - 1]!;
 
@@ -239,7 +249,7 @@ async function processPair(args: {
     await portfolio.syncFromChain(price);
   }
 
-  const market = lastMarketIndicators.get(pair.symbol) ?? {
+  const indicators = lastMarketIndicators.get(pair.symbol) ?? {
     pair: pair.symbol,
     price,
     trend: "unknown" as const,
@@ -252,7 +262,7 @@ async function processPair(args: {
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
-    market,
+    indicators,
     price,
     new Date(),
     portfolio?.getSnapshot(price),

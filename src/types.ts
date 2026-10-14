@@ -11,6 +11,13 @@ export type OrderType = "market" | "limit";
 
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
+/**
+ * OHLCV vendors this process can fetch.
+ * Postgres `market.candle_source` lists additional vendors so the column type
+ * does not change when a new client is added.
+ */
+export type CandleSource = "gecko-terminal" | "binance";
+
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";
 
@@ -97,6 +104,27 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  timeframe: Timeframe;
+  intervalSeconds: number;
+  source: CandleSource;
+  isClosed(atSec: number): boolean;
+}
+
+export interface FetchCandlesOptions {
+  pair: PairConfig;
+  timeframe: Timeframe;
+  /** Inclusive lower bound (Unix seconds) for the series returned to the caller. */
+  fromTime?: number;
+  /**
+   * Exclusive upper bound (Unix seconds). Defaults to now.
+   * Matches replay windows: a bar is included when `fromTime <= time < toTime`.
+   */
+  toTime?: number;
+}
+
+export interface Market {
+  readonly source: CandleSource;
+  fetchCandles(options: FetchCandlesOptions): Promise<Candle[]>;
 }
 
 export interface Signal {
@@ -173,8 +201,7 @@ export interface PairConfig {
   quoteMint: string;
   baseDecimals: number;
   quoteDecimals: number;
-  /** GeckoTerminal pool used for OHLCV. */
-  geckoPoolAddress: string;
+  poolAddress: string;
 }
 
 export interface Trade {

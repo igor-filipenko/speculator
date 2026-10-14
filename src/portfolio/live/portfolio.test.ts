@@ -15,7 +15,7 @@ const PAIR: PairConfig = {
   quoteMint: USDC,
   baseDecimals: 9,
   quoteDecimals: 6,
-  geckoPoolAddress: "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
+  poolAddress: "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
 };
 
 class FakeBalances implements BalanceSource {

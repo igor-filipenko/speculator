@@ -105,7 +105,7 @@ export function donchianParamsFor(
     atrPeriod: 14,
     minBreakAtrMult: MIN_BREAK_ATR[volatility],
     shortMaxExtendAtrMult: 0,
-    shortVolumeSmaScale: 1.7,
+    shortVolumeSmaScale: 1.4,
     shortMinBreakScale: 1.5,
     givebackAtrMult: 4,
     givebackArmAtrMult: 2,

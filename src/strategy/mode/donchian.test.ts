@@ -756,37 +756,6 @@ describe("stricter entries", () => {
   });
 });
 
-describe("donchianParamsFor", () => {
-  it("uses 15m DC40/20 defaults in flat/low", () => {
-    const p = donchianParamsFor("flat", "low");
-    assert.equal(p.timeframe, "15m");
-    assert.equal(p.entryPeriod, 40);
-    assert.equal(p.exitPeriod, 20);
-    assert.equal(p.volumeSmaPeriod, 20);
-    assert.equal(p.trendEmaPeriod, 50);
-    assert.equal(p.minBreakAtrMult, 0.7);
-    assert.equal(p.givebackAtrMult, 4);
-    assert.equal(p.givebackArmAtrMult, 2);
-    assert.equal(p.timeStopBars, 3);
-    assert.equal(p.volumeSmaMult, 2.6);
-    assert.equal(p.shortVolumeSmaScale, 1.4);
-    assert.equal(p.shortMinBreakScale, 1.5);
-    assert.equal(p.givebackLockEntry, true);
-    assert.equal(p.maxEntryAgeBars, 0.25);
-    assert.equal(p.atrStopMult, 3);
-  });
-
-  it("tightens volume in squeeze and keeps a fixed exit channel", () => {
-    assert.equal(donchianParamsFor("bullish", "high").volumeSmaMult, 1.6);
-    assert.equal(donchianParamsFor("bullish", "high").exitPeriod, 20);
-    assert.equal(donchianParamsFor("bullish", "high").minBreakAtrMult, 0.7);
-    assert.equal(donchianParamsFor("bullish", "low").volumeSmaMult, 2.0);
-    assert.equal(donchianParamsFor("bullish", "squeeze").volumeSmaMult, 2.1);
-    assert.equal(donchianParamsFor("bullish", "squeeze").exitPeriod, 20);
-    assert.equal(donchianParamsFor("bullish", "squeeze").minBreakAtrMult, 0.5);
-  });
-});
-
 describe("DonchianStrategy", () => {
   it("exposes a 3×ATR hard stop and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");

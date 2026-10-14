@@ -170,7 +170,7 @@ describe("applyMarketIndicators", () => {
     assert.equal(await manager.applyMarketIndicators(squeezed, squeezed), false);
   });
 
-  it("recreates BollingerStrategy with high-vol ADX when trend is bullish and vol is high", async () => {
+  it("recreates BollingerStrategy when trend is bullish and vol is high", async () => {
     const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
     const strategyBefore = manager.getActiveStrategy();
     const mtfCandles = highVolMtf(140);
@@ -187,7 +187,7 @@ describe("applyMarketIndicators", () => {
     assert.equal(high.volatility, "high");
     await manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX44"));
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 

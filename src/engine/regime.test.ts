@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { useTestDb } from "../db/test-db.js";
 import type { AppConfig } from "../config.js";
 import { SimpleStrategyManager } from "../strategy/strategy-manager.js";
+import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
 import { parseRegimeArgs, runRegime, segmentsFromChanges } from "./regime.js";
 
@@ -17,6 +18,7 @@ function makeConfig(): AppConfig {
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
     paperCashUsdc: 1000,
+    candleSource: "gecko-terminal",
     botId: "test",
     solanaRpcUrl: "https://api.mainnet-beta.solana.com",
     slippageBps: 50,
@@ -29,21 +31,21 @@ function makeConfig(): AppConfig {
         quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         baseDecimals: 9,
         quoteDecimals: 6,
-        geckoPoolAddress: SOL_USDC_POOL,
+        poolAddress: SOL_USDC_POOL,
       },
     ],
   };
 }
 
 function bar(time: number, close: number, range: number): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume: 1,
-  };
+  });
 }
 
 function htfSeries(count: number, startPrice: number, delta: number): Candle[] {
@@ -74,14 +76,12 @@ function lowThenHighMtf(lowCount: number, highCount: number): Candle[] {
 }
 
 describe("parseRegimeArgs", () => {
-  it("parses --days and --force-refresh", () => {
-    assert.deepEqual(parseRegimeArgs(["--days", "14", "--force-refresh"]), {
+  it("parses --days", () => {
+    assert.deepEqual(parseRegimeArgs(["--days", "14"]), {
       days: 14,
-      forceRefresh: true,
     });
     assert.deepEqual(parseRegimeArgs([]), {
       days: 0,
-      forceRefresh: false,
     });
   });
 

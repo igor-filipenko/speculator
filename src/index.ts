@@ -44,8 +44,8 @@ function usage(): never {
   tsx src/index.ts positions close long
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
-  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--force-refresh] [--verbose] [--monte-carlo <n> | --walk-forward <n>]
-  tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]] [--force-refresh]
+  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--monte-carlo <n> | --walk-forward <n>]
+  tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
@@ -54,7 +54,6 @@ Options:
   --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Replay range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
-  --force-refresh   Ignore OHLCV cache and refetch from GeckoTerminal
   --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
   --monte-carlo <n> Run N Monte Carlo intra-bar path samples (backtest only; ≥ 1)
   --walk-forward <n> Walk-forward N-fold temporal validation (backtest only; ≥ 2; excludes --monte-carlo)
@@ -277,7 +276,6 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
     const results = await runWalkForward({
       config,
       strategyManager,
-      forceRefresh: flags.forceRefresh,
       walkForwardFolds: flags.walkForwardFolds,
       ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
       ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
@@ -291,7 +289,6 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
   const results = await runBacktest({
     config,
     strategyManager,
-    forceRefresh: flags.forceRefresh,
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
     ...(flags.monteCarloRuns !== undefined ? { monteCarloRuns: flags.monteCarloRuns } : {}),
@@ -312,7 +309,6 @@ async function runRegimeCommand(argv: string[]): Promise<void> {
   const results = await runRegime({
     config,
     strategyManager,
-    forceRefresh: flags.forceRefresh,
     ...(flags.days > 0 ? { days: flags.days } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),

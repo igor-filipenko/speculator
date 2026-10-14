@@ -16,9 +16,6 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --verbose
 
 # Different strategy
 pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
-
-# Force-refresh OHLCV cache from GeckoTerminal
-pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 ```
 
 ---
@@ -30,7 +27,6 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 | `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
 | `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
 | `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`)                         |
-| `--force-refresh`    | Delete cached candles and re-fetch from GeckoTerminal                               |
 | `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
 | `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |

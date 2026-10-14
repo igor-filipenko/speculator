@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../../market/candle.js";
 import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
 import { TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import {
@@ -35,14 +36,14 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
 }
 
 function bar(time: number, close: number, range = 0.2): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume: 10,
-  };
+  });
 }
 
 const INTERVAL = 4 * 60 * 60;
@@ -109,39 +110,45 @@ function trendThenUpperWick(direction: "up" | "down"): Candle[] {
     const open = price;
     price += step;
     const close = price;
-    candles.push({
-      time: start + candles.length * interval,
-      open,
-      high: Math.max(open, close) + 0.05,
-      low: Math.min(open, close) - 0.15,
-      close,
-      volume: 10,
-    });
+    candles.push(
+      createCandle({
+        time: start + candles.length * interval,
+        open,
+        high: Math.max(open, close) + 0.05,
+        low: Math.min(open, close) - 0.15,
+        close,
+        volume: 10,
+      }),
+    );
   }
   let px = price;
   for (let i = 0; i < 16; i++) {
     const open = px;
     const close = px + (i % 2 === 0 ? -0.35 : 0.35);
     px = close;
-    candles.push({
-      time: start + candles.length * interval,
-      open,
-      high: Math.max(open, close) + 0.05,
-      low: Math.min(open, close) - 0.05,
-      close,
-      volume: 10,
-    });
+    candles.push(
+      createCandle({
+        time: start + candles.length * interval,
+        open,
+        high: Math.max(open, close) + 0.05,
+        low: Math.min(open, close) - 0.05,
+        close,
+        volume: 10,
+      }),
+    );
   }
   const base = candles[candles.length - 1]!.close;
   const t = candles[candles.length - 1]!.time;
-  candles.push({
-    time: t + interval,
-    open: base + 0.8,
-    high: base + 2.5,
-    low: base - 0.2,
-    close: base,
-    volume: 10,
-  });
+  candles.push(
+    createCandle({
+      time: t + interval,
+      open: base + 0.8,
+      high: base + 2.5,
+      low: base - 0.2,
+      close: base,
+      volume: 10,
+    }),
+  );
   return candles;
 }
 
@@ -166,14 +173,16 @@ function wickReclaimLower(): Candle[] {
     candles.push(bar(start + i * INTERVAL, price, 0.25));
   }
   const t = start + 50 * INTERVAL;
-  candles.push({
-    time: t,
-    open: 98.9,
-    high: 99.3,
-    low: 96.6,
-    close: 99.2,
-    volume: 10,
-  });
+  candles.push(
+    createCandle({
+      time: t,
+      open: 98.9,
+      high: 99.3,
+      low: 96.6,
+      close: 99.2,
+      volume: 10,
+    }),
+  );
   return candles;
 }
 
@@ -622,14 +631,14 @@ describe("evaluateBollinger filters", () => {
     const candles = wickReclaimLower();
     const last = candles[candles.length - 1]!;
     const interval = 15 * 60;
-    const next: Candle = {
+    const next = createCandle({
       time: last.time + interval,
       open: last.close,
       high: last.close,
       low: last.close,
       close: last.close,
       volume: 10,
-    };
+    });
     const at = new Date((next.time + 60) * 1000);
     const signal = evalBb({
       pair: "SOL/USDC",

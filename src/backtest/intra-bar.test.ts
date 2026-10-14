@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
 import { formingCandle, intraBarPrices, intraBarTicks, randomIntraBarPrices } from "./intra-bar.js";
 
 function bar(open: number, high: number, low: number, close: number): Candle {
-  return { time: 1_700_000_000, open, high, low, close, volume: 10 };
+  return createCandle({ time: 1_700_000_000, open, high, low, close, volume: 10 });
 }
 
 /** Midpoint of the high–low range (intra-bar volatility sample). */

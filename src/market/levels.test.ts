@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
 import { keyLevels, type KeyLevelsParams } from "./levels.js";
 
 function c(time: number, high: number, low: number, close: number, volume = 1): Candle {
-  return { time, open: close, high, low, close, volume };
+  return createCandle({ time, open: close, high, low, close, volume });
 }
 
 function params(overrides?: Partial<KeyLevelsParams>): KeyLevelsParams {

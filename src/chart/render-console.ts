@@ -97,8 +97,7 @@ export function bucketCandlesForWidth(candles: Candle[], maxColumns: number): Bu
     }
     const last = candles[to - 1]!;
     out.push({
-      time: first.time,
-      open: first.open,
+      ...first,
       high,
       low,
       close: last.close,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../market/candle.js";
 import type { Candle, Trade } from "../types.js";
 import {
   bucketCandlesForWidth,
@@ -14,14 +15,14 @@ import {
 } from "./render-console.js";
 
 function candle(time: number, close: number): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + 1,
     low: close - 1,
     close,
     volume: 10,
-  };
+  });
 }
 
 function trade(side: "BUY" | "SELL", timeSec: number): Trade {
@@ -53,7 +54,7 @@ describe("bucketCandlesForWidth", () => {
   it("aggregates OHLC across buckets", () => {
     const candles = [
       candle(100, 10),
-      { time: 200, open: 10, high: 15, low: 9, close: 12, volume: 5 },
+      createCandle({ time: 200, open: 10, high: 15, low: 9, close: 12, volume: 5 }),
       candle(300, 11),
       candle(400, 8),
     ];

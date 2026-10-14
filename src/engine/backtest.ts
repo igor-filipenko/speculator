@@ -3,8 +3,8 @@ import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
 import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated/emulated-quote.js";
-import { candleIntervalSeconds } from "../market/gecko-terminal.js";
-import { loadCachedCandles } from "../market/ohlcv-cache.js";
+import { candleIntervalSeconds } from "../market/candle.js";
+import { createMarket } from "../market/manager.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import {
   isOrder,
@@ -27,7 +27,6 @@ export interface BacktestCliOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
   toTime?: number;
-  forceRefresh: boolean;
   /** Print simulated trades and chart; when false, metrics only. */
   verbose: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
@@ -195,8 +194,6 @@ export interface RunWalkForwardOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
-  forceRefresh?: boolean;
-  /** Number of sequential folds. Must be ≥ 2. */
   walkForwardFolds: number;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
@@ -213,7 +210,6 @@ export interface RunBacktestOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
-  forceRefresh?: boolean;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
@@ -240,21 +236,17 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const cacheOpts = {
-    forceRefresh: options.forceRefresh ?? false,
-  };
+  const market = createMarket(options.config.candleSource);
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
     const candles =
       options.candles ??
-      (await loadCachedCandles({
-        symbol: pair.symbol,
-        poolAddress: pair.geckoPoolAddress,
+      (await market.fetchCandles({
+        pair,
         timeframe,
         fromTime,
         toTime,
-        ...cacheOpts,
       }));
 
     if (candles.length === 0) {
@@ -267,21 +259,21 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     const skipNetwork = options.candles !== undefined;
     const htfCandles = await loadHtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.htfCandles,
       skipFetch: skipNetwork && options.htfCandles === undefined,
-      cacheOpts,
     });
     const mtfCandles = await loadMtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.mtfCandles,
       skipFetch: skipNetwork && options.mtfCandles === undefined,
-      cacheOpts,
     });
 
     const pairArgs = {
@@ -324,20 +316,18 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const cacheOpts = { forceRefresh: options.forceRefresh ?? false };
+  const market = createMarket(options.config.candleSource);
 
   const results: WalkForwardResult[] = [];
 
   for (const pair of options.config.pairs) {
     const allCandles =
       options.candles ??
-      (await loadCachedCandles({
-        symbol: pair.symbol,
-        poolAddress: pair.geckoPoolAddress,
+      (await market.fetchCandles({
+        pair,
         timeframe,
         fromTime,
         toTime,
-        ...cacheOpts,
       }));
 
     if (allCandles.length === 0) {
@@ -355,21 +345,21 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
     const skipNetwork = options.candles !== undefined;
     const htfCandles = await loadHtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime: fullFrom,
       toTime: fullTo,
       injected: options.htfCandles,
       skipFetch: skipNetwork && options.htfCandles === undefined,
-      cacheOpts,
     });
     const mtfCandles = await loadMtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime: fullFrom,
       toTime: fullTo,
       injected: options.mtfCandles,
       skipFetch: skipNetwork && options.mtfCandles === undefined,
-      cacheOpts,
     });
 
     const foldSlices = splitCandlesIntoFolds(allCandles, options.walkForwardFolds);
@@ -967,7 +957,6 @@ function meanAndStd(values: number[]): { mean: number; stdDev: number } {
 
 /** Parse CLI flags for `backtest`. */
 export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
-  let forceRefresh = false;
   let verbose = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
@@ -978,10 +967,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      continue;
-    }
-    if (arg === "--force-refresh") {
-      forceRefresh = true;
       continue;
     }
     if (arg === "--verbose" || arg === "-v") {
@@ -1035,7 +1020,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
 
   const result: BacktestCliOptions = {
-    forceRefresh,
     verbose,
   };
   if (fromTime !== undefined) {

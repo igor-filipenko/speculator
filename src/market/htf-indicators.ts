@@ -1,19 +1,20 @@
+import { candleIntervalSeconds } from "./candle.js";
+import { evaluateMarketIndicators, htfParamsFor, mtfParamsFor } from "./htf.js";
 import type {
   HtfTimeframe,
+  Market,
   MarketIndicators,
   PairConfig,
   RequiredCandles,
   Timeframe,
 } from "../types.js";
-import { candleIntervalSeconds } from "./gecko-terminal.js";
-import { evaluateMarketIndicators, htfParamsFor, mtfParamsFor } from "./htf.js";
-import { loadCachedCandles } from "./ohlcv-cache.js";
 
 /**
  * Load HTF trend/S/R plus 1h volatility {@link MarketIndicators} from OHLCV cache.
  */
 export async function refreshMarketIndicators(args: {
   pair: PairConfig;
+  market: Market;
   required: RequiredCandles;
   mtfRequired: RequiredCandles;
   price: number;
@@ -31,16 +32,14 @@ export async function refreshMarketIndicators(args: {
   const mtfFromTime = nowSec - args.mtfRequired.count * mtfInterval;
 
   const [candles, mtfCandles] = await Promise.all([
-    loadCachedCandles({
-      symbol: args.pair.symbol,
-      poolAddress: args.pair.geckoPoolAddress,
+    args.market.fetchCandles({
+      pair: args.pair,
       timeframe,
       fromTime,
       toTime: nowSec,
     }),
-    loadCachedCandles({
-      symbol: args.pair.symbol,
-      poolAddress: args.pair.geckoPoolAddress,
+    args.market.fetchCandles({
+      pair: args.pair,
       timeframe: mtfTimeframe,
       fromTime: mtfFromTime,
       toTime: nowSec,

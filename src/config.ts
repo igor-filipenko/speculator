@@ -3,14 +3,17 @@ import { z } from "zod";
 import { assertMigrationsApplied } from "./db/migrate.js";
 import { getPool } from "./db/pools.js";
 import { getToken } from "./db/tokens.js";
-import type { HtfTimeframe, PairConfig } from "./types.js";
+import type { CandleSource, HtfTimeframe, PairConfig } from "./types.js";
 
 loadDotenv();
+
+const candleSources = ["gecko-terminal", "binance"] as const;
 
 const envSchema = z
   .object({
     STRATEGY: z.string().trim().min(1).default("bollinger"),
     HTF: z.enum(["4h", "1d"]).default("4h"),
+    CANDLE_SOURCE: z.enum(candleSources).default("gecko-terminal"),
     JUPITER_API_KEY: z.string().optional().default(""),
     WATCHLIST: z.string().default("SOL/USDC"),
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
@@ -40,6 +43,8 @@ export interface AppConfig {
   strategy: string;
   /** Higher-timeframe bars for StrategyManager trend / S/R (default 4h). */
   htf: HtfTimeframe;
+  /** OHLCV vendor: gecko-terminal or binance. */
+  candleSource: CandleSource;
   jupiterApiKey: string;
   watchlist: string[];
   pollIntervalMs: number;
@@ -105,7 +110,7 @@ async function resolvePair(symbol: string): Promise<PairConfig> {
     quoteMint: quote.mint,
     baseDecimals: base.decimals,
     quoteDecimals: quote.decimals,
-    geckoPoolAddress: pool.address,
+    poolAddress: pool.address,
   };
 }
 
@@ -137,6 +142,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const config: AppConfig = {
     strategy: env.STRATEGY,
     htf: env.HTF,
+    candleSource: env.CANDLE_SOURCE,
     jupiterApiKey: env.JUPITER_API_KEY,
     watchlist,
     pollIntervalMs: env.POLL_INTERVAL_MS,

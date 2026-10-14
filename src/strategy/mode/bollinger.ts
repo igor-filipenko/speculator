@@ -1,12 +1,11 @@
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { isCandleClosed } from "../../market/gecko-terminal.js";
+import { candleIntervalSeconds, isCandleClosed } from "../../market/gecko-terminal.js";
 import type {
   Candle,
   MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
-  RiskParams,
   Signal,
   SignalSide,
   Strategy,
@@ -27,7 +26,10 @@ export interface BollingerParams {
   atrPeriod: number;
   /** Wilder ADX period. */
   adxPeriod: number;
-  /** BUY only when ADX <= this (flat regime gate). */
+  /**
+   * Flat-regime cap. Above this, a long is allowed only when +DI > −DI
+   * and a short only when −DI > +DI. At or below it, direction is not required.
+   */
   adxMax: number;
   /**
    * Minimum (mid − lower) / close for a BUY.
@@ -53,10 +55,30 @@ export interface BollingerParams {
    * Below this, close under the fast EMA with -DI > +DI is treated as drift and skipped.
    */
   workTrendAdxFlatMax: number;
+  /** When false, 15m drift does not block a reclaim or an upper rejection. */
+  driftFilter: boolean;
   /** Wilder RSI period (oversold gate on lower-band reclaim). */
   rsiPeriod: number;
   /** BUY only when RSI < this (skip weak lower-band touches). */
   rsiBuyMax: number;
+  /** Minimum reward per unit of stop risk. Mean-reversion targets sit close to the stop. */
+  minRewardRisk: number;
+  /**
+   * Closed bars to wait before an adverse time stop. 0 disables.
+   * Mean-reversion that is still going the wrong way is scratched here,
+   * before the hard stop.
+   */
+  timeStopBars: number;
+  /** Last closed bar must be at least this many ATRs against the entry. */
+  timeStopAtr: number;
+  /**
+   * DI dominance ratio gate — always-active, independent of `adxMax`.
+   * A BUY (long open) is blocked when −DI > +DI × diDomRatio (bearish dominance).
+   * A SELL (short open) is blocked when +DI > −DI × diDomRatio (bullish dominance).
+   * Symmetric: same threshold suppresses counter-trend entries in both directions.
+   * 0 = disabled. Useful range: 1.3–2.0 (1.5 ≈ one DI leads by 50 %).
+   */
+  diDomRatio: number;
 }
 
 /** High vol is no-buy; slightly tighter bands in squeeze so touches still fire. */
@@ -69,36 +91,37 @@ const STD_DEV: Record<Trend, Record<Volatility, number>> = {
 
 /** Looser ADX in tradable regimes so 15m dips still count as mean-reversion. */
 const ADX_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 40, low: 32, squeeze: 36, unknown: 32 },
-  flat: { high: 28, low: 35, squeeze: 28, unknown: 32 },
-  bearish: { high: 25, low: 25, squeeze: 25, unknown: 25 },
-  unknown: { high: 25, low: 25, squeeze: 25, unknown: 25 },
+  bullish: { high: 44, low: 36, squeeze: 40, unknown: 36 },
+  flat: { high: 32, low: 29, squeeze: 32, unknown: 36 },
+  bearish: { high: 29, low: 29, squeeze: 29, unknown: 29 },
+  unknown: { high: 29, low: 29, squeeze: 29, unknown: 29 },
 };
 
 /** Skip tiny squeeze TPs; high vol is no-buy so the row is unused for entries. */
 const MIN_BAND_TO_MID: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.005, low: 0.0035, squeeze: 0.0035, unknown: 0.004 },
-  flat: { high: 0.005, low: 0.0035, squeeze: 0.004, unknown: 0.004 },
-  bearish: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
-  unknown: { high: 0.005, low: 0.004, squeeze: 0.006, unknown: 0.004 },
+  bullish: { high: 0.004, low: 0.0025, squeeze: 0.0025, unknown: 0.003 },
+  flat: { high: 0.004, low: 0.0025, squeeze: 0.003, unknown: 0.003 },
+  bearish: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
+  unknown: { high: 0.004, low: 0.003, squeeze: 0.005, unknown: 0.003 },
 };
 
 /** Fraction of band width the close must reclaim; kisses stay out. */
 const MIN_RECLAIM_DEPTH: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 0.15, low: 0.15, squeeze: 0.2, unknown: 0.15 },
-  flat: { high: 0.15, low: 0.15, squeeze: 0.2, unknown: 0.15 },
-  bearish: { high: 0.15, low: 0.15, squeeze: 0.15, unknown: 0.15 },
-  unknown: { high: 0.15, low: 0.15, squeeze: 0.15, unknown: 0.15 },
+  bullish: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
+  flat: { high: 0.1, low: 0.1, squeeze: 0.12, unknown: 0.1 },
+  bearish: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
+  unknown: { high: 0.1, low: 0.1, squeeze: 0.1, unknown: 0.1 },
 };
 
 /** HTF already gates trend; RSI just skips momentum touches that are not oversold. */
 const RSI_BUY_MAX: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 50, low: 48, squeeze: 50, unknown: 45 },
-  flat: { high: 40, low: 50, squeeze: 45, unknown: 45 },
-  bearish: { high: 40, low: 40, squeeze: 40, unknown: 40 },
-  unknown: { high: 40, low: 40, squeeze: 40, unknown: 40 },
+  bullish: { high: 55, low: 53, squeeze: 55, unknown: 50 },
+  flat: { high: 45, low: 55, squeeze: 50, unknown: 50 },
+  bearish: { high: 45, low: 45, squeeze: 45, unknown: 45 },
+  unknown: { high: 45, low: 45, squeeze: 45, unknown: 45 },
 };
 
+/** Stop distance beyond the entry-bar extreme, in ATRs. */
 const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
   bullish: { high: 3, low: 2.5, squeeze: 2.5, unknown: 2.5 },
   flat: { high: 2.5, low: 2.5, squeeze: 2.5, unknown: 2.5 },
@@ -106,12 +129,27 @@ const ATR_STOP: Record<Trend, Record<Volatility, number>> = {
   unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
 };
 
-const ATR_TRAIL: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 3.5, low: 3, squeeze: 3, unknown: 2.5 },
-  flat: { high: 3, low: 3, squeeze: 3, unknown: 2.5 },
-  bearish: { high: 2, low: 2, squeeze: 2, unknown: 2 },
-  unknown: { high: 2, low: 2, squeeze: 2, unknown: 2 },
-};
+/**
+ * Hard stop beyond the signal bar. Longs sit under the bar low; shorts sit over
+ * the bar high. Using the close would leave the reclaim wick already through the stop.
+ */
+export function bollingerStopPrice(
+  side: "long" | "short",
+  barExtreme: number,
+  atrValue: number,
+  trend: Trend = "flat",
+  volatility: Volatility = "low",
+): number {
+  const distance = ATR_STOP[trend][volatility] * atrValue;
+  return side === "long" ? barExtreme - distance : barExtreme + distance;
+}
+
+/** Middle-band take-profit. Empty when the mid is not beyond the fill. */
+export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: number): number[] {
+  if (!(price > 0) || !(bbMid > 0)) return [];
+  const beyond = side === "long" ? bbMid > price : bbMid < price;
+  return beyond ? [bbMid] : [];
+}
 
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(
@@ -131,18 +169,13 @@ export function bollingerParamsFor(
     workTrendEmaFast: 20,
     workTrendEmaSlow: 50,
     workTrendAdxFlatMax: 20,
+    driftFilter: false,
     rsiPeriod: 14,
     rsiBuyMax: RSI_BUY_MAX[trend][volatility],
-  };
-}
-
-function riskParamsFor(trend: Trend, volatility: Volatility): RiskParams {
-  return {
-    timeframe: "15m",
-    atrStopMult: ATR_STOP[trend][volatility],
-    atrTrailMult: ATR_TRAIL[trend][volatility],
-    cooldownBars: 2,
-    minHoldBars: 0,
+    minRewardRisk: 0.2,
+    timeStopBars: 2,
+    timeStopAtr: 1,
+    diDomRatio: 1.5,
   };
 }
 
@@ -173,7 +206,7 @@ export interface BollingerInput {
 /**
  * Mean-reversion Bollinger for bullish/flat × low/squeeze.
  * BUY on a **closed** lower-band reclaim: same-bar wick (low ≤ lower, close back inside, green)
- * or prior close ≤ prior lower then close > lower, when ADX ≤ adxMax, close < mid,
+ * or prior close ≤ prior lower then close > lower, when the ADX gate passes, close < mid,
  * reclaim depth ≥ minReclaimDepth, (mid − lower) / close ≥ minBandToMidPct, RSI < rsiBuyMax.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and close ≥ middle
@@ -182,9 +215,13 @@ export interface BollingerInput {
  * **and** price is below entry by the open fee, close fee, and hourly borrow since `openedAt`.
  * Missing fees keep the short on HOLD. An upper-band short is not opened without that schedule,
  * and band→mid must still cover the open+close fee.
+ * Above `adxMax` a long still passes when +DI > −DI, and a short when −DI > +DI.
  * Regime / ADX / RSI do not block exits.
  * 15m stacked oversold (-DI > +DI, EMA fast < slow, ADX >= workTrendAdxFlatMax)
- * is allowed; other below-fast-EMA sells are drift and skipped.
+ * is allowed; other below-fast-EMA sells are drift and skipped unless `driftFilter` is false.
+ * An opening signal sets `tpPrices` to the middle band.
+ * After `timeStopBars` closed bars, exit when the last close is at least
+ * `timeStopAtr` × ATR against the entry. Wicks do not count.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -235,9 +272,12 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
   const base = {
     pair,
+    strategyId: "bollinger",
     price,
     at,
     meta,
+    tpPrices: [] as number[],
+    minRewardRisk: strategy.minRewardRisk,
   };
 
   if (
@@ -269,40 +309,81 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (long) {
     const minExit = entry * (1 + strategy.minExitAboveEntryPct);
     const profitablePrice = Math.max(bbMid, minExit);
-    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`;
-
     if (price >= profitablePrice) {
-      side = "SELL";
-      reason = `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`;
+      return {
+        ...base,
+        side: "SELL",
+        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)})`,
+      };
     }
-    return { ...base, side, reason };
+    const timed = adverseTimeStopReason({
+      side: "long",
+      entry,
+      close,
+      openedAt: input.openedAt,
+      at,
+      timeframe: strategy.timeframe,
+      atrNow,
+      timeStopBars: strategy.timeStopBars,
+      timeStopAtr: strategy.timeStopAtr,
+    });
+    if (timed != null) {
+      return { ...base, side: "SELL", reason: timed };
+    }
+    return {
+      ...base,
+      side: "HOLD",
+      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}`,
+    };
   }
 
   if (short) {
+    const timed = adverseTimeStopReason({
+      side: "short",
+      entry,
+      close,
+      openedAt: input.openedAt,
+      at,
+      timeframe: strategy.timeframe,
+      atrNow,
+      timeStopBars: strategy.timeStopBars,
+      timeStopAtr: strategy.timeStopAtr,
+    });
     const fees = input.perpsFees;
-    if (fees == null) {
+    if (fees != null) {
+      const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
+      const feePct = shortPositionFeePct({
+        openFeePct: fees.openFeePct,
+        closeFeePct: fees.closeFeePct,
+        borrowFeePctPerHour: fees.borrowFeePctPerHour,
+        heldMs,
+      });
+      const minExit = entry * (1 - feePct);
+      const profitablePrice = Math.min(bbMid, minExit);
+      if (price <= profitablePrice) {
+        return {
+          ...base,
+          side: "BUY",
+          reason: `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+        };
+      }
+      if (timed != null) {
+        return { ...base, side: "BUY", reason: timed };
+      }
       return {
         ...base,
         side: "HOLD",
-        reason: "Short cover held: perps fee schedule missing",
+        reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
       };
     }
-    const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
-    const feePct = shortPositionFeePct({
-      openFeePct: fees.openFeePct,
-      closeFeePct: fees.closeFeePct,
-      borrowFeePctPerHour: fees.borrowFeePctPerHour,
-      heldMs,
-    });
-    const minExit = entry * (1 - feePct);
-    const profitablePrice = Math.min(bbMid, minExit);
-    let reason = `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`;
-
-    if (price <= profitablePrice) {
-      side = "BUY";
-      reason = `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`;
+    if (timed != null) {
+      return { ...base, side: "BUY", reason: timed };
     }
-    return { ...base, side, reason };
+    return {
+      ...base,
+      side: "HOLD",
+      reason: "Short cover held: perps fee schedule missing",
+    };
   }
 
   const rsiShortMin = 100 - strategy.rsiBuyMax;
@@ -322,7 +403,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const bandToMidPct = bandWidth / close;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
     const blockedLong =
-      input.volatility == "squeeze" && input.trend != "bullish"
+      input.volatility == "squeeze" && input.trend == "bearish"
         ? "waiting for breakout down"
         : undefined;
 
@@ -330,8 +411,25 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = `Lower reclaim ignored: ${blocked}`;
     } else if (blockedLong) {
       reason = `Lower reclaim ignored: ${blockedLong}`;
-    } else if (adxNow > strategy.adxMax) {
-      reason = `Lower reclaim ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
+    } else if (
+      isAdxTrendAgainst({
+        side: "long",
+        adxNow,
+        adxMax: strategy.adxMax,
+        plusDi,
+        minusDi,
+      })
+    ) {
+      reason = adxTrendAgainstReason("long", adxNow, strategy.adxMax, plusDi, minusDi);
+    } else if (
+      strategy.diDomRatio > 0 &&
+      plusDi != null &&
+      minusDi != null &&
+      minusDi > plusDi * strategy.diDomRatio
+    ) {
+      reason =
+        `Lower reclaim ignored: bearish DI dominance ` +
+        `(−DI ${fmt(minusDi)} > +DI ${fmt(plusDi)} × ${strategy.diDomRatio})`;
     } else if (bandToMidPct < strategy.minBandToMidPct) {
       reason = `Lower reclaim ignored: band→mid ${pct(bandToMidPct)} < min ${pct(strategy.minBandToMidPct)}`;
     } else if (reclaimDepth < strategy.minReclaimDepth) {
@@ -341,6 +439,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     } else if (rsiNow >= strategy.rsiBuyMax) {
       reason = `Lower reclaim ignored: RSI ${fmt(rsiNow)} >= ${strategy.rsiBuyMax} (not oversold)`;
     } else if (
+      strategy.driftFilter &&
       isWorkDriftDown({
         close,
         emaFast: emaFastNow,
@@ -360,7 +459,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
+        `${adxGateNote("long", adxNow, strategy.adxMax, plusDi, minusDi)}; band→mid ${pct(bandToMidPct)}; ` +
         `depth ${pct(reclaimDepth)}; RSI ${fmt(rsiNow)} < ${strategy.rsiBuyMax}`;
     }
   }
@@ -370,7 +469,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     const wickReject = lastBar.high >= bbUpper && close < bbUpper && close < lastBar.open;
     const rejectedUpper = closeReject || wickReject;
     const blockedShort =
-      input.volatility == "squeeze" && input.trend != "bearish"
+      input.volatility == "squeeze" && input.trend == "bullish"
         ? "waiting for breakout up"
         : undefined;
 
@@ -387,8 +486,25 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         reason = `Upper rejection ignored: ${blocked}`;
       } else if (blockedShort) {
         reason = `Upper rejection ignored: ${blockedShort}`;
-      } else if (adxNow > strategy.adxMax) {
-        reason = `Upper rejection ignored: ADX ${fmt(adxNow)} > ${strategy.adxMax} (not flat)`;
+      } else if (
+        isAdxTrendAgainst({
+          side: "short",
+          adxNow,
+          adxMax: strategy.adxMax,
+          plusDi,
+          minusDi,
+        })
+      ) {
+        reason = adxTrendAgainstReason("short", adxNow, strategy.adxMax, plusDi, minusDi);
+      } else if (
+        strategy.diDomRatio > 0 &&
+        plusDi != null &&
+        minusDi != null &&
+        plusDi > minusDi * strategy.diDomRatio
+      ) {
+        reason =
+          `Upper rejection ignored: bullish DI dominance ` +
+          `(+DI ${fmt(plusDi)} > −DI ${fmt(minusDi)} × ${strategy.diDomRatio})`;
       } else if (bandToMidPct < minShortBand) {
         reason =
           shortRoundTripPct > strategy.minBandToMidPct
@@ -401,6 +517,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       } else if (rsiNow <= rsiShortMin) {
         reason = `Upper rejection ignored: RSI ${fmt(rsiNow)} <= ${fmt(rsiShortMin)} (not overbought)`;
       } else if (
+        strategy.driftFilter &&
         isWorkDriftUp({
           close,
           emaFast: emaFastNow,
@@ -420,7 +537,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
-          `ADX ${fmt(adxNow)} <= ${strategy.adxMax}; band→mid ${pct(bandToMidPct)}; ` +
+          `${adxGateNote("short", adxNow, strategy.adxMax, plusDi, minusDi)}; band→mid ${pct(bandToMidPct)}; ` +
           `depth ${pct(rejectDepth)}; RSI ${fmt(rsiNow)} > ${fmt(rsiShortMin)}`;
       }
     } else {
@@ -436,30 +553,36 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       `BUY needs both below mid, SELL needs both above mid + upper reject`;
   }
 
-  return { ...base, side, reason };
+  if ((side !== "BUY" && side !== "SELL") || atrNow == null || !(atrNow > 0)) {
+    return { ...base, side, reason };
+  }
+  const extreme = side === "BUY" ? lastBar.low : lastBar.high;
+  const positionSide = side === "BUY" ? "long" : "short";
+  return {
+    ...base,
+    side,
+    reason,
+    slPrice: bollingerStopPrice(positionSide, extreme, atrNow, input.trend, input.volatility),
+    tpPrices: bollingerTpPrices(positionSide, price, bbMid),
+  };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim + RSI; HOLD in bear, 1h high vol, or 15m drift; exit at mid or on an adverse time stop. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
-  private readonly risk: RiskParams;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low") {
     this.params = bollingerParamsFor(trend, volatility);
-    this.risk = riskParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, adxMax, rsiBuyMax } = this.params;
-    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax})`;
+    const { timeframe, period, stdDev, adxMax, rsiBuyMax, timeStopBars } = this.params;
+    const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
+    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} RSI${rsiBuyMax}${stop})`;
   }
 
-  getMode(): "bollinger" {
+  getId(): string {
     return "bollinger";
-  }
-
-  getRiskParams(): RiskParams {
-    return this.risk;
   }
 
   getRequiredCandles(): RequiredCandles {
@@ -510,6 +633,61 @@ export class BollingerStrategy implements Strategy {
 }
 
 /**
+ * High ADX blocks a mean-reversion entry only when +DI/−DI does not support it.
+ * A long needs +DI > −DI (dip in an uptrend). A short needs −DI > +DI (rally in a downtrend).
+ * ADX at or below `adxMax` is flat and does not block.
+ */
+export function isAdxTrendAgainst(input: {
+  side: "long" | "short";
+  adxNow: number;
+  adxMax: number;
+  plusDi: number | null | undefined;
+  minusDi: number | null | undefined;
+}): boolean {
+  const { side, adxNow, adxMax, plusDi, minusDi } = input;
+  if (!(adxNow > adxMax)) {
+    return false;
+  }
+  if (plusDi == null || minusDi == null) {
+    return true;
+  }
+  return side === "long" ? !(plusDi > minusDi) : !(minusDi > plusDi);
+}
+
+function adxTrendAgainstReason(
+  side: "long" | "short",
+  adxNow: number,
+  adxMax: number,
+  plusDi: number | null | undefined,
+  minusDi: number | null | undefined,
+): string {
+  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  if (plusDi == null || minusDi == null) {
+    return `${head}: ADX ${fmt(adxNow)} > ${adxMax} (not flat)`;
+  }
+  const di =
+    side === "long"
+      ? `+DI ${fmt(plusDi)} <= −DI ${fmt(minusDi)}`
+      : `−DI ${fmt(minusDi)} <= +DI ${fmt(plusDi)}`;
+  return `${head}: ADX ${fmt(adxNow)} > ${adxMax}, ${di}`;
+}
+
+function adxGateNote(
+  side: "long" | "short",
+  adxNow: number,
+  adxMax: number,
+  plusDi: number | null | undefined,
+  minusDi: number | null | undefined,
+): string {
+  if (!(adxNow > adxMax) || plusDi == null || minusDi == null) {
+    return `ADX ${fmt(adxNow)} <= ${adxMax}`;
+  }
+  return side === "long"
+    ? `ADX ${fmt(adxNow)} > ${adxMax} but +DI ${fmt(plusDi)} > −DI ${fmt(minusDi)}`
+    : `ADX ${fmt(adxNow)} > ${adxMax} but −DI ${fmt(minusDi)} > +DI ${fmt(plusDi)}`;
+}
+
+/**
  * Skip 15m lower-band sells that are drift/chop, not a stacked oversold trend.
  * Stacked oversold (close < EMA fast < slow, -DI > +DI, ADX >= floor) is the
  * mean-reversion setup and is allowed.
@@ -555,6 +733,55 @@ export function isWorkDriftUp(input: {
     return false;
   }
   return close > emaFast && (plusDi > minusDi || emaFast > emaSlow);
+}
+
+/**
+ * Failed mean-reversion: after `timeStopBars`, the last **close** is at least
+ * `timeStopAtr` × ATR against the entry. The forming bar's wick does not count.
+ */
+function adverseTimeStopReason(input: {
+  side: "long" | "short";
+  entry: number;
+  close: number;
+  openedAt: Date | undefined;
+  at: Date;
+  timeframe: Timeframe;
+  atrNow: number | null | undefined;
+  timeStopBars: number;
+  timeStopAtr: number;
+}): string | null {
+  if (
+    input.timeStopBars <= 0 ||
+    !(input.timeStopAtr > 0) ||
+    input.openedAt == null ||
+    input.atrNow == null ||
+    !(input.atrNow > 0) ||
+    !(input.entry > 0)
+  ) {
+    return null;
+  }
+
+  const intervalSec = candleIntervalSeconds(input.timeframe);
+  if (intervalSec <= 0) {
+    return null;
+  }
+
+  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
+  const barsHeld = Math.floor(elapsedSec / intervalSec);
+  if (barsHeld < input.timeStopBars) {
+    return null;
+  }
+
+  const adverse = input.side === "long" ? input.entry - input.close : input.close - input.entry;
+  const minAdverse = input.timeStopAtr * input.atrNow;
+  if (!(adverse >= minAdverse)) {
+    return null;
+  }
+
+  return (
+    `Time stop: close ${fmt(input.close)} is ${fmt(adverse)} against entry ${fmt(input.entry)} ` +
+    `after ${input.timeStopBars} bars (>= ${fmt(minAdverse)} = ${input.timeStopAtr}×ATR)`
+  );
 }
 
 function fmt(n: number): string {

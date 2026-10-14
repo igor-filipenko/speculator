@@ -406,8 +406,8 @@ function classifyTrend(input: {
   if (adxNow == null || adxNow < adxFlatMax || plusDi == null || minusDi == null) {
     return "flat";
   }
-  const stackedUp = close > ema50 && ema50 > ema200 && plusDi > minusDi;
-  const stackedDown = close < ema50 && ema50 < ema200 && minusDi > plusDi;
+  const stackedUp = close > ema50 && plusDi > minusDi;
+  const stackedDown = close < ema50 && minusDi > plusDi;
   if (stackedUp) {
     return "bullish";
   }

@@ -166,6 +166,8 @@ export interface DmiSeries {
 /**
  * Wilder DMI: +DI/−DI from index `period`, ADX from `2 * period - 1`.
  * Uses +DM/−DM and true range with Wilder smoothing, then DX → ADX.
+ * ADX is the Wilder smooth of DX, so it lags the current |+DI − −DI| spread:
+ * one bar can print ADX well above the DX implied by that bar's +DI/−DI.
  */
 export function dmi(candles: AdxCandle[], period: number): DmiSeries {
   if (period < 1) {

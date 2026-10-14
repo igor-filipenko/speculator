@@ -79,11 +79,16 @@ export function logPerpsFees(pair: string, fees: PerpsFees): void {
 
 export function logSignal(signal: Signal): void {
   const ts = signal.at.toISOString();
+  const sl = signal.slPrice != null ? ` sl=${fmt(signal.slPrice)}` : "";
+  const tp =
+    signal.tpPrices.length > 0 ? ` tp=${signal.tpPrices.map((p) => fmt(p)).join("/")}` : "";
   const meta = signal.meta
     ? ` emaFast=${fmt(signal.meta.emaFast)} emaSlow=${fmt(signal.meta.emaSlow)} rsi=${fmt(signal.meta.rsi)}`
     : "";
   console.log(
-    `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)} — ${signal.reason}${meta}`,
+    `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)}` +
+      ` strategy=${signal.strategyId}${sl}${tp} minR:R=${signal.minRewardRisk.toFixed(2)}` +
+      ` — ${signal.reason}${meta}`,
   );
 }
 

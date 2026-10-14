@@ -78,5 +78,5 @@ export async function useTestDb(botId = `test-${randomUUID()}`): Promise<string>
 }
 
 export async function truncateBotAndMarket(): Promise<void> {
-  await query(`TRUNCATE market.candles, market.signals, bot.portfolios, bot.trades`);
+  await query(`TRUNCATE market.candles, market.signals, bot.positions, bot.portfolios, bot.trades`);
 }

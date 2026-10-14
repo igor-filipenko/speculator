@@ -5,6 +5,8 @@ import {
   evaluateBollinger,
   BollingerStrategy,
   bollingerParamsFor,
+  bollingerStopPrice,
+  isAdxTrendAgainst,
   isWorkDriftDown,
   type BollingerInput,
   type BollingerParams,
@@ -29,6 +31,7 @@ function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams
     workTrendEmaSlow: 1000,
     rsiPeriod: 5,
     rsiBuyMax: 100,
+    diDomRatio: 0,
     ...overrides,
   });
 }
@@ -81,6 +84,104 @@ function rejectUpperBand(): Candle[] {
   const t = start + 50 * INTERVAL;
   candles.push(bar(t, 103.5, 0.5));
   candles.push(bar(t + INTERVAL, 101.0, 0.3));
+  return candles;
+}
+
+/** Filters loose enough that only the ADX direction gate can block this wick. */
+function rejectionFilters(): BollingerParams {
+  return baseParams({
+    minBandToMidPct: 0.001,
+    minReclaimDepth: 0,
+    rsiBuyMax: 100,
+    driftFilter: false,
+  });
+}
+
+/**
+ * Trend, then a tight range so the band catches price, then a red wick
+ * through the upper band with the close still above the mid.
+ */
+function trendThenUpperWick(direction: "up" | "down"): Candle[] {
+  const start = 1_700_000_000;
+  const interval = 15 * 60;
+  const candles: Candle[] = [];
+  let price = direction === "down" ? 150 : 50;
+  const step = direction === "down" ? -1.1 : 1.1;
+  for (let i = 0; i < 40; i++) {
+    const open = price;
+    price += step;
+    const close = price;
+    candles.push({
+      time: start + candles.length * interval,
+      open,
+      high: Math.max(open, close) + 0.05,
+      low: Math.min(open, close) - 0.15,
+      close,
+      volume: 10,
+    });
+  }
+  let px = price;
+  for (let i = 0; i < 16; i++) {
+    const open = px;
+    const close = px + (i % 2 === 0 ? -0.35 : 0.35);
+    px = close;
+    candles.push({
+      time: start + candles.length * interval,
+      open,
+      high: Math.max(open, close) + 0.05,
+      low: Math.min(open, close) - 0.05,
+      close,
+      volume: 10,
+    });
+  }
+  const base = candles[candles.length - 1]!.close;
+  const t = candles[candles.length - 1]!.time;
+  candles.push({
+    time: t + interval,
+    open: base + 0.8,
+    high: base + 2.5,
+    low: base - 0.2,
+    close: base,
+    volume: 10,
+  });
+  return candles;
+}
+
+/**
+ * Mirror of {@link trendThenUpperWick}: 40-bar trend then an immediate lower-band wick
+ * reclaim (no tight range — keeps BB wide so the hammer stays below mid).
+ * "up" → uptrend (+DI dominant), "down" → downtrend (-DI dominant).
+ */
+function trendThenLowerWick(direction: "up" | "down"): Candle[] {
+  const start = 1_700_000_000;
+  const interval = 15 * 60;
+  const candles: Candle[] = [];
+  let price = direction === "up" ? 50 : 150;
+  const step = direction === "up" ? 1.1 : -1.1;
+  for (let i = 0; i < 40; i++) {
+    const open = price;
+    price += step;
+    const close = price;
+    candles.push({
+      time: start + candles.length * interval,
+      open,
+      high: Math.max(open, close) + 0.15,
+      low: Math.min(open, close) - 0.05,
+      close,
+      volume: 10,
+    });
+  }
+  // Hammer directly after the trend — BB is still wide, close stays below mid
+  const base = candles[candles.length - 1]!.close;
+  const t = candles[candles.length - 1]!.time;
+  candles.push({
+    time: t + interval,
+    open: base,
+    high: base + 0.2,
+    low: base - 4.5, // pierce the lower band
+    close: base + 0.8, // reclaim: above lower, well below mid
+    volume: 10,
+  });
   return candles;
 }
 
@@ -148,6 +249,10 @@ describe("evaluateBollinger filters", () => {
     assert.ok(signal.meta?.bbLower != null);
     assert.ok(signal.meta?.atr != null);
     assert.ok(signal.meta?.rsi != null);
+    const mid = signal.meta?.bbMid;
+    assert.ok(mid != null && mid > signal.price);
+    assert.deepEqual(signal.tpPrices, [mid]);
+    assert.equal(signal.minRewardRisk, 0.2);
   });
 
   it("does not pyramid when already long below mid", () => {
@@ -178,7 +283,7 @@ describe("evaluateBollinger filters", () => {
     assert.equal(signal.side, "HOLD");
   });
 
-  it("ignores reclaim when ADX exceeds adxMax", () => {
+  it("ignores reclaim when ADX exceeds adxMax and -DI leads", () => {
     const candles = reclaimLowerBand();
     const strategy = looseFilters({ adxMax: 0 });
     const signal = evalBb({
@@ -189,6 +294,40 @@ describe("evaluateBollinger filters", () => {
     });
     assert.equal(signal.side, "HOLD");
     assert.match(signal.reason, /ADX/);
+    assert.match(signal.reason, /\+DI .+ <= −DI/);
+  });
+
+  it("shorts an upper rejection in a high-ADX downtrend", () => {
+    const candles = trendThenUpperWick("down");
+    const last = candles[candles.length - 1]!;
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: rejectionFilters(),
+      price: last.close,
+      at: new Date((last.time + 15 * 60) * 1000),
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /−DI .+ > \+DI/);
+    assert.ok((signal.meta?.minusDi ?? 0) > (signal.meta?.plusDi ?? 0));
+    assert.ok((signal.meta?.adx ?? 0) > 39);
+  });
+
+  it("ignores an upper rejection when high ADX is an uptrend", () => {
+    const candles = trendThenUpperWick("up");
+    const last = candles[candles.length - 1]!;
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: rejectionFilters(),
+      price: last.close,
+      at: new Date((last.time + 15 * 60) * 1000),
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /Upper rejection ignored: ADX .+ −DI .+ <= \+DI/);
+    assert.ok((signal.meta?.plusDi ?? 0) > (signal.meta?.minusDi ?? 0));
   });
 
   it("ignores reclaim when band→mid distance is too small", () => {
@@ -219,6 +358,7 @@ describe("evaluateBollinger filters", () => {
     assert.ok(last.close >= signal.meta.bbMid);
     assert.equal(signal.side, "SELL");
     assert.match(signal.reason, /Price .+ profitable price/);
+    assert.deepEqual(signal.tpPrices, []);
   });
 
   it("holds mid when flat (no long)", () => {
@@ -275,6 +415,108 @@ describe("evaluateBollinger filters", () => {
     assert.match(covered.reason, /profitable price/);
   });
 
+  it("covers a short when the close is at least 1×ATR against the entry after timeStopBars", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const at = new Date();
+    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
+    const perpsFees = {
+      openFeePct: 0.0006,
+      closeFeePct: 0.0006,
+      borrowFeePctPerHour: 0.000007,
+    };
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      entryPrice: last.close * 0.9,
+      positionSide: "short",
+      openedAt,
+      at,
+      perpsFees,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /Time stop/);
+    assert.match(signal.reason, /after 2 bars/);
+  });
+
+  it("does not time-stop a short before timeStopBars have elapsed", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const at = new Date();
+    const openedAt = new Date(at.getTime() - 15 * 60 * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      entryPrice: last.close * 0.9,
+      positionSide: "short",
+      openedAt,
+      at,
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /Waiting for profitable price/);
+  });
+
+  it("does not time-stop a short whose close is only a tick against the entry", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const at = new Date();
+    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters({ timeStopAtr: 50 }),
+      price: last.close,
+      entryPrice: last.close * 0.999,
+      positionSide: "short",
+      openedAt,
+      at,
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /Waiting for profitable price/);
+  });
+
+  it("sells a long when the close is at least 1×ATR against the entry after timeStopBars", () => {
+    const candles = reclaimLowerBand();
+    const last = candles[candles.length - 1]!;
+    const at = new Date();
+    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      entryPrice: last.close * 1.1,
+      openedAt,
+      at,
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Time stop/);
+  });
+
+  it("keeps a profitable exit ahead of the time stop", () => {
+    const candles = reboundToMid();
+    const last = candles[candles.length - 1]!;
+    const at = new Date();
+    const openedAt = new Date(at.getTime() - 4 * 15 * 60 * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close * 1.05,
+      entryPrice: last.close * 1.02,
+      openedAt,
+      at,
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /profitable price/);
+  });
+
   it("holds a short cover when the perps fee schedule is missing", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
@@ -301,6 +543,10 @@ describe("evaluateBollinger filters", () => {
       perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
     });
     assert.equal(withFees.side, "SELL", withFees.reason);
+    const mid = withFees.meta?.bbMid;
+    assert.ok(mid != null && mid < withFees.price);
+    assert.deepEqual(withFees.tpPrices, [mid]);
+    assert.equal(withFees.minRewardRisk, 0.2);
 
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -400,6 +646,23 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /wick reclaim/i);
   });
 
+  it("BUYs when the reclaim bar is closed by time before the next candle appears", () => {
+    const candles = wickReclaimLower();
+    const last = candles[candles.length - 1]!;
+    const interval = 15 * 60;
+    // Gap after close: Gecko has not published the new forming bar yet.
+    const at = new Date((last.time + interval + 30) * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters(),
+      price: last.close,
+      at,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /wick reclaim/i);
+  });
+
   it("ignores reclaim when 1h volatility is high", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({
@@ -446,6 +709,56 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /RSI/);
   });
 
+  it("lets a drifted reclaim through when driftFilter is false", () => {
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 70; i++) {
+      const price = 100 + i * 0.2;
+      candles.push(bar(start + i * INTERVAL, price));
+    }
+    const prev = candles[candles.length - 1]!.close;
+    const t = start + 70 * INTERVAL;
+    candles.push({
+      time: t,
+      open: prev,
+      high: prev + 0.2,
+      low: prev - 3.2,
+      close: prev - 3,
+      volume: 10,
+    });
+    candles.push({
+      time: t + INTERVAL,
+      open: prev - 3,
+      high: prev - 2.05,
+      low: prev - 3.15,
+      close: prev - 2.2,
+      volume: 10,
+    });
+    const strategy = looseFilters({
+      workTrendEmaFast: 8,
+      workTrendEmaSlow: 21,
+      workTrendAdxFlatMax: 20,
+      driftFilter: true,
+    });
+    const last = candles[candles.length - 1]!;
+    const blocked = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: last.close,
+    });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /drift down/);
+
+    const passed = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: { ...strategy, driftFilter: false },
+      price: last.close,
+    });
+    assert.equal(passed.side, "BUY", passed.reason);
+  });
+
   it("ignores reclaim when depth is below minReclaimDepth", () => {
     const candles = reclaimLowerBand();
     const signal = evalBb({
@@ -461,32 +774,63 @@ describe("evaluateBollinger filters", () => {
 
 describe("bollingerParamsFor", () => {
   it("loosens ADX/RSI in tradable regimes", () => {
-    assert.equal(bollingerParamsFor("flat", "low").adxMax, 35);
+    assert.equal(bollingerParamsFor("flat", "low").adxMax, 29);
     assert.equal(bollingerParamsFor("flat", "low").timeframe, "15m");
-    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 50);
+    assert.equal(bollingerParamsFor("flat", "low").rsiBuyMax, 55);
     assert.equal(bollingerParamsFor("flat", "low").stdDev, 1.5);
-    assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.15);
+    assert.equal(bollingerParamsFor("flat", "low").minBandToMidPct, 0.0025);
+    assert.equal(bollingerParamsFor("flat", "low").minReclaimDepth, 0.1);
     assert.equal(bollingerParamsFor("flat", "low").minExitAboveEntryPct, 0.001);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaFast, 20);
     assert.equal(bollingerParamsFor("flat", "low").workTrendEmaSlow, 50);
     assert.equal(bollingerParamsFor("flat", "low").workTrendAdxFlatMax, 20);
-    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 40);
-    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 50);
+    assert.equal(bollingerParamsFor("flat", "low").driftFilter, false);
+    assert.equal(bollingerParamsFor("flat", "low").minRewardRisk, 0.2);
+    assert.equal(bollingerParamsFor("flat", "low").timeStopBars, 2);
+    assert.equal(bollingerParamsFor("flat", "low").timeStopAtr, 1);
+    assert.equal(bollingerParamsFor("bullish", "high").adxMax, 44);
+    assert.equal(bollingerParamsFor("bullish", "high").rsiBuyMax, 55);
     assert.equal(bollingerParamsFor("bullish", "high").stdDev, 1.6);
-    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 48);
-    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 28);
+    assert.equal(bollingerParamsFor("bullish", "low").rsiBuyMax, 53);
+    assert.equal(bollingerParamsFor("flat", "squeeze").adxMax, 32);
     assert.equal(bollingerParamsFor("flat", "squeeze").stdDev, 1.4);
-    assert.equal(bollingerParamsFor("flat", "squeeze").minReclaimDepth, 0.2);
-    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 40);
+    assert.equal(bollingerParamsFor("flat", "squeeze").minReclaimDepth, 0.12);
+    assert.equal(bollingerParamsFor("unknown", "squeeze").rsiBuyMax, 45);
   });
 
-  it("widens ATR stop/trail in bullish high vol and shortens cooldown", () => {
-    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrStopMult, 3);
-    assert.equal(new BollingerStrategy("bullish", "high").getRiskParams().atrTrailMult, 3.5);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrStopMult, 2.5);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().atrTrailMult, 3);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().cooldownBars, 2);
-    assert.equal(new BollingerStrategy("flat", "low").getRiskParams().minHoldBars, 0);
+  it("places the hard stop beyond the entry-bar extreme", () => {
+    assert.equal(bollingerStopPrice("long", 100, 4, "bullish", "high"), 88);
+    assert.equal(bollingerStopPrice("long", 100, 4, "flat", "low"), 90);
+    assert.equal(bollingerStopPrice("short", 100, 4, "flat", "low"), 110);
+  });
+});
+
+describe("isAdxTrendAgainst", () => {
+  it("allows a flat ADX either way and a high ADX only with the trade", () => {
+    assert.equal(
+      isAdxTrendAgainst({ side: "short", adxNow: 62, adxMax: 39, plusDi: 9.96, minusDi: 15.6 }),
+      false,
+    );
+    assert.equal(
+      isAdxTrendAgainst({ side: "short", adxNow: 62, adxMax: 39, plusDi: 20, minusDi: 10 }),
+      true,
+    );
+    assert.equal(
+      isAdxTrendAgainst({ side: "long", adxNow: 62, adxMax: 39, plusDi: 20, minusDi: 10 }),
+      false,
+    );
+    assert.equal(
+      isAdxTrendAgainst({ side: "long", adxNow: 62, adxMax: 39, plusDi: 9.96, minusDi: 15.6 }),
+      true,
+    );
+    assert.equal(
+      isAdxTrendAgainst({ side: "long", adxNow: 20, adxMax: 39, plusDi: 9.96, minusDi: 15.6 }),
+      false,
+    );
+    assert.equal(
+      isAdxTrendAgainst({ side: "short", adxNow: 62, adxMax: 39, plusDi: null, minusDi: 15 }),
+      true,
+    );
   });
 });
 
@@ -518,6 +862,81 @@ describe("isWorkDriftDown", () => {
 
   it("does not block when indicators are not warm", () => {
     assert.equal(isWorkDriftDown({ ...stackedOversold, emaSlow: undefined }), false);
+  });
+});
+
+describe("diDomRatio gate", () => {
+  const fees = { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 };
+  /** All gates disabled except diDomRatio. */
+  function diDomBase(diDomRatio: number): BollingerParams {
+    return baseParams({
+      adxMax: 100,
+      minBandToMidPct: 0.001,
+      minReclaimDepth: 0,
+      rsiBuyMax: 100,
+      driftFilter: false,
+      diDomRatio,
+    });
+  }
+
+  it("blocks SELL when +DI dominates even below adxMax (bullish dominance)", () => {
+    // trendThenUpperWick("up") → uptrend → +DI >> −DI
+    const candles = trendThenUpperWick("up");
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const common = { pair: "SOL/USDC", candles, price: last.close, at, perpsFees: fees };
+
+    // diDomRatio disabled → SELL fires (adxMax:100 doesn't block low-ADX trend)
+    const passed = evalBb({ ...common, strategy: diDomBase(0) });
+    assert.equal(passed.side, "SELL", passed.reason);
+    assert.ok((passed.meta?.plusDi ?? 0) > (passed.meta?.minusDi ?? 0));
+
+    // diDomRatio: 1.0 → +DI > −DI × 1.0 is always true when +DI dominant → blocks
+    const blocked = evalBb({ ...common, strategy: diDomBase(1.0) });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /bullish DI dominance/);
+  });
+
+  it("blocks BUY when −DI dominates even below adxMax (bearish dominance)", () => {
+    // trendThenLowerWick("down") → downtrend → −DI >> +DI
+    const candles = trendThenLowerWick("down");
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const common = { pair: "SOL/USDC", candles, price: last.close, at };
+
+    // diDomRatio disabled → BUY fires
+    const passed = evalBb({ ...common, strategy: diDomBase(0) });
+    assert.equal(passed.side, "BUY", passed.reason);
+    assert.ok((passed.meta?.minusDi ?? 0) > (passed.meta?.plusDi ?? 0));
+
+    // diDomRatio: 1.0 → −DI > +DI × 1.0 → blocks BUY
+    const blocked = evalBb({ ...common, strategy: diDomBase(1.0) });
+    assert.equal(blocked.side, "HOLD", blocked.reason);
+    assert.match(blocked.reason, /bearish DI dominance/);
+  });
+
+  it("does not block when DI values are roughly equal (no dominant direction)", () => {
+    // rejectUpperBand() is a flat oscillating range — DI values stay close to each other.
+    // Even with diDomRatio: 1.5 the SELL fires because neither DI leads by 50 %.
+    const candles = rejectUpperBand();
+    const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      price: last.close,
+      at,
+      perpsFees: fees,
+      strategy: diDomBase(1.5),
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.doesNotMatch(signal.reason, /DI dominance/);
+  });
+
+  it("bollingerParamsFor default diDomRatio is 1.5", () => {
+    assert.equal(bollingerParamsFor("flat", "low").diDomRatio, 1.5);
+    assert.equal(bollingerParamsFor("bullish", "high").diDomRatio, 1.5);
+    assert.equal(bollingerParamsFor("bearish", "low").diDomRatio, 1.5);
   });
 });
 

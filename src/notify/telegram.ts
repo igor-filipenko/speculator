@@ -143,10 +143,16 @@ function formatSignalMessage(signal: Signal): string {
 
   const lines = [
     `${sideIcon} *${escapeMd(signal.pair)}*  *${escapeMd(signal.side)}*`,
+    `Strategy ${code(signal.strategyId)}`,
     `Price ${code(signal.price.toFixed(6))}`,
-    "",
-    `_${escapeMd(signal.reason)}_`,
   ];
+
+  const levels = formatSignalLevels(signal);
+  if (levels.length > 0) {
+    lines.push(levels.join(" · "));
+  }
+
+  lines.push("", `_${escapeMd(signal.reason)}_`);
 
   if (signal.meta) {
     const parts = formatMetaParts(signal.meta);
@@ -157,6 +163,18 @@ function formatSignalMessage(signal: Signal): string {
 
   lines.push("", `_${escapeMd(signal.at.toISOString())}_`);
   return lines.join("\n");
+}
+
+function formatSignalLevels(signal: Signal): string[] {
+  const parts: string[] = [];
+  if (signal.slPrice != null) {
+    parts.push(`SL ${code(fmt(signal.slPrice))}`);
+  }
+  if (signal.tpPrices.length > 0) {
+    parts.push(`TP ${signal.tpPrices.map((p) => code(fmt(p))).join(" / ")}`);
+  }
+  parts.push(`${escapeMd("Min R:R")} ${code(signal.minRewardRisk.toFixed(2))}`);
+  return parts;
 }
 
 const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {

@@ -9,8 +9,6 @@ export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-sho
 
 export type OrderType = "market" | "limit";
 
-export type StrategyMode = "bollinger" | "grid" | "donchian";
-
 export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
@@ -107,6 +105,21 @@ export interface Signal {
   reason: string;
   price: number;
   at: Date;
+  /** `strategy.registry.id` of the strategy that produced this signal. */
+  strategyId: string;
+  /** Hard stop for an opening signal, set by the strategy. */
+  slPrice?: number;
+  /**
+   * Take-profit prices, nearest first.
+   * Bollinger sets the middle band. Donchian sets none (empty).
+   * The risk manager uses the furthest price for the reward:risk gate.
+   */
+  tpPrices: number[];
+  /**
+   * Minimum reward per unit of stop risk for an opening signal.
+   * Bollinger is 0.2. Unused when `tpPrices` is empty (Donchian sets 0).
+   */
+  minRewardRisk: number;
   meta?: {
     emaFast?: number;
     emaSlow?: number;
@@ -121,9 +134,9 @@ export interface Signal {
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;
-    /** Prior Donchian entry-channel high (breakout level). */
+    /** Prior Donchian entry-channel high (long breakout level). */
     donchianUpper?: number;
-    /** Prior Donchian exit-channel low. */
+    /** Prior Donchian entry-channel low (short breakout level). */
     donchianLower?: number;
     /** Prior-bar SMA of volume (breakout filter baseline). */
     volumeSma?: number;
@@ -142,6 +155,15 @@ export interface Position {
   /** Average entry price in quote (USDC). */
   entryPrice: number;
   openedAt?: Date;
+  /** `strategy.registry.id` that opened this position. */
+  strategyId: string;
+  /** Hard stop price from the opening signal. */
+  slPrice: number;
+  /**
+   * Fees paid to open this position, in USDC: the network priority fee plus
+   * the perps open fee on a short. Included in `realizedPnl` on close.
+   */
+  paidFee?: number;
 }
 
 export interface PairConfig {
@@ -152,20 +174,6 @@ export interface PairConfig {
   quoteDecimals: number;
   /** GeckoTerminal pool used for OHLCV. */
   geckoPoolAddress: string;
-}
-
-/** Position / exit policy used by {@link RiskManager} (independent of signal indicators). */
-export interface RiskParams {
-  /** Bar size for cooldown / min-hold (usually matches strategy timeframe). */
-  timeframe: Timeframe;
-  /** Hard stop distance: entry − atrStopMult × ATR. */
-  atrStopMult: number;
-  /** Trailing stop from peak: peak − atrTrailMult × ATR. */
-  atrTrailMult: number;
-  /** Bars to wait after a SELL before allowing a new BUY. */
-  cooldownBars: number;
-  /** Bars to hold before allowing a discretionary (cross) SELL; stops still fire. */
-  minHoldBars: number;
 }
 
 export interface Trade {
@@ -211,6 +219,10 @@ export interface Command {
   quoteBudgetUsdc?: number;
   /** Base size for close-long, close-short, and buy-sol (SOL to buy). */
   baseSize?: number;
+  /** Signal that produced this command. */
+  signal?: Signal;
+  /** Hard stop copied from {@link Signal.slPrice} on an opening command. */
+  slPrice?: number;
 }
 
 /**
@@ -238,6 +250,10 @@ export interface Order {
   reason: string;
   /** Network priority fee in USDC (0 for live paper quotes). */
   priorityFeeUsdc: number;
+  /** `strategy.registry.id` for an opening fill. */
+  strategyId?: string;
+  /** Hard stop price for an opening fill. */
+  slPrice?: number;
   /** Present for emulated (backtest) fills. */
   fillCosts?: {
     mid: number;
@@ -281,8 +297,8 @@ export interface RequiredCandles {
 
 export interface Strategy {
   getDisplayName(): string;
-  getMode(): StrategyMode;
-  getRiskParams(): RiskParams;
+  /** `strategy.registry.id` (for example `bollinger`). */
+  getId(): string;
   getRequiredCandles(): RequiredCandles;
   evaluateSignal(
     pair: string,
@@ -355,7 +371,7 @@ export interface StrategyManager {
   applyMarketIndicators(
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,
-  ): boolean;
+  ): Promise<boolean>;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

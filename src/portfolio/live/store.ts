@@ -5,6 +5,10 @@ export interface PersistedLivePosition {
   size: number;
   entryPrice: number;
   openedAt?: string;
+  strategyId?: string;
+  slPrice?: number;
+  /** Open priority fee plus perps open fee, in USDC. */
+  paidFee?: number;
 }
 
 /** Serializable live trade (dates as ISO strings). */

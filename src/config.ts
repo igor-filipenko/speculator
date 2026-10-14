@@ -3,13 +3,13 @@ import { z } from "zod";
 import { assertMigrationsApplied } from "./db/migrate.js";
 import { getPool } from "./db/pools.js";
 import { getToken } from "./db/tokens.js";
-import type { HtfTimeframe, PairConfig, StrategyMode } from "./types.js";
+import type { HtfTimeframe, PairConfig } from "./types.js";
 
 loadDotenv();
 
 const envSchema = z
   .object({
-    STRATEGY: z.enum(["bollinger", "grid", "donchian"]).default("bollinger"),
+    STRATEGY: z.string().trim().min(1).default("bollinger"),
     HTF: z.enum(["4h", "1d"]).default("4h"),
     JUPITER_API_KEY: z.string().optional().default(""),
     WATCHLIST: z.string().default("SOL/USDC"),
@@ -36,7 +36,8 @@ export interface TelegramConfig {
 }
 
 export interface AppConfig {
-  strategy: StrategyMode;
+  /** `strategy.registry.id` selected by `STRATEGY` or `--strategy`. */
+  strategy: string;
   /** Higher-timeframe bars for StrategyManager trend / S/R (default 4h). */
   htf: HtfTimeframe;
   jupiterApiKey: string;

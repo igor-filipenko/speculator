@@ -1,6 +1,7 @@
 import { match } from "ts-pattern";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
 import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
+import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
 import type {
   BalanceSource,
   Order,
@@ -52,6 +53,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
   }
 
@@ -95,9 +98,14 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       side: data.position.side,
       size: data.position.size,
       entryPrice: data.position.entryPrice,
+      strategyId: data.position.strategyId ?? "",
+      slPrice: data.position.slPrice ?? 0,
     };
     if (data.position.openedAt !== undefined) {
       position.openedAt = new Date(data.position.openedAt);
+    }
+    if (data.position.paidFee !== undefined && data.position.paidFee > 0) {
+      position.paidFee = data.position.paidFee;
     }
     portfolio.position = position;
 
@@ -130,6 +138,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       entryPrice: this.position.entryPrice,
       ...(this.position.openedAt !== undefined
         ? { openedAt: this.position.openedAt.toISOString() }
+        : {}),
+      ...(this.position.strategyId !== undefined ? { strategyId: this.position.strategyId } : {}),
+      ...(this.position.slPrice !== undefined ? { slPrice: this.position.slPrice } : {}),
+      ...(this.position.paidFee !== undefined && this.position.paidFee > 0
+        ? { paidFee: this.position.paidFee }
         : {}),
     };
 
@@ -208,23 +221,23 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     await this.overlayChain(order.price);
     if (order.intent === "open-long" && before === "flat" && this.position.side !== "long") {
       // RPC can lag the fill; keep the just-opened long until the next refresh.
-      this.position = {
-        pair: this.pairConfig.symbol,
-        side: "long",
-        size: order.size,
-        entryPrice: order.price,
-        openedAt: order.at,
-      };
+      this.position = openedPosition(this.pairConfig.symbol, "long", order);
     }
     if (order.intent === "open-short" && before === "flat" && this.position.side !== "short") {
       this.shortCollateralUsd = 0;
-      this.position = {
-        pair: this.pairConfig.symbol,
-        side: "short",
-        size: order.size,
-        entryPrice: order.price,
-        openedAt: order.at,
-      };
+      this.position = openedPosition(this.pairConfig.symbol, "short", order);
+    }
+    if (order.intent === "open-long" && this.position.side === "long") {
+      this.position = openedPosition(this.pairConfig.symbol, "long", {
+        ...order,
+        size: this.position.size,
+      });
+    }
+    if (order.intent === "open-short" && this.position.side === "short") {
+      this.position = openedPosition(this.pairConfig.symbol, "short", {
+        ...order,
+        size: this.position.size,
+      });
     }
     const persisted = this.toPersisted();
     await upsertLivePortfolio(persisted);
@@ -260,6 +273,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
           size: short.size,
           entryPrice: short.entryPrice,
           openedAt: new Date(),
+          strategyId: "",
+          slPrice: 0,
         };
       } else {
         this.position = { ...this.position, size: short.size };
@@ -276,6 +291,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
           size,
           entryPrice: markPrice,
           openedAt: new Date(),
+          strategyId: "",
+          slPrice: 0,
         };
       } else {
         this.position = { ...this.position, size };
@@ -288,6 +305,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
   }
 
@@ -312,13 +331,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       trade.txSignature = order.txSignature;
     }
 
-    this.position = {
-      pair: this.pairConfig.symbol,
-      side: "long",
-      size: order.size,
-      entryPrice: order.price,
-      openedAt: order.at,
-    };
+    this.position = openedPosition(this.pairConfig.symbol, "long", order);
     this.trades.push(trade);
     return trade;
   }
@@ -329,9 +342,10 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     }
 
     const size = order.size;
+    const paidFee = this.position.paidFee ?? 0;
     const proceeds = size * order.price - order.priorityFeeUsdc;
     const cost = size * this.position.entryPrice;
-    const pnl = proceeds - cost;
+    const pnl = proceeds - cost - paidFee;
 
     const trade: Trade = {
       pair: order.pair,
@@ -353,6 +367,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
     this.trades.push(trade);
     return trade;
@@ -365,6 +381,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     if (order.size <= 0 || order.price <= 0) {
       return null;
     }
+    const openFeeUsdc = perpsOpenFeeUsdc(order);
     const trade: Trade = {
       pair: order.pair,
       side: "SELL",
@@ -373,17 +390,12 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       at: order.at,
       simulated: false,
       reason: order.reason,
+      ...(openFeeUsdc > 0 ? { perpsFeeUsdc: openFeeUsdc } : {}),
     };
     if (order.txSignature !== undefined) {
       trade.txSignature = order.txSignature;
     }
-    this.position = {
-      pair: this.pairConfig.symbol,
-      side: "short",
-      size: order.size,
-      entryPrice: order.price,
-      openedAt: order.at,
-    };
+    this.position = openedPosition(this.pairConfig.symbol, "short", order);
     this.trades.push(trade);
     return trade;
   }
@@ -393,7 +405,17 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       return null;
     }
     const size = order.size;
-    const pnl = size * (this.position.entryPrice - order.price) - order.priorityFeeUsdc;
+    const notional = size * this.position.entryPrice;
+    const heldMs =
+      this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
+    const perps = order.fillCosts?.perps;
+    const perpsFeeUsdc = perps != null ? notional * shortCloseFeePct({ ...perps, heldMs }) : 0;
+    const paidFee = this.position.paidFee ?? 0;
+    const pnl =
+      size * (this.position.entryPrice - order.price) -
+      order.priorityFeeUsdc -
+      perpsFeeUsdc -
+      paidFee;
     const trade: Trade = {
       pair: order.pair,
       side: "BUY",
@@ -403,6 +425,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       at: order.at,
       simulated: false,
       reason: order.reason,
+      ...(perpsFeeUsdc > 0 ? { perpsFeeUsdc } : {}),
     };
     if (order.txSignature !== undefined) {
       trade.txSignature = order.txSignature;
@@ -414,6 +437,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       side: "flat",
       size: 0,
       entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
     };
     this.trades.push(trade);
     return trade;
@@ -435,6 +460,23 @@ function snapshotKey(portfolio: LivePortfolio): string {
  * SOL to buy so native balance reaches `max` after falling below `min`.
  * At or above `min`, no top-up.
  */
+function openedPosition(pair: string, side: "long" | "short", order: Order): Position {
+  const position: Position = {
+    pair,
+    side,
+    size: order.size,
+    entryPrice: order.price,
+    openedAt: order.at,
+    strategyId: order.strategyId ?? "",
+    slPrice: order.slPrice ?? 0,
+  };
+  const paidFee = order.priorityFeeUsdc + (side === "short" ? perpsOpenFeeUsdc(order) : 0);
+  if (paidFee > 0) {
+    position.paidFee = paidFee;
+  }
+  return position;
+}
+
 function calcInsufficientSol(
   nativeSol: number,
   solReserveMin: number,

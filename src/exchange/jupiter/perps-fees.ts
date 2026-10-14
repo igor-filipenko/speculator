@@ -16,6 +16,27 @@ export const JUPITER_PERPS_FEES: PerpsFees = {
 
 /** Open + close + hourly borrow accrued over `heldMs`, as a fraction of entry notional. */
 export function shortPositionFeePct(input: PerpsFees & { heldMs: number }): number {
+  return input.openFeePct + shortCloseFeePct(input);
+}
+
+/**
+ * Close fee plus hourly borrow over `heldMs`, as a fraction of entry notional.
+ * The open fee is charged once, when the short is opened.
+ */
+export function shortCloseFeePct(input: PerpsFees & { heldMs: number }): number {
   const hours = Math.max(0, input.heldMs) / 3_600_000;
-  return input.openFeePct + input.closeFeePct + hours * input.borrowFeePctPerHour;
+  return input.closeFeePct + hours * input.borrowFeePctPerHour;
+}
+
+/** Perps open fee in USDC. Zero when this fill has no perps schedule. */
+export function perpsOpenFeeUsdc(order: {
+  size: number;
+  price: number;
+  fillCosts?: { perps?: PerpsFees };
+}): number {
+  const openFeePct = order.fillCosts?.perps?.openFeePct ?? 0;
+  if (!(openFeePct > 0) || !(order.size > 0) || !(order.price > 0)) {
+    return 0;
+  }
+  return order.size * order.price * openFeePct;
 }

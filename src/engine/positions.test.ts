@@ -27,7 +27,14 @@ describe("formatSnapshot", () => {
       "SOL/USDC",
       {
         cashUsdc: 25,
-        position: { pair: "SOL/USDC", side: "flat", size: 0, entryPrice: 0 },
+        position: {
+          pair: "SOL/USDC",
+          side: "flat",
+          size: 0,
+          entryPrice: 0,
+          strategyId: "",
+          slPrice: 0,
+        },
         realizedPnl: 0,
         equity: 25,
         trades: [],
@@ -42,7 +49,14 @@ describe("formatSnapshot", () => {
       "SOL/USDC",
       {
         cashUsdc: 10,
-        position: { pair: "SOL/USDC", side: "long", size: 1.5, entryPrice: 150 },
+        position: {
+          pair: "SOL/USDC",
+          side: "long",
+          size: 1.5,
+          entryPrice: 150,
+          strategyId: "bollinger",
+          slPrice: 0,
+        },
         realizedPnl: 0,
         equity: 220,
         trades: [],

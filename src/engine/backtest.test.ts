@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { useTestDb } from "../db/test-db.js";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
-import { GenericRiskManager, HighRiskManager } from "../strategy/risk-manager.js";
+import { GenericRiskManager } from "../strategy/risk-manager.js";
 import {
   evaluateMarketIndicators,
   htfParamsFor,
@@ -15,16 +16,21 @@ import type {
   MarketIndicators,
   Order,
   RiskManager,
-  RiskParams,
+  Signal,
   SignalSide,
   Strategy,
   StrategyManager,
+  Trade,
 } from "../types.js";
 import {
+  countRoundTripsBySide,
   parseBacktestArgs,
   parseBacktestDate,
   runBacktest,
+  runWalkForward,
+  splitCandlesIntoFolds,
   computeBuyHoldEquity,
+  roundTripHoldMs,
 } from "./backtest.js";
 import { intraBarPrices } from "../backtest/intra-bar.js";
 
@@ -56,13 +62,13 @@ function makeConfig(cash = 1000): AppConfig {
   };
 }
 
-function makeRisk(strategy: Strategy): GenericRiskManager {
-  return new GenericRiskManager(strategy.getRiskParams());
+function makeRisk(): GenericRiskManager {
+  return new GenericRiskManager();
 }
 
 function htfAwareManager(strategy: Strategy): StrategyManager {
   const params = htfParamsFor("4h");
-  let riskManager: RiskManager = new GenericRiskManager(strategy.getRiskParams());
+  const riskManager: RiskManager = new GenericRiskManager();
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
@@ -77,21 +83,12 @@ function htfAwareManager(strategy: Strategy): StrategyManager {
         at,
         params,
       }),
-    applyMarketIndicators: (state, prev) => {
-      riskManager =
-        state.trend === "bullish"
-          ? new GenericRiskManager(strategy.getRiskParams())
-          : new HighRiskManager(`trend is ${state.trend}`, strategy.getRiskParams());
-      return prev?.trend !== state.trend;
-    },
+    applyMarketIndicators: (state, prev) => Promise.resolve(prev?.trend !== state.trend),
   };
 }
 
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
-function managerFor(
-  strategy: Strategy,
-  riskManager: RiskManager = makeRisk(strategy),
-): StrategyManager {
+function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): StrategyManager {
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
@@ -104,36 +101,40 @@ function managerFor(
       volatility: "unknown",
       htf: { timeframe: "4h", candles },
     }),
-    applyMarketIndicators: () => false,
+    applyMarketIndicators: () => Promise.resolve(false),
   };
 }
 
-function scriptedStrategy(opts: { buyIndex: number; risk?: Partial<RiskParams> }): Strategy {
-  const risk: RiskParams = {
-    timeframe: "15m",
-    atrStopMult: 100,
-    atrTrailMult: 100,
-    cooldownBars: 0,
-    minHoldBars: 0,
-    ...opts.risk,
-  };
+function scriptedStrategy(opts: {
+  buyIndex: number;
+  /** Distance below the buy price stored as slPrice when withStop is set. */
+  stopDistance?: number;
+  withStop?: boolean;
+}): Strategy {
+  const stopDistance = opts.stopDistance ?? 100;
   return {
     getDisplayName: () => "scripted",
-    getMode: () => "bollinger",
-    getRiskParams: () => risk,
+    getId: () => "bollinger",
     getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
     evaluateSignal: (pair, candles, _market, price, at) => {
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
       const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";
-      return {
+      const signal: Signal = {
         pair,
         side,
         reason: side === "BUY" ? "scripted buy" : "hold",
         price,
         at,
+        strategyId: "bollinger",
+        tpPrices: [],
+        minRewardRisk: 0.1,
         meta: { atr: 1, barLow: last.low, barHigh: last.high },
       };
+      if (opts.withStop && side === "BUY") {
+        signal.slPrice = price - stopDistance;
+      }
+      return signal;
     },
     buildChartSvg: () => "<svg></svg>",
   };
@@ -177,42 +178,27 @@ function htfSeries(count: number, startPrice: number, delta: number, start: numb
 }
 
 describe("parseBacktestArgs", () => {
-  it("parses --days and --force-refresh", () => {
-    assert.deepEqual(parseBacktestArgs(["--days", "14", "--force-refresh"]), {
-      days: 14,
+  it("parses --force-refresh and --verbose", () => {
+    assert.deepEqual(parseBacktestArgs(["--force-refresh"]), {
       forceRefresh: true,
-      ignoreTrend: false,
-      noIntrabar: false,
+      verbose: false,
     });
-    assert.deepEqual(parseBacktestArgs(["--days=7"]), {
-      days: 7,
+    assert.deepEqual(parseBacktestArgs(["--verbose"]), {
       forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: false,
+      verbose: true,
+    });
+    assert.deepEqual(parseBacktestArgs(["-v"]), {
+      forceRefresh: false,
+      verbose: true,
     });
     assert.deepEqual(parseBacktestArgs([]), {
-      days: 0,
       forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: false,
-    });
-    assert.deepEqual(parseBacktestArgs(["--ignore-trend"]), {
-      days: 0,
-      forceRefresh: false,
-      ignoreTrend: true,
-      noIntrabar: false,
-    });
-    assert.deepEqual(parseBacktestArgs(["--no-intrabar"]), {
-      days: 0,
-      forceRefresh: false,
-      ignoreTrend: false,
-      noIntrabar: true,
+      verbose: false,
     });
   });
 
   it("parses --from/--to as DD-MM-YYYY and YYYY-MM-DD", () => {
     const dmy = parseBacktestArgs(["--from", "01-01-2026", "--to", "01-08-2026"]);
-    assert.equal(dmy.days, 0);
     assert.equal(dmy.fromTime, Date.UTC(2026, 0, 1) / 1000);
     // --to is exclusive end of next day after 01-08-2026 → 2026-08-02 00:00 UTC
     assert.equal(dmy.toTime, Date.UTC(2026, 7, 2) / 1000);
@@ -223,17 +209,20 @@ describe("parseBacktestArgs", () => {
   });
 
   it("rejects invalid flags and conflicting window options", () => {
-    assert.throws(() => parseBacktestArgs(["--days"]), /requires/);
     assert.throws(() => parseBacktestArgs(["--unknown"]), /Unknown/);
+    assert.throws(() => parseBacktestArgs(["--days", "7"]), /Unknown/);
     assert.throws(() => parseBacktestArgs(["--to", "2026-08-01"]), /requires --from/);
-    assert.throws(
-      () => parseBacktestArgs(["--days", "7", "--from", "2026-01-01"]),
-      /either --days or --from/,
-    );
     assert.throws(
       () => parseBacktestArgs(["--from", "01-08-2026", "--to", "01-01-2026"]),
       /from must be before/,
     );
+  });
+
+  it("parses --monte-carlo as a positive integer", () => {
+    assert.equal(parseBacktestArgs(["--monte-carlo", "50"]).monteCarloRuns, 50);
+    assert.equal(parseBacktestArgs(["--monte-carlo=100"]).monteCarloRuns, 100);
+    assert.throws(() => parseBacktestArgs(["--monte-carlo", "0"]), /positive integer/);
+    assert.throws(() => parseBacktestArgs(["--monte-carlo", "abc"]), /positive integer/);
   });
 });
 
@@ -242,6 +231,49 @@ describe("parseBacktestDate", () => {
     assert.equal(parseBacktestDate("2026-01-01", "from"), Date.UTC(2026, 0, 1) / 1000);
     assert.equal(parseBacktestDate("01-01-2026", "from"), Date.UTC(2026, 0, 1) / 1000);
     assert.equal(parseBacktestDate("01-08-2026", "to"), Date.UTC(2026, 7, 2) / 1000);
+  });
+});
+
+function tradeFill(side: "BUY" | "SELL", at: string, realizedPnl?: number): Trade {
+  return {
+    pair: "SOL/USDC",
+    side,
+    price: 100,
+    size: 1,
+    at: new Date(at),
+    simulated: true,
+    ...(realizedPnl !== undefined ? { realizedPnl } : {}),
+  };
+}
+
+describe("roundTripHoldMs", () => {
+  it("measures close minus open for each completed trip", () => {
+    const holds = roundTripHoldMs([
+      tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+      tradeFill("SELL", "2026-01-01T01:30:00.000Z", 1),
+      tradeFill("SELL", "2026-01-02T00:00:00.000Z"),
+      tradeFill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
+    ]);
+    assert.deepEqual(holds, [90 * 60 * 1000, 15 * 60 * 1000]);
+  });
+
+  it("ignores an open that never closes", () => {
+    assert.deepEqual(roundTripHoldMs([tradeFill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+  });
+});
+
+describe("countRoundTripsBySide", () => {
+  it("counts long and short completed trips", () => {
+    assert.deepEqual(
+      countRoundTripsBySide([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:30:00.000Z", 1),
+        tradeFill("SELL", "2026-01-02T00:00:00.000Z"),
+        tradeFill("BUY", "2026-01-02T00:15:00.000Z", -0.5),
+        tradeFill("BUY", "2026-01-03T00:00:00.000Z"),
+      ]),
+      { longs: 1, shorts: 1 },
+    );
   });
 });
 
@@ -270,15 +302,13 @@ describe("runBacktest", () => {
       config: makeConfig(startingCash),
       strategyManager: managerFor(strategy),
       candles,
-      days: 30,
     });
 
     assert.ok(result);
     assert.equal(result.metrics.pair, "SOL/USDC");
     assert.equal(result.metrics.candleCount, candles.length);
     assert.equal(result.candles.length, candles.length);
-    assert.equal(result.metrics.strategy.getMode(), "bollinger");
-    assert.equal(result.metrics.intrabar, true);
+    assert.equal(result.metrics.strategy.getId(), "bollinger");
     assert.ok(result.equityCurve.length === candles.length);
 
     assert.ok(result.trades.length >= 1);
@@ -292,7 +322,15 @@ describe("runBacktest", () => {
     assert.equal(Math.floor(buy.at.getTime() / 1000), buyBar.time);
     const firstTick = intraBarPrices(buyBar)[0];
     assert.ok(firstTick);
-    const emulated = emulateFillPrice({ side: "BUY", close: firstTick, tier: "liquid" });
+    // Volume-weighted slippage: pass the same candleVolumeUsdc the exchange saw.
+    // No stop set → full cash budget is the tradeUsdc.
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: firstTick,
+      tier: "liquid",
+      tradeUsdc: startingCash,
+      candleVolumeUsdc: buyBar.volume * buyBar.close,
+    });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
 
     const midSize = startingCash / firstTick;
@@ -320,7 +358,8 @@ describe("runBacktest", () => {
 
     const strategy = scriptedStrategy({
       buyIndex: 20,
-      risk: { atrStopMult: 1.5, atrTrailMult: 50 },
+      withStop: true,
+      stopDistance: 0.5,
     });
 
     const [result] = await runBacktest({
@@ -330,13 +369,19 @@ describe("runBacktest", () => {
     });
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
-    const stopSell = result.trades.find((t) => t.side === "SELL" && t.reason?.includes("ATR"));
+    const stopSell = result.trades.find(
+      (t) => t.side === "SELL" && t.reason?.includes("hard stop"),
+    );
     assert.ok(stopSell);
-    assert.match(stopSell.reason ?? "", /ATR stop/);
+    assert.match(stopSell.reason ?? "", /hard stop hit/);
+    assert.ok(result.metrics.roundTripMinMs > 0);
+    assert.equal(result.metrics.roundTripMinMs, result.metrics.roundTripMaxMs);
+    assert.equal(result.metrics.roundTripAvgMs, result.metrics.roundTripMinMs);
   });
 
   it("keeps flat equity when indicators never fire", async () => {
-    const strategy = loadStrategy("bollinger", "flat", "low");
+    await useTestDb();
+    const strategy = await loadStrategy("bollinger", "flat", "low");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
@@ -351,12 +396,15 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
-      strategyManager: new SimpleStrategyManager({ strategyMode: "bollinger", htf: "4h" }),
+      strategyManager: await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" }),
       candles,
     });
 
     assert.ok(result);
     assert.equal(result.trades.length, 0);
+    assert.equal(result.metrics.roundTripMinMs, 0);
+    assert.equal(result.metrics.roundTripMaxMs, 0);
+    assert.equal(result.metrics.roundTripAvgMs, 0);
     assert.equal(result.metrics.endingEquity, 500);
     assert.equal(result.metrics.totalReturnPct, 0);
     assert.ok(result.metrics.holdEquity < 500);
@@ -364,7 +412,7 @@ describe("runBacktest", () => {
     assert.ok(result.metrics.vsHoldReturnPct > 0);
   });
 
-  it("evaluates HTF market state and blocks BUY when trend is not bullish", async () => {
+  it("fills a scripted BUY when HTF trend is bearish", async () => {
     const intervalHtf = 4 * 60 * 60;
     const ltfStart = 1_700_000_000;
     const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
@@ -376,7 +424,7 @@ describe("runBacktest", () => {
       htfCandles: htf,
     });
     assert.ok(result);
-    assert.equal(result.trades.filter((t) => t.side === "BUY").length, 0);
+    assert.ok(result.trades.some((t) => t.side === "BUY"));
   });
 
   it("allows BUY when HTF trend is bullish", async () => {
@@ -416,18 +464,20 @@ describe("runBacktest", () => {
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
-      getMode: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
+      getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });
-        return { pair, side: "HOLD", reason: "record", price, at };
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "record",
+          price,
+          at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
+        };
       },
       buildChartSvg: () => "<svg></svg>",
     };
@@ -441,22 +491,24 @@ describe("runBacktest", () => {
     const greenCalls = calls.filter((c) => c.last.time === green.time);
     assert.deepEqual(
       greenCalls.map((c) => c.price),
-      [100, 98, 104, 103],
+      [100, 98, 101, 104, 103],
     );
     assert.deepEqual(greenCalls[0]!.last, { ...green, high: 100, low: 100, close: 100 });
     assert.deepEqual(greenCalls[1]!.last, { ...green, high: 100, low: 98, close: 98 });
-    assert.deepEqual(greenCalls[2]!.last, { ...green, high: 104, low: 98, close: 104 });
-    assert.deepEqual(greenCalls[3]!.last, green);
+    assert.deepEqual(greenCalls[2]!.last, { ...green, high: 101, low: 98, close: 101 });
+    assert.deepEqual(greenCalls[3]!.last, { ...green, high: 104, low: 98, close: 104 });
+    assert.deepEqual(greenCalls[4]!.last, green);
 
     const redCalls = calls.filter((c) => c.last.time === red.time);
     assert.deepEqual(
       redCalls.map((c) => c.price),
-      [103, 105, 97, 99],
+      [103, 105, 101, 97, 99],
     );
     assert.deepEqual(redCalls[0]!.last, { ...red, high: 103, low: 103, close: 103 });
     assert.deepEqual(redCalls[1]!.last, { ...red, high: 105, low: 103, close: 105 });
-    assert.deepEqual(redCalls[2]!.last, { ...red, high: 105, low: 97, close: 97 });
-    assert.deepEqual(redCalls[3]!.last, red);
+    assert.deepEqual(redCalls[2]!.last, { ...red, high: 105, low: 101, close: 101 });
+    assert.deepEqual(redCalls[3]!.last, { ...red, high: 105, low: 97, close: 97 });
+    assert.deepEqual(redCalls[4]!.last, red);
   });
 
   it("fills a wick BUY at the intra-bar low, not the close", async () => {
@@ -480,14 +532,7 @@ describe("runBacktest", () => {
     };
     const strategy: Strategy = {
       getDisplayName: () => "wick-buy",
-      getMode: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
+      getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
       evaluateSignal: (pair, window, _market, price, at) => {
         const last = window[window.length - 1]!;
@@ -495,10 +540,13 @@ describe("runBacktest", () => {
           last.time === wickBar.time && price === last.low && last.low < last.open ? "BUY" : "HOLD";
         return {
           pair,
+          strategyId: "bollinger",
           side,
           reason: side === "BUY" ? "wick" : "hold",
           price,
           at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
           meta: { atr: 1, barLow: last.low, barHigh: last.high },
         };
       },
@@ -513,78 +561,55 @@ describe("runBacktest", () => {
     assert.ok(result);
     const buy = result.trades.find((t) => t.side === "BUY");
     assert.ok(buy);
-    const emulated = emulateFillPrice({ side: "BUY", close: wickBar.low, tier: "liquid" });
+    // Volume-weighted slippage: pass the same candleVolumeUsdc the exchange saw.
+    // No stop set → full starting cash (1000) is the tradeUsdc.
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: wickBar.low,
+      tier: "liquid",
+      tradeUsdc: 1000,
+      candleVolumeUsdc: wickBar.volume * wickBar.close,
+    });
     assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
     assert.ok(buy.price < wickBar.close);
   });
 
-  it("evaluates only at close with a fully closed last bar when noIntrabar is set", async () => {
-    const start = 1_700_000_000;
-    const interval = 15 * 60;
-    const green: Candle = {
-      time: start,
-      open: 100,
-      high: 104,
-      low: 98,
-      close: 103,
-      volume: 5,
-    };
-    const red: Candle = {
-      time: start + interval,
-      open: 103,
-      high: 105,
-      low: 97,
-      close: 99,
-      volume: 5,
-    };
-    const calls: { price: number; last: Candle }[] = [];
-    const strategy: Strategy = {
-      getDisplayName: () => "recorder",
-      getMode: () => "bollinger",
-      getRiskParams: () => ({
-        timeframe: "15m",
-        atrStopMult: 100,
-        atrTrailMult: 100,
-        cooldownBars: 0,
-        minHoldBars: 0,
-      }),
-      getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
-      evaluateSignal: (pair, window, _market, price, at) => {
-        calls.push({ price, last: window[window.length - 1]! });
-        return { pair, side: "HOLD", reason: "record", price, at };
-      },
-      buildChartSvg: () => "<svg></svg>",
-    };
-
+  it("populates monteCarlo distribution when monteCarloRuns > 0", async () => {
+    const candles = series(20, 100, 0.2);
     const [result] = await runBacktest({
       config: makeConfig(1000),
-      strategyManager: managerFor(strategy),
-      candles: [green, red],
-      noIntrabar: true,
+      strategyManager: managerFor(scriptedStrategy({ buyIndex: 5 })),
+      candles,
+      monteCarloRuns: 10,
     });
     assert.ok(result);
-    assert.equal(result.metrics.intrabar, false);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]!.price, green.close);
-    assert.deepEqual(calls[0]!.last, green);
-    assert.equal(calls[1]!.price, red.close);
-    assert.deepEqual(calls[1]!.last, red);
+    const mc = result.monteCarlo;
+    assert.ok(mc, "monteCarlo should be present");
+    assert.equal(mc.runs, 10);
+
+    // All distribution values must be finite (no NaN from edge cases).
+    for (const dist of [mc.totalReturnPct, mc.sharpeRatio, mc.maxDrawdownPct, mc.profitFactor]) {
+      assert.ok(Number.isFinite(dist.p5), `p5 is not finite: ${dist.p5}`);
+      assert.ok(Number.isFinite(dist.p50), `p50 is not finite: ${dist.p50}`);
+      assert.ok(Number.isFinite(dist.p95), `p95 is not finite: ${dist.p95}`);
+      assert.ok(Number.isFinite(dist.mean), `mean is not finite: ${dist.mean}`);
+      // Sorted-distribution invariant: extreme percentiles must be ordered.
+      assert.ok(dist.p5 <= dist.p95, `p5 (${dist.p5}) > p95 (${dist.p95})`);
+    }
+    // Drawdown is non-negative.
+    assert.ok(mc.maxDrawdownPct.p5 >= 0);
+    assert.ok(mc.profitFactor.p5 >= 0);
   });
 
-  it("skips HTF apply and log when ignoreTrend is set", async () => {
-    const intervalHtf = 4 * 60 * 60;
-    const ltfStart = 1_700_000_000;
-    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
-    const ltf = series(20, 100, 0.1);
+  it("does not populate monteCarlo when monteCarloRuns is absent", async () => {
+    const candles = series(20, 100, 0.2);
     const [result] = await runBacktest({
       config: makeConfig(1000),
-      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
-      candles: ltf,
-      htfCandles: htf,
-      ignoreTrend: true,
+      strategyManager: managerFor(scriptedStrategy({ buyIndex: 5 })),
+      candles,
     });
     assert.ok(result);
-    assert.ok(result.trades.some((t) => t.side === "BUY"));
+    assert.equal(result.monteCarlo, undefined);
   });
 });
 
@@ -619,6 +644,112 @@ describe("PaperPortfolio applyOrder", () => {
     };
     const sell = portfolio.applyOrderSync(sellOrder);
     assert.ok(sell);
-    assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100);
+    assert.equal(sell.realizedPnl, 9.9 * 110 - 5 - 9.9 * 100 - 10);
+  });
+});
+
+describe("splitCandlesIntoFolds", () => {
+  it("divides candles into N sequential non-overlapping slices covering all input", () => {
+    const candles = series(10, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 4);
+    // Math.ceil(10/4) = 3 → slices of [3,3,3,1]
+    assert.equal(folds.length, 4);
+    assert.equal(folds[0]!.length, 3);
+    assert.equal(folds[1]!.length, 3);
+    assert.equal(folds[2]!.length, 3);
+    assert.equal(folds[3]!.length, 1);
+    // All candles accounted for, in order
+    const flat = folds.flat();
+    assert.equal(flat.length, candles.length);
+    for (let i = 0; i < flat.length; i++) {
+      assert.strictEqual(flat[i], candles[i]);
+    }
+  });
+
+  it("returns fewer folds than requested when candles < nFolds", () => {
+    const candles = series(3, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 10);
+    assert.equal(folds.length, 3);
+    assert.equal(folds.flat().length, 3);
+  });
+
+  it("returns 1 fold when nFolds = 1", () => {
+    const candles = series(5, 100, 0.1);
+    const folds = splitCandlesIntoFolds(candles, 1);
+    assert.equal(folds.length, 1);
+    assert.equal(folds[0]!.length, 5);
+  });
+});
+
+describe("parseBacktestArgs --walk-forward", () => {
+  it("parses --walk-forward as an integer ≥ 2", () => {
+    assert.equal(parseBacktestArgs(["--walk-forward", "4"]).walkForwardFolds, 4);
+    assert.equal(parseBacktestArgs(["--walk-forward=8"]).walkForwardFolds, 8);
+  });
+
+  it("rejects --walk-forward with value < 2", () => {
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "1"]), /≥ 2/);
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "0"]), /≥ 2/);
+    assert.throws(() => parseBacktestArgs(["--walk-forward", "abc"]), /≥ 2/);
+  });
+
+  it("rejects combining --walk-forward with --monte-carlo", () => {
+    assert.throws(
+      () => parseBacktestArgs(["--monte-carlo", "10", "--walk-forward", "4"]),
+      /cannot be combined/,
+    );
+  });
+});
+
+describe("runWalkForward", () => {
+  it("runs independent replays per fold and returns consistent aggregate metrics", async () => {
+    // 40 candles → 2 folds of 20 each; scripted BUY fires in fold 1 (candle index 5)
+    const candles = series(40, 100, 0.2);
+    const startingCash = 500;
+    const strategy = scriptedStrategy({ buyIndex: 5 });
+
+    const [wfResult] = await runWalkForward({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(strategy),
+      walkForwardFolds: 2,
+      candles,
+    });
+    assert.ok(wfResult);
+    assert.equal(wfResult.folds.length, 2);
+    assert.equal(wfResult.folds[0]!.fold, 1);
+    assert.equal(wfResult.folds[1]!.fold, 2);
+    assert.equal(wfResult.folds[0]!.metrics.candleCount, 20);
+    assert.equal(wfResult.folds[1]!.metrics.candleCount, 20);
+
+    // Verify compound OOS return equals product of fold returns
+    const r1 = wfResult.folds[0]!.metrics.totalReturnPct / 100;
+    const r2 = wfResult.folds[1]!.metrics.totalReturnPct / 100;
+    const expectedCompound = ((1 + r1) * (1 + r2) - 1) * 100;
+    assert.ok(Math.abs(wfResult.oosReturnPct - expectedCompound) < 1e-9);
+
+    // Verify fold 1 is consistent with an independent runBacktest on the same slice
+    const [standalone1] = await runBacktest({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(strategy),
+      candles: candles.slice(0, 20),
+    });
+    assert.ok(standalone1);
+    assert.ok(
+      Math.abs(wfResult.folds[0]!.metrics.totalReturnPct - standalone1.metrics.totalReturnPct) <
+        1e-9,
+    );
+
+    // oosHoldEquity is computed on the full candle range, not per-fold
+    const fullHold = computeBuyHoldEquity(
+      startingCash,
+      candles[0]!.close,
+      candles[39]!.close,
+      "SOL/USDC",
+    );
+    assert.ok(Math.abs(wfResult.oosHoldEquity - fullHold) < 1e-9);
+
+    // positiveFolds and beatsHoldFolds are bounded
+    assert.ok(wfResult.positiveFolds >= 0 && wfResult.positiveFolds <= 2);
+    assert.ok(wfResult.beatsHoldFolds >= 0 && wfResult.beatsHoldFolds <= 2);
   });
 });

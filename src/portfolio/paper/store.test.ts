@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { PaperPortfolio } from "./portfolio.js";
 import { loadPaperState, savePaperState } from "./store.js";
-import { resetSpeculatorDbCache, setBotId } from "../../db/db.js";
+import { query, resetSpeculatorDbCache, setBotId } from "../../db/db.js";
 import { randomUUID } from "node:crypto";
 import { useTestDb } from "../../db/test-db.js";
 
@@ -45,6 +45,54 @@ describe("paper store", () => {
     assert.deepEqual(restored.toPersisted(), portfolio.toPersisted());
   });
 
+  it("keeps the open position strategy id and hard stop", async () => {
+    const portfolio = new PaperPortfolio("JUP/USDC", 1000);
+    const trade = portfolio.applyOrderSync({
+      pair: "JUP/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "test buy",
+      price: 1,
+      size: 10,
+      at: new Date("2026-07-31T12:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 0.9,
+    });
+    assert.ok(trade);
+    await savePaperState(new Map([["JUP/USDC", portfolio]]));
+
+    const loaded = await loadPaperState();
+    const position = loaded?.portfolios["JUP/USDC"]?.position;
+    assert.ok(position);
+    assert.equal(position.side, "long");
+    assert.equal(position.strategyId, "bollinger");
+    assert.equal(position.slPrice, 0.9);
+    const stored = await query<{ strategy_data: unknown }>(
+      `SELECT strategy_data FROM bot.positions WHERE pair = $1`,
+      ["JUP/USDC"],
+    );
+    assert.deepEqual(stored[0]?.strategy_data, {});
+    assert.equal(position.entryPrice, 1);
+
+    portfolio.applyOrderSync({
+      pair: "JUP/USDC",
+      type: "market",
+      intent: "close-long",
+      reason: "test sell",
+      price: 1.1,
+      size: 10,
+      at: new Date("2026-07-31T13:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    await savePaperState(new Map([["JUP/USDC", portfolio]]));
+    const closed = await loadPaperState();
+    assert.equal(closed?.portfolios["JUP/USDC"]?.position.side, "flat");
+    assert.equal(closed?.portfolios["JUP/USDC"]?.position.strategyId, undefined);
+  });
+
   it("upserting one pair does not erase another", async () => {
     const sol = new PaperPortfolio("SOL/USDC", 1000);
     sol.applyOrderSync({
@@ -80,6 +128,45 @@ describe("paper store", () => {
     assert.ok(loaded.portfolios["BONK/USDC"]);
     assert.equal(loaded.portfolios["SOL/USDC"]?.cashUsdc, 0);
     assert.equal(loaded.portfolios["BONK/USDC"]?.cashUsdc, 0);
+  });
+
+  it("reloads the long open priority fee and charges it on close", async () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const opened = portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "test buy",
+      price: 100,
+      size: 2,
+      at: new Date("2026-07-31T10:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 1.5,
+      strategyId: "bollinger",
+      slPrice: 90,
+    });
+    assert.ok(opened);
+    await savePaperState(new Map([["SOL/USDC", portfolio]]));
+
+    const loaded = await loadPaperState();
+    const persisted = loaded?.portfolios["SOL/USDC"];
+    assert.ok(persisted);
+    const restored = PaperPortfolio.fromPersisted(persisted);
+    assert.equal(restored.toPersisted().position.paidFee, 1.5);
+
+    const closed = restored.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "close-long",
+      reason: "test sell",
+      price: 110,
+      size: 2,
+      at: new Date("2026-07-31T11:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0.25,
+    });
+    assert.ok(closed);
+    assert.equal(closed.realizedPnl, 2 * 110 - 0.25 - 2 * 100 - 1.5);
   });
 
   it("returns null when there are no paper rows for this bot", async () => {

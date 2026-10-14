@@ -99,6 +99,48 @@ describe("dmi", () => {
     assert.ok(lastDownPlus != null && lastDownMinus != null);
     assert.ok(lastDownMinus > lastDownPlus);
   });
+
+  it("keeps ADX equal to the Wilder smooth of DX from the same +DI/−DI", () => {
+    const period = 14;
+    const candles: { high: number; low: number; close: number }[] = [];
+    let price = 100;
+    for (let i = 0; i < 60; i++) {
+      price += 1.2;
+      candles.push({ high: price + 0.2, low: price - 0.15, close: price });
+    }
+    for (let i = 0; i < 8; i++) {
+      price -= 3;
+      candles.push({ high: price + 0.4, low: price - 0.6, close: price });
+    }
+    const series = dmi(candles, period);
+    const dxAt = (i: number): number => {
+      const plus = series.plusDi[i];
+      const minus = series.minusDi[i];
+      assert.ok(plus != null && minus != null);
+      const sum = plus + minus;
+      return sum > 0 ? (100 * Math.abs(plus - minus)) / sum : 0;
+    };
+    const first = 2 * period - 1;
+    let smooth = 0;
+    for (let i = period; i <= first; i++) {
+      smooth += dxAt(i);
+    }
+    smooth /= period;
+    const firstAdx = series.adx[first];
+    assert.ok(firstAdx != null);
+    assert.ok(Math.abs(firstAdx - smooth) < 1e-9);
+    for (let i = first + 1; i < candles.length; i++) {
+      smooth = (smooth * (period - 1) + dxAt(i)) / period;
+      const adxNow = series.adx[i];
+      assert.ok(adxNow != null);
+      assert.ok(Math.abs(adxNow - smooth) < 1e-9);
+    }
+    const last = candles.length - 1;
+    const spotDx = dxAt(last);
+    const lastAdx = series.adx[last];
+    assert.ok(lastAdx != null);
+    assert.ok(lastAdx - spotDx > 20);
+  });
 });
 
 describe("bollinger", () => {

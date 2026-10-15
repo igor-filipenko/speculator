@@ -5,6 +5,8 @@ import { query, type SqlValue } from "./db.js";
 export interface CandleRangeBounds {
   minTime?: number;
   maxTime?: number;
+  /** `fetched_at` of the newest bar in the window (Unix seconds). */
+  newestFetchedAt?: number;
   count: number;
 }
 
@@ -67,12 +69,14 @@ export async function readRangeBounds(
   const rows = await query<{
     min_time: string | number | bigint | null;
     max_time: string | number | bigint | null;
+    newest_fetched_at: string | number | bigint | null;
     cnt: string | number | bigint;
   }>(
     `
     SELECT
       EXTRACT(EPOCH FROM min(time))::BIGINT AS min_time,
       EXTRACT(EPOCH FROM max(time))::BIGINT AS max_time,
+      EXTRACT(EPOCH FROM (array_agg(fetched_at ORDER BY time DESC))[1])::BIGINT AS newest_fetched_at,
       count(*)::BIGINT AS cnt
     FROM market.candles
     WHERE source = $1
@@ -93,6 +97,9 @@ export async function readRangeBounds(
   }
   if (row.max_time != null) {
     bounds.maxTime = asUnix(row.max_time);
+  }
+  if (row.newest_fetched_at != null) {
+    bounds.newestFetchedAt = asUnix(row.newest_fetched_at);
   }
   return bounds;
 }

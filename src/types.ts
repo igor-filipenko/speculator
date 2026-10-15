@@ -120,6 +120,13 @@ export interface FetchCandlesOptions {
    * Matches replay windows: a bar is included when `fromTime <= time < toTime`.
    */
   toTime?: number;
+  /**
+   * Do not call the upstream when the cache already reaches `toTime - freshForSec`.
+   * Omit the field to turn the slack off and load through `toTime` (the bar just closed).
+   * Closed bars are still loaded either way. A bar saved before it closed is
+   * loaded again so the database keeps the finished OHLCV.
+   */
+  freshForSec?: number;
 }
 
 export interface Market {

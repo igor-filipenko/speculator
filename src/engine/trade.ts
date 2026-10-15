@@ -137,6 +137,7 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
         const requiredNextDelay = await processPair({
           pair,
           market,
+          freshForSec: 2 * Math.floor(config.pollIntervalMs / 1000),
           strategyManager,
           exchange,
           portfolios,
@@ -176,6 +177,8 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 async function processPair(args: {
   pair: PairConfig;
   market: Market;
+  /** Skip an upstream fetch when the cache already covers now minus this many seconds. */
+  freshForSec: number;
   strategyManager: StrategyManager;
   exchange: Exchange;
   portfolios: Map<string, Portfolio>;
@@ -187,6 +190,7 @@ async function processPair(args: {
   const {
     pair,
     market,
+    freshForSec,
     strategyManager,
     exchange,
     portfolios,
@@ -207,6 +211,7 @@ async function processPair(args: {
       mtfRequired: strategyManager.getRequiredMtfCandles(),
       price,
       at: new Date(),
+      freshForSec,
     });
     logMarket(indicators);
     const marketChanged =
@@ -241,6 +246,7 @@ async function processPair(args: {
     timeframe: requiredCandles.timeframe,
     fromTime: nowSec - requiredCandles.count * interval,
     toTime: nowSec,
+    ...(nowSec % interval === 0 ? {} : { freshForSec }),
   });
   const lastCandle = candles[candles.length - 1]!;
 

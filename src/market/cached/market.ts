@@ -29,6 +29,7 @@ export class CachedMarket implements Market {
 
     const { pair, timeframe } = options;
     const interval = candleIntervalSeconds(timeframe);
+    const freshForSec = options.freshForSec ?? 0;
 
     for (;;) {
       const bounds = await readRangeBounds(
@@ -38,7 +39,7 @@ export class CachedMarket implements Market {
         fromTime,
         toTime,
       );
-      const fetchWindows = missingWindows(bounds, fromTime, toTime, interval);
+      const fetchWindows = missingWindows(bounds, fromTime, toTime, interval, freshForSec);
       if (fetchWindows.length === 0) {
         break;
       }
@@ -68,7 +69,7 @@ export class CachedMarket implements Market {
         fromTime,
         toTime,
       );
-      const nextWindows = missingWindows(nextBounds, fromTime, toTime, interval);
+      const nextWindows = missingWindows(nextBounds, fromTime, toTime, interval, freshForSec);
       if (nextWindows.length === 0) {
         break;
       }
@@ -105,12 +106,17 @@ interface TimeWindow {
 /**
  * Compute fetch windows for gaps relative to `[fromTime, toTime)`.
  * If cache is empty, returns a single full window.
+ *
+ * `freshForSec` shortens only the still-open tail: the cache is enough when it
+ * already reaches `max(last closed bar, toTime - freshForSec)`. A closed bar
+ * that was stored while it was still forming is fetched again from its open.
  */
 function missingWindows(
   bounds: CandleRangeBounds,
   fromTime: number,
   toTime: number,
   intervalSeconds: number,
+  freshForSec: number,
 ): TimeWindow[] {
   if (bounds.count === 0 || bounds.minTime === undefined || bounds.maxTime === undefined) {
     return [{ from: fromTime, to: toTime }];
@@ -122,8 +128,16 @@ function missingWindows(
     windows.push({ from: fromTime, to: bounds.minTime });
   }
 
-  if (bounds.maxTime + intervalSeconds < toTime) {
-    windows.push({ from: bounds.maxTime + intervalSeconds, to: toTime });
+  const coverageEnd = bounds.maxTime + intervalSeconds;
+  const closedCoverageEnd = toTime - (toTime % intervalSeconds);
+  const requiredEnd = Math.max(closedCoverageEnd, toTime - freshForSec);
+  const closed = coverageEnd <= toTime;
+  const finalized = bounds.newestFetchedAt !== undefined && bounds.newestFetchedAt >= coverageEnd;
+
+  if (closed && !finalized) {
+    windows.push({ from: bounds.maxTime, to: toTime });
+  } else if (coverageEnd < requiredEnd) {
+    windows.push({ from: coverageEnd, to: toTime });
   }
 
   return windows;

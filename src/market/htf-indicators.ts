@@ -19,6 +19,8 @@ export async function refreshMarketIndicators(args: {
   mtfRequired: RequiredCandles;
   price: number;
   at: Date;
+  /** See {@link FetchCandlesOptions.freshForSec}. */
+  freshForSec?: number;
 }): Promise<MarketIndicators> {
   const timeframe = asHtfTimeframe(args.required.timeframe);
   const mtfTimeframe = asMtfTimeframe(args.mtfRequired.timeframe);
@@ -31,18 +33,21 @@ export async function refreshMarketIndicators(args: {
   const mtfInterval = candleIntervalSeconds(mtfTimeframe);
   const mtfFromTime = nowSec - args.mtfRequired.count * mtfInterval;
 
+  const freshness = args.freshForSec === undefined ? {} : { freshForSec: args.freshForSec };
   const [candles, mtfCandles] = await Promise.all([
     args.market.fetchCandles({
       pair: args.pair,
       timeframe,
       fromTime,
       toTime: nowSec,
+      ...freshness,
     }),
     args.market.fetchCandles({
       pair: args.pair,
       timeframe: mtfTimeframe,
       fromTime: mtfFromTime,
       toTime: nowSec,
+      ...freshness,
     }),
   ]);
 

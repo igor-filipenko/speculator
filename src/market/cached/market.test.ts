@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { candleCount, deleteCandles, readCandles, upsertCandles } from "../../db/candles.js";
-import { resetSpeculatorDbCache } from "../../db/db.js";
+import { query, resetSpeculatorDbCache } from "../../db/db.js";
 import { truncateBotAndMarket, useTestDb } from "../../db/test-db.js";
 import { createCandle } from "../candle.js";
-import type { Candle, Market, PairConfig } from "../../types.js";
+import type { Candle, FetchCandlesOptions, Market, PairConfig, Timeframe } from "../../types.js";
 import { CachedMarket } from "./market.js";
 
 const SOL_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
@@ -26,13 +26,31 @@ function candle(time: number, close: number, source: Candle["source"] = "gecko-t
 class StubMarket implements Market {
   readonly source = "gecko-terminal" as const;
   fetched = 0;
+  calls: FetchCandlesOptions[] = [];
 
   constructor(private readonly rows: Candle[] = []) {}
 
-  fetchCandles(): Promise<Candle[]> {
+  fetchCandles(options: FetchCandlesOptions): Promise<Candle[]> {
     this.fetched += 1;
-    return Promise.resolve(this.rows);
+    this.calls.push(options);
+    const from = options.fromTime ?? Number.NEGATIVE_INFINITY;
+    const to = options.toTime ?? Number.POSITIVE_INFINITY;
+    return Promise.resolve(this.rows.filter((row) => row.time >= from && row.time < to));
   }
+}
+
+async function backdateFetch(timeframe: Timeframe, time: number, fetchedAt: number): Promise<void> {
+  await query(
+    `
+    UPDATE market.candles
+    SET fetched_at = to_timestamp($4)
+    WHERE source = 'gecko-terminal'
+      AND pool_address = $1
+      AND timeframe = $2
+      AND time = to_timestamp($3)
+    `,
+    [SOL_POOL, timeframe, time, fetchedAt],
+  );
 }
 
 describe("CachedMarket", () => {
@@ -156,5 +174,107 @@ describe("CachedMarket", () => {
     await upsertCandles("gecko-terminal", SOL_POOL, timeframe, candles);
 
     assert.equal(await candleCount("gecko-terminal", SOL_POOL, timeframe), count);
+  });
+
+  it("does not call upstream when the cache covers the current period minus freshForSec", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_599_999_900;
+    const closed = [candle(open, 1), candle(open + interval, 2)];
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, closed);
+
+    const inner = new StubMarket();
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 2 * interval + 40,
+      freshForSec: 60,
+    });
+
+    assert.equal(inner.fetched, 0);
+    assert.equal(loaded.length, 2);
+    assert.equal(loaded[1]?.close, 2);
+  });
+
+  it("still fetches a closed bar that the fresh window does not cover", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_610_000_100;
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [candle(open, 1)]);
+    const missing = candle(open + interval, 9);
+    const inner = new StubMarket([missing]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 2 * interval + 20,
+      freshForSec: 120,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.equal(inner.calls[0]?.fromTime, open + interval);
+    assert.equal(loaded.length, 2);
+    assert.equal(loaded[1]?.close, 9);
+  });
+
+  it("loads through toTime when freshForSec is omitted", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_630_000_200;
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [
+      candle(open, 1),
+      candle(open + interval, 2),
+    ]);
+    const forming = candle(open + 2 * interval, 4);
+    const inner = new StubMarket([forming]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 2 * interval + 40,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.equal(inner.calls[0]?.fromTime, open + 2 * interval);
+    assert.equal(loaded.at(-1)?.close, 4);
+  });
+
+  it("replaces a forming bar with the finished candle after it closes", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_620_000_000;
+    const partial = candle(open, 3);
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [partial]);
+    await backdateFetch(timeframe, open, open + 10);
+
+    const finished = createCandle({ ...partial, close: 8, high: 8 });
+    const inner = new StubMarket([finished]);
+    const market = new CachedMarket(inner);
+    const toTime = open + interval + 5;
+    const loaded = await market.fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime,
+      freshForSec: 60,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.equal(inner.calls[0]?.fromTime, open);
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0]?.close, 8);
+
+    const again = await market.fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime,
+      freshForSec: 60,
+    });
+    assert.equal(inner.fetched, 1);
+    assert.equal(again[0]?.close, 8);
   });
 });

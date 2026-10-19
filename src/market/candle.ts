@@ -16,6 +16,25 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
   }
 }
 
+/**
+ * Aligned candle opens in `[fromTime, toTime)`.
+ * A 1h window of 15m bars is 4 candles, whatever the phase inside the hour.
+ */
+export function expectedCandleCount(
+  fromTime: number,
+  toTime: number,
+  intervalSeconds: number,
+): number {
+  if (toTime <= fromTime || intervalSeconds <= 0) {
+    return 0;
+  }
+  const first = Math.ceil(fromTime / intervalSeconds) * intervalSeconds;
+  if (first >= toTime) {
+    return 0;
+  }
+  return Math.floor((toTime - 1 - first) / intervalSeconds) + 1;
+}
+
 export interface CreateCandleInput {
   time: number;
   open: number;

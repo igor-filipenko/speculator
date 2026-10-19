@@ -137,7 +137,6 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
         const requiredNextDelay = await processPair({
           pair,
           market,
-          freshForSec: 2 * Math.floor(config.pollIntervalMs / 1000),
           strategyManager,
           exchange,
           portfolios,
@@ -177,8 +176,6 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 async function processPair(args: {
   pair: PairConfig;
   market: Market;
-  /** Skip an upstream fetch when the cache already covers now minus this many seconds. */
-  freshForSec: number;
   strategyManager: StrategyManager;
   exchange: Exchange;
   portfolios: Map<string, Portfolio>;
@@ -190,7 +187,6 @@ async function processPair(args: {
   const {
     pair,
     market,
-    freshForSec,
     strategyManager,
     exchange,
     portfolios,
@@ -201,6 +197,8 @@ async function processPair(args: {
   } = args;
 
   const price = await exchange.spotPrice(pair);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tryUseCache = Math.floor(nowSec / 60) % 2 === 1;
 
   try {
     const previous = lastMarketIndicators.get(pair.symbol);
@@ -210,8 +208,8 @@ async function processPair(args: {
       required: strategyManager.getRequiredHtfCandles(),
       mtfRequired: strategyManager.getRequiredMtfCandles(),
       price,
-      at: new Date(),
-      freshForSec,
+      at: new Date(nowSec * 1000),
+      ...(tryUseCache ? { tryUseCache } : {}),
     });
     logMarket(indicators);
     const marketChanged =
@@ -239,14 +237,13 @@ async function processPair(args: {
   const riskManager = strategyManager.getActiveRiskManager();
 
   const requiredCandles = strategy.getRequiredCandles();
-  const nowSec = Math.floor(Date.now() / 1000);
   const interval = candleIntervalSeconds(requiredCandles.timeframe);
   const candles = await market.fetchCandles({
     pair,
     timeframe: requiredCandles.timeframe,
     fromTime: nowSec - requiredCandles.count * interval,
     toTime: nowSec,
-    ...(nowSec % interval === 0 ? {} : { freshForSec }),
+    ...(tryUseCache ? { tryUseCache } : {}),
   });
   const lastCandle = candles[candles.length - 1]!;
 

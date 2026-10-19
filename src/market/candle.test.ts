@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { candleIntervalSeconds, createCandle } from "./candle.js";
+import { candleIntervalSeconds, createCandle, expectedCandleCount } from "./candle.js";
 
 describe("candleIntervalSeconds", () => {
   it("maps 5m, 15m, 1h, 4h, and 1d", () => {
@@ -9,6 +9,15 @@ describe("candleIntervalSeconds", () => {
     assert.equal(candleIntervalSeconds("1h"), 60 * 60);
     assert.equal(candleIntervalSeconds("4h"), 4 * 60 * 60);
     assert.equal(candleIntervalSeconds("1d"), 24 * 60 * 60);
+  });
+});
+
+describe("expectedCandleCount", () => {
+  it("counts 4 fifteen-minute candles in one hour", () => {
+    const interval = candleIntervalSeconds("15m");
+    const fromTime = 1_699_999_200;
+    assert.equal(expectedCandleCount(fromTime, fromTime + 60 * 60, interval), 4);
+    assert.equal(expectedCandleCount(fromTime + 100, fromTime + 100 + 60 * 60, interval), 4);
   });
 });
 

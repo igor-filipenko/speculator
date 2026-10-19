@@ -19,8 +19,8 @@ export async function refreshMarketIndicators(args: {
   mtfRequired: RequiredCandles;
   price: number;
   at: Date;
-  /** See {@link FetchCandlesOptions.freshForSec}. */
-  freshForSec?: number;
+  /** Odd-minute ticks read a complete cached series and skip the upstream call. */
+  tryUseCache?: boolean;
 }): Promise<MarketIndicators> {
   const timeframe = asHtfTimeframe(args.required.timeframe);
   const mtfTimeframe = asMtfTimeframe(args.mtfRequired.timeframe);
@@ -33,21 +33,21 @@ export async function refreshMarketIndicators(args: {
   const mtfInterval = candleIntervalSeconds(mtfTimeframe);
   const mtfFromTime = nowSec - args.mtfRequired.count * mtfInterval;
 
-  const freshness = args.freshForSec === undefined ? {} : { freshForSec: args.freshForSec };
+  const cache = args.tryUseCache === true ? { tryUseCache: true } : {};
   const [candles, mtfCandles] = await Promise.all([
     args.market.fetchCandles({
       pair: args.pair,
       timeframe,
       fromTime,
       toTime: nowSec,
-      ...freshness,
+      ...cache,
     }),
     args.market.fetchCandles({
       pair: args.pair,
       timeframe: mtfTimeframe,
       fromTime: mtfFromTime,
       toTime: nowSec,
-      ...freshness,
+      ...cache,
     }),
   ]);
 

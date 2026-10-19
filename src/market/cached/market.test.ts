@@ -176,28 +176,50 @@ describe("CachedMarket", () => {
     assert.equal(await candleCount("gecko-terminal", SOL_POOL, timeframe), count);
   });
 
-  it("does not call upstream when the cache covers the current period minus freshForSec", async () => {
-    const timeframe = "5m" as const;
-    const interval = 5 * 60;
-    const open = 1_599_999_900;
-    const closed = [candle(open, 1), candle(open + interval, 2)];
-    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, closed);
+  it("reads a full hour of 15m candles from cache on tryUseCache", async () => {
+    const timeframe = "15m" as const;
+    const interval = 15 * 60;
+    const fromTime = 1_749_999_600;
+    const candles = Array.from({ length: 4 }, (_, i) => candle(fromTime + i * interval, 10 + i));
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, candles);
 
     const inner = new StubMarket();
     const loaded = await new CachedMarket(inner).fetchCandles({
       pair: solPair,
       timeframe,
-      fromTime: open,
-      toTime: open + 2 * interval + 40,
-      freshForSec: 60,
+      fromTime,
+      toTime: fromTime + 60 * 60,
+      tryUseCache: true,
     });
 
     assert.equal(inner.fetched, 0);
-    assert.equal(loaded.length, 2);
-    assert.equal(loaded[1]?.close, 2);
+    assert.equal(loaded.length, 4);
+    assert.equal(loaded[3]?.close, 13);
   });
 
-  it("still fetches a closed bar that the fresh window does not cover", async () => {
+  it("fetches when tryUseCache finds fewer candles than the period", async () => {
+    const timeframe = "15m" as const;
+    const interval = 15 * 60;
+    const fromTime = 1_760_000_400;
+    const candles = Array.from({ length: 3 }, (_, i) => candle(fromTime + i * interval, 10 + i));
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, candles);
+    const missing = candle(fromTime + 3 * interval, 40);
+    const inner = new StubMarket([missing]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime,
+      toTime: fromTime + 60 * 60,
+      tryUseCache: true,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.equal(loaded.length, 4);
+    assert.equal(loaded[3]?.close, 40);
+  });
+
+  it("still fetches a closed bar that the cache does not cover", async () => {
     const timeframe = "5m" as const;
     const interval = 5 * 60;
     const open = 1_610_000_100;
@@ -209,8 +231,7 @@ describe("CachedMarket", () => {
       pair: solPair,
       timeframe,
       fromTime: open,
-      toTime: open + 2 * interval + 20,
-      freshForSec: 120,
+      toTime: open + 2 * interval,
     });
 
     assert.equal(inner.fetched, 1);
@@ -219,7 +240,7 @@ describe("CachedMarket", () => {
     assert.equal(loaded[1]?.close, 9);
   });
 
-  it("loads through toTime when freshForSec is omitted", async () => {
+  it("loads through toTime when the open bar is missing", async () => {
     const timeframe = "5m" as const;
     const interval = 5 * 60;
     const open = 1_630_000_200;
@@ -253,13 +274,12 @@ describe("CachedMarket", () => {
     const finished = createCandle({ ...partial, close: 8, high: 8 });
     const inner = new StubMarket([finished]);
     const market = new CachedMarket(inner);
-    const toTime = open + interval + 5;
+    const toTime = open + interval;
     const loaded = await market.fetchCandles({
       pair: solPair,
       timeframe,
       fromTime: open,
       toTime,
-      freshForSec: 60,
     });
 
     assert.equal(inner.fetched, 1);
@@ -272,7 +292,6 @@ describe("CachedMarket", () => {
       timeframe,
       fromTime: open,
       toTime,
-      freshForSec: 60,
     });
     assert.equal(inner.fetched, 1);
     assert.equal(again[0]?.close, 8);

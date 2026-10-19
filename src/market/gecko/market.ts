@@ -35,6 +35,8 @@ function geckoTimeframe(timeframe: Timeframe): {
       return { path: "minute", aggregate: 15 };
     case "5m":
       return { path: "minute", aggregate: 5 };
+    case "1m":
+      return { path: "minute", aggregate: 1 };
   }
 }
 
@@ -128,9 +130,11 @@ export class GeckoTerminalMarket implements Market {
   }
 }
 
-/** 5m windows need more pages (100 bars/page ≈ 8.3h). */
+/** 1m windows need more pages (100 bars/page ≈ 1.7h; 500 pages ≈ 35 days). */
 function defaultMaxPages(timeframe: Timeframe): number {
   switch (timeframe) {
+    case "1m":
+      return 500;
     case "5m":
       return 150;
     case "15m":

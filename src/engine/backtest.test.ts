@@ -224,6 +224,18 @@ describe("parseBacktestArgs", () => {
     assert.throws(() => parseBacktestArgs(["--monte-carlo", "0"]), /positive integer/);
     assert.throws(() => parseBacktestArgs(["--monte-carlo", "abc"]), /positive integer/);
   });
+
+  it("parses --quotes 1m and rejects other values and --monte-carlo", () => {
+    assert.equal(parseBacktestArgs(["--quotes", "1m"]).quotes, "1m");
+    assert.equal(parseBacktestArgs(["--quotes=1m", "--verbose"]).quotes, "1m");
+    assert.equal(parseBacktestArgs(["--walk-forward", "3", "--quotes", "1m"]).quotes, "1m");
+    assert.throws(() => parseBacktestArgs(["--quotes", "5m"]), /only accepts 1m/);
+    assert.throws(() => parseBacktestArgs(["--quotes"]), /requires a value/);
+    assert.throws(
+      () => parseBacktestArgs(["--quotes", "1m", "--monte-carlo", "10"]),
+      /cannot be combined/,
+    );
+  });
 });
 
 describe("parseBacktestDate", () => {
@@ -342,6 +354,46 @@ describe("runBacktest", () => {
 
     const adverse = TIER_COSTS.liquid.slippage + TIER_COSTS.liquid.poolFee;
     assert.ok(adverse > 0);
+  });
+
+  it("fills a --quotes 1m replay at the minute close, not the OHLC open", async () => {
+    const candles = series(20, 100, 0.2);
+    const startingCash = 1000;
+    const buyIndex = 5;
+    const buyBar = candles[buyIndex]!;
+    const minuteCandles = candles.map((bar) =>
+      createCandle({
+        time: bar.time,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: 1,
+        timeframe: "1m",
+      }),
+    );
+    const [result] = await runBacktest({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(scriptedStrategy({ buyIndex })),
+      candles,
+      quotes: "1m",
+      minuteCandles,
+    });
+
+    const buy = result?.trades[0];
+    assert.ok(buy);
+    assert.equal(buy.side, "BUY");
+    assert.equal(Math.floor(buy.at.getTime() / 1000), buyBar.time + 60);
+    const openTick = intraBarPrices(buyBar)[0]!;
+    assert.notEqual(buyBar.close, openTick);
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: buyBar.close,
+      tier: "liquid",
+      tradeUsdc: startingCash,
+      candleVolumeUsdc: buyBar.volume * buyBar.close,
+    });
+    assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
   });
 
   it("ATR-exits on HOLD when stop level is hit after price crashes", async () => {

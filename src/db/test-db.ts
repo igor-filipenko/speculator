@@ -48,7 +48,7 @@ async function startContainer(): Promise<StartedPostgreSqlContainer> {
   try {
     return await new PostgreSqlContainer(TIMESCALEDB_IMAGE)
       .withDatabase("speculator")
-      .withEnvironment({ SPECULATOR_SCHEMA: "dbmate-21-timeframe-5m" })
+      .withEnvironment({ SPECULATOR_SCHEMA: "dbmate-22-timeframe-1m" })
       .withReuse()
       .start();
   } catch (err) {

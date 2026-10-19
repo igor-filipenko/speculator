@@ -13,6 +13,8 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
       return 15 * 60;
     case "5m":
       return 5 * 60;
+    case "1m":
+      return 60;
   }
 }
 

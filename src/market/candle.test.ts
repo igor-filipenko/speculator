@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { candleIntervalSeconds, createCandle, expectedCandleCount } from "./candle.js";
+import {
+  candleIntervalSeconds,
+  createCandle,
+  expectedCandleCount,
+  isCandleFirstMinute,
+} from "./candle.js";
 
 describe("candleIntervalSeconds", () => {
   it("maps 1m, 5m, 15m, 1h, 4h, and 1d", () => {
@@ -19,6 +24,40 @@ describe("expectedCandleCount", () => {
     const fromTime = 1_699_999_200;
     assert.equal(expectedCandleCount(fromTime, fromTime + 60 * 60, interval), 4);
     assert.equal(expectedCandleCount(fromTime + 100, fromTime + 100 + 60 * 60, interval), 4);
+  });
+});
+
+describe("isCandleFirstMinute", () => {
+  const open = 20_000 * 24 * 60 * 60;
+
+  it("is true through the opening 60 seconds of a 15m candle", () => {
+    const interval = candleIntervalSeconds("15m");
+    assert.equal(isCandleFirstMinute(open, interval), true);
+    assert.equal(isCandleFirstMinute(open + 59, interval), true);
+    assert.equal(isCandleFirstMinute(open + 60, interval), false);
+    assert.equal(isCandleFirstMinute(open + interval - 1, interval), false);
+    assert.equal(isCandleFirstMinute(open + interval, interval), true);
+  });
+
+  it("is true for the whole 1m candle", () => {
+    const interval = candleIntervalSeconds("1m");
+    assert.equal(isCandleFirstMinute(open, interval), true);
+    assert.equal(isCandleFirstMinute(open + 59, interval), true);
+  });
+
+  it("uses the candle open on 5m, 1h, 4h, and 1d", () => {
+    for (const timeframe of ["5m", "1h", "4h", "1d"] as const) {
+      const interval = candleIntervalSeconds(timeframe);
+      assert.equal(isCandleFirstMinute(open + 59, interval), true);
+      assert.equal(isCandleFirstMinute(open + 60, interval), false);
+      assert.equal(isCandleFirstMinute(open + interval - 1, interval), false);
+      assert.equal(isCandleFirstMinute(open + interval + 10, interval), true);
+    }
+  });
+
+  it("is false for a non-positive interval", () => {
+    assert.equal(isCandleFirstMinute(open, 0), false);
+    assert.equal(isCandleFirstMinute(open, -60), false);
   });
 });
 

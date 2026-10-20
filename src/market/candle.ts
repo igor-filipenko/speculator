@@ -70,3 +70,14 @@ export function createCandle(input: CreateCandleInput): Candle {
     },
   };
 }
+
+/**
+ * True when unix `time` falls in the first 60 seconds of the candle that contains it.
+ * Opens are aligned to multiples of `intervalSeconds` from the epoch.
+ */
+export function isCandleFirstMinute(time: number, intervalSeconds: number): boolean {
+  if (intervalSeconds <= 0) {
+    return false;
+  }
+  return time % intervalSeconds < 60;
+}

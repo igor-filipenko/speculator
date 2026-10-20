@@ -1,7 +1,7 @@
 import { Connection } from "@solana/web3.js";
 import { assertTradeConfig, isPublicSolanaRpc, type AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
-import { candleIntervalSeconds } from "../market/candle.js";
+import { candleIntervalSeconds, isCandleFirstMinute } from "../market/candle.js";
 import { refreshMarketIndicators } from "../market/htf-indicators.js";
 import { createMarket } from "../market/manager.js";
 import {
@@ -198,7 +198,8 @@ async function processPair(args: {
 
   const price = await exchange.spotPrice(pair);
   const nowSec = Math.floor(Date.now() / 1000);
-  const tryUseCache = Math.floor(nowSec / 60) % 2 === 1;
+  const nowMinute = Math.floor(nowSec / 60);
+  const tryUseCache = nowMinute % 2 === 1;
 
   try {
     const previous = lastMarketIndicators.get(pair.symbol);
@@ -238,12 +239,15 @@ async function processPair(args: {
 
   const requiredCandles = strategy.getRequiredCandles();
   const interval = candleIntervalSeconds(requiredCandles.timeframe);
+  const isFirstMinute = isCandleFirstMinute(nowSec, interval);
+  const tryUseCacheForWtf = tryUseCache && !isFirstMinute;
+  console.log(`[${pair.symbol}] using cache for work time frame: ${tryUseCacheForWtf}`);
   const candles = await market.fetchCandles({
     pair,
     timeframe: requiredCandles.timeframe,
     fromTime: nowSec - requiredCandles.count * interval,
     toTime: nowSec,
-    ...(tryUseCache ? { tryUseCache } : {}),
+    ...(tryUseCacheForWtf ? { tryUseCache } : {}),
   });
   const lastCandle = candles[candles.length - 1]!;
 

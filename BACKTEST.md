@@ -36,7 +36,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
 ## Output fields
 
 ```
-=== Backtest SOL/USDC | bollinger (15m BB14×1.4 ADX32 RSI50 tStop2) ===
+=== Backtest SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
 Candles: 2658 | 2026-09-01T00:00:00.000Z → 2026-09-30T23:45:01.000Z
 Start: 100.00 USDC → End equity: 184.43 USDC (+84.43%)
 Buy & hold: 114.42 USDC (+14.42%) | vs hold: +70.01 USDC (+70.01% pp)
@@ -117,7 +117,7 @@ pnpm backtest -- \
 ```
 
 ```
-=== Walk-Forward SOL/USDC | bollinger (15m BB14×1.4 ADX32 RSI50 tStop2) ===
+=== Walk-Forward SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
 Period: 2026-07-01 → 2026-09-30 | 6 folds × ~1488 candles each
 
 Fold  Period                   Candles     Return       vs B&H   Sharpe   Max DD     PF

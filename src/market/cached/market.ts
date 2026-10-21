@@ -1,5 +1,6 @@
 import {
   readCandles,
+  readInteriorGaps,
   readRangeBounds,
   upsertCandles,
   type CandleRangeBounds,
@@ -46,7 +47,15 @@ export class CachedMarket implements Market {
         fromTime,
         toTime,
       );
-      const fetchWindows = missingWindows(bounds, fromTime, toTime, interval);
+      const fetchWindows = await windowsToFill(
+        this.source,
+        pair.poolAddress,
+        timeframe,
+        bounds,
+        fromTime,
+        toTime,
+        interval,
+      );
       if (fetchWindows.length === 0) {
         break;
       }
@@ -76,7 +85,15 @@ export class CachedMarket implements Market {
         fromTime,
         toTime,
       );
-      const nextWindows = missingWindows(nextBounds, fromTime, toTime, interval);
+      const nextWindows = await windowsToFill(
+        this.source,
+        pair.poolAddress,
+        timeframe,
+        nextBounds,
+        fromTime,
+        toTime,
+        interval,
+      );
       if (nextWindows.length === 0) {
         break;
       }
@@ -105,14 +122,39 @@ export class CachedMarket implements Market {
   }
 }
 
+/** Edge holes plus any skip between two stored bars. */
+async function windowsToFill(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: FetchCandlesOptions["timeframe"],
+  bounds: CandleRangeBounds,
+  fromTime: number,
+  toTime: number,
+  intervalSeconds: number,
+): Promise<TimeWindow[]> {
+  const edges = missingWindows(bounds, fromTime, toTime, intervalSeconds);
+  if (bounds.count >= expectedCandleCount(fromTime, toTime, intervalSeconds)) {
+    return edges;
+  }
+  const interior = await readInteriorGaps(
+    source,
+    poolAddress,
+    timeframe,
+    fromTime,
+    toTime,
+    intervalSeconds,
+  );
+  return [...edges, ...interior];
+}
+
 interface TimeWindow {
   from: number;
   to: number;
 }
 
 /**
- * Compute fetch windows for gaps relative to `[fromTime, toTime)`.
- * If cache is empty, returns a single full window.
+ * Edge windows only. An interior hole between the oldest and newest stored bar
+ * is invisible here; {@link readInteriorGaps} supplies those.
  * A closed bar that was stored while it was still forming is fetched again from its open.
  */
 function missingWindows(

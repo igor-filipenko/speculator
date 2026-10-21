@@ -263,6 +263,55 @@ describe("CachedMarket", () => {
     assert.equal(loaded.at(-1)?.close, 4);
   });
 
+  it("fills an interior hole that min/max bounds hide", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_640_000_000;
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [
+      candle(open, 1),
+      candle(open + interval, 2),
+      candle(open + 3 * interval, 4),
+    ]);
+    await backdateFetch(timeframe, open + interval, open);
+    const missing = candle(open + 2 * interval, 3);
+    const inner = new StubMarket([missing]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 4 * interval,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.equal(inner.calls[0]?.fromTime, open + 2 * interval);
+    assert.equal(inner.calls[0]?.toTime, open + 3 * interval);
+    assert.equal(loaded.length, 4);
+    assert.equal(loaded[2]?.close, 3);
+  });
+
+  it("does not refetch a one-bar hole written with its neighbors", async () => {
+    const timeframe = "5m" as const;
+    const interval = 5 * 60;
+    const open = 1_650_000_000;
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [
+      candle(open, 1),
+      candle(open + interval, 2),
+      candle(open + 3 * interval, 4),
+    ]);
+    const inner = new StubMarket([candle(open + 2 * interval, 3)]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 4 * interval,
+    });
+
+    assert.equal(inner.fetched, 0);
+    assert.equal(loaded.length, 3);
+  });
+
   it("replaces a forming bar with the finished candle after it closes", async () => {
     const timeframe = "5m" as const;
     const interval = 5 * 60;

@@ -104,6 +104,53 @@ export async function readRangeBounds(
   return bounds;
 }
 
+/**
+ * Open intervals `(prev, next)` where stored bars skip more than one period.
+ * A skip whose two neighbors were written by the same upsert is a vendor omission
+ * (GeckoTerminal drops a timestamp inside a page). Refetching it returns that same page.
+ */
+export async function readInteriorGaps(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+  fromTime: number,
+  toTime: number,
+  intervalSeconds: number,
+): Promise<{ from: number; to: number }[]> {
+  const rows = await query<{ prev: string | number | bigint; next: string | number | bigint }>(
+    `
+    WITH ordered AS (
+      SELECT EXTRACT(EPOCH FROM time)::BIGINT AS t, fetched_at
+      FROM market.candles
+      WHERE source = $1
+        AND pool_address = $2
+        AND timeframe = $3
+        AND time >= to_timestamp($4)
+        AND time < to_timestamp($5)
+    ),
+    steps AS (
+      SELECT
+        t AS prev,
+        LEAD(t) OVER (ORDER BY t) AS next,
+        fetched_at AS prev_fetched,
+        LEAD(fetched_at) OVER (ORDER BY t) AS next_fetched
+      FROM ordered
+    )
+    SELECT prev, next
+    FROM steps
+    WHERE next IS NOT NULL
+      AND next > prev + $6
+      AND prev_fetched IS DISTINCT FROM next_fetched
+    ORDER BY prev
+    `,
+    [source, poolAddress, timeframe, fromTime, toTime, intervalSeconds],
+  );
+  return rows.map((row) => ({
+    from: asUnix(row.prev) + intervalSeconds,
+    to: asUnix(row.next),
+  }));
+}
+
 /** PostgreSQL bind protocol rejects a statement with more than 65535 parameters. */
 const MAX_BIND_PARAMS = 65_535;
 const CANDLE_UPSERT_COLUMNS = 9;

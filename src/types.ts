@@ -159,6 +159,10 @@ export interface Signal {
     emaSlow?: number;
     trendEma?: number;
     rsi?: number;
+    /** Slow stochastic %K on the signal bar. */
+    stochK?: number;
+    /** Slow stochastic %D on the signal bar. */
+    stochD?: number;
     atr?: number;
     adx?: number;
     /** Wilder +DI on the signal timeframe (work-TF trend gate). */
@@ -172,8 +176,10 @@ export interface Signal {
     donchianUpper?: number;
     /** Prior Donchian entry-channel low (short breakout level). */
     donchianLower?: number;
-    /** Prior-bar SMA of volume (breakout filter baseline). */
+    /** Prior-bar SMA of volume (breakout / RVOL baseline). */
     volumeSma?: number;
+    /** Signal-bar volume divided by the prior volume SMA. */
+    rvol?: number;
     /** Last bar low (for ATR stop checks in risk). */
     barLow?: number;
     /** Last bar high (for trailing peak updates in risk). */

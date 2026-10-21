@@ -1,6 +1,6 @@
 import type { Candle } from "../../types.js";
+import { bollinger, dmi } from "../indicators.js";
 import type { BollingerParams } from "./bollinger.js";
-import { bollinger, rsi } from "../indicators.js";
 
 export interface BollingerChartInput {
   pair: string;
@@ -15,7 +15,7 @@ const GAP = 16;
 const PRICE_RATIO = 0.68;
 
 /**
- * Build an SVG string: price candles + Bollinger mid/upper/lower + RSI subplot.
+ * Build an SVG string: price candles + Bollinger mid/upper/lower + +DI/−DI subplot.
  */
 export function buildBollingerSvg(input: BollingerChartInput): string {
   const width = input.width ?? 900;
@@ -28,14 +28,14 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
 
   const closes = candles.map((c) => c.close);
   const bands = bollinger(closes, strategy.period, strategy.stdDev);
-  const rsiSeries = rsi(closes, strategy.rsiPeriod);
+  const di = dmi(candles, strategy.adxPeriod);
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom - GAP;
   const priceH = plotH * PRICE_RATIO;
-  const rsiH = plotH - priceH;
+  const diH = plotH - priceH;
   const priceTop = PAD.top;
-  const rsiTop = PAD.top + priceH + GAP;
+  const diTop = PAD.top + priceH + GAP;
 
   let minP = Infinity;
   let maxP = -Infinity;
@@ -65,7 +65,7 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
 
   const xAt = (i: number): number => PAD.left + step * (i + 0.5);
   const yPrice = (p: number): number => priceTop + ((maxP - p) / (maxP - minP)) * priceH;
-  const yRsi = (v: number): number => rsiTop + ((100 - v) / 100) * rsiH;
+  const yDi = (v: number): number => diTop + ((100 - v) / 100) * diH;
 
   const candleParts: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -99,12 +99,12 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   const midPath = linePath(bands.mid, yPrice);
   const upperPath = linePath(bands.upper, yPrice);
   const lowerPath = linePath(bands.lower, yPrice);
-  const rsiPath = linePath(rsiSeries, yRsi);
+  const plusPath = linePath(di.plusDi, yDi);
+  const minusPath = linePath(di.minusDi, yDi);
 
-  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev}) · RSI${strategy.rsiPeriod}`;
+  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev}) · DI${strategy.adxPeriod}×${strategy.diRatio}`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
-  const rsiMax = strategy.rsiBuyMax;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -119,11 +119,11 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   ${lowerPath ? `<path d="${lowerPath}" fill="none" stroke="#38bdf8" stroke-width="1.25" stroke-dasharray="4 3"/>` : ""}
   <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">BB mid</text>
   <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">±${strategy.stdDev}σ</text>
-  <rect x="${PAD.left}" y="${rsiTop}" width="${plotW}" height="${rsiH}" fill="none" stroke="#1e293b"/>
-  <line x1="${PAD.left}" y1="${yRsi(rsiMax)}" x2="${PAD.left + plotW}" y2="${yRsi(rsiMax)}" stroke="#475569" stroke-dasharray="4 3"/>
-  ${rsiPath ? `<path d="${rsiPath}" fill="none" stroke="#a78bfa" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${rsiTop + 14}" fill="#a78bfa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">RSI${strategy.rsiPeriod}</text>
-  <text x="${width - PAD.right + 4}" y="${yRsi(rsiMax) + 4}" fill="#94a3b8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10">${rsiMax}</text>
+  <rect x="${PAD.left}" y="${diTop}" width="${plotW}" height="${diH}" fill="none" stroke="#1e293b"/>
+  ${plusPath ? `<path d="${plusPath}" fill="none" stroke="#34d399" stroke-width="1.5"/>` : ""}
+  ${minusPath ? `<path d="${minusPath}" fill="none" stroke="#f472b6" stroke-width="1.5"/>` : ""}
+  <text x="${PAD.left}" y="${diTop + 14}" fill="#34d399" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">+DI</text>
+  <text x="${PAD.left + 36}" y="${diTop + 14}" fill="#f472b6" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">-DI</text>
 </svg>`;
 }
 

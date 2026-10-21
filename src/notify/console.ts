@@ -83,7 +83,7 @@ export function logSignal(signal: Signal): void {
   const tp =
     signal.tpPrices.length > 0 ? ` tp=${signal.tpPrices.map((p) => fmt(p)).join("/")}` : "";
   const meta = signal.meta
-    ? ` emaFast=${fmt(signal.meta.emaFast)} emaSlow=${fmt(signal.meta.emaSlow)} rsi=${fmt(signal.meta.rsi)}`
+    ? ` emaFast=${fmt(signal.meta.emaFast)} emaSlow=${fmt(signal.meta.emaSlow)} +DI=${fmt(signal.meta.plusDi)} -DI=${fmt(signal.meta.minusDi)} volSMA=${fmt(signal.meta.volumeSma)}`
     : "";
   console.log(
     `[${ts}] ${signal.pair} ${signal.side} @ ${signal.price.toFixed(6)}` +

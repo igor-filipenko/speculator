@@ -31,7 +31,7 @@ function makeCandles(n: number): Candle[] {
 }
 
 describe("buildBollingerSvg", () => {
-  it("renders a non-empty SVG with BB and RSI labels", () => {
+  it("renders a non-empty SVG with BB and DI labels", () => {
     const svg = buildBollingerSvg({
       pair: "SOL/USDC",
       candles: makeCandles(40),
@@ -40,7 +40,8 @@ describe("buildBollingerSvg", () => {
     assert.ok(svg.includes("<svg"));
     assert.ok(svg.includes("SOL/USDC"));
     assert.ok(svg.includes("BB mid"));
-    assert.ok(svg.includes("RSI14"));
+    assert.ok(svg.includes("+DI"));
+    assert.ok(svg.includes("-DI"));
     assert.ok(svg.length > 500);
   });
 

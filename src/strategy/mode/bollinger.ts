@@ -25,24 +25,24 @@ export interface BollingerParams {
   stdDev: number;
   /** Wilder ATR period (into Signal.meta for risk stops). */
   atrPeriod: number;
-  /** Wilder ADX period. */
+  /** Wilder ADX period. Recorded on the signal; it does not gate entries. */
   adxPeriod: number;
-  /**
-   * No new entry when ADX is above this. 25 is Wilder's trend line:
-   * a fade is not opened once a trend is established.
-   */
-  adxMax: number;
-  /**
-   * Minimum (close − lower) / (mid − lower) after a reclaim.
-   * Skips kisses that close only a tick back inside the band.
-   */
-  minReclaimDepth: number;
   /**
    * Block a short when +DI is above this multiple of −DI, and a long when −DI
    * is above this multiple of +DI. 1.5 means that side is clearly leading.
    * Exits ignore it.
    */
   diRatio: number;
+  /**
+   * Minimum (close − lower) / (mid − lower) after a reclaim.
+   * Skips kisses that close only a tick back inside the band.
+   */
+  minReclaimDepth: number;
+  /**
+   * Ignore a candle that traded through the band when its high-low exceeds
+   * this many ATRs. A bar that large is an impulse, not a fade. 0 disables.
+   */
+  maxBreakAtr: number;
   /**
    * Minimum fee-adjusted reward per unit of stop risk.
    * Mean-reversion targets sit close to the stop. 0 still requires reward > 0.
@@ -169,9 +169,9 @@ export function bollingerParamsFor(): BollingerParams {
     stdDev: 2.0,
     atrPeriod: 20,
     adxPeriod: 20,
-    adxMax: 40,
-    minReclaimDepth: 0.1,
     diRatio: 1.2,
+    minReclaimDepth: 0.1,
+    maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
     stopAtr: 2.5,
     timeStopBars: 2,
@@ -206,9 +206,11 @@ export interface BollingerInput {
 /**
  * Mean-reversion Bollinger.
  * BUY on a **closed** lower-band reclaim: same-bar wick (low ≤ lower, close back inside, green)
- * or prior close ≤ prior lower then close > lower, when the ADX gate passes, close < mid,
+ * or prior close ≤ prior lower then close > lower, when close < mid
  * and reclaim depth ≥ minReclaimDepth.
+ * A candle that traded through the band is ignored when its range exceeds `maxBreakAtr` × ATR.
  * A long is blocked when −DI > `diRatio` × +DI. A short is blocked when +DI > `diRatio` × −DI.
+ * ADX is stored on the signal and does not gate the entry.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and price ≥ middle
  * **and** the quote is high enough that the sell fill clears the entry after the exit-leg fee.
@@ -217,7 +219,7 @@ export interface BollingerInput {
  * **and** the quote is low enough to clear the open fee, close fee, hourly borrow since
  * `openedAt`, and cover slippage. Missing fees keep the short on HOLD.
  * An upper-band short — wick or close — is not opened without that schedule.
- * Regime / ADX / DI do not block a mid exit.
+ * Regime and DI do not block a mid exit.
  * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
  * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
  * After `timeStopBars` closed bars, exit when the last close is at least
@@ -293,6 +295,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
   const close = closes[i]!;
   const closePrev = closes[prev]!;
+  const prevBar = signalCandles[prev]!;
   const entry = input.entryPrice;
   const openSide = input.positionSide;
   const long = entry != null && entry > 0 && openSide !== "short";
@@ -394,13 +397,21 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (belowMid && reclaimedLower) {
     const bandWidth = bbMid - bbLower;
     const reclaimDepth = bandWidth > 0 ? (close - bbLower) / bandWidth : 0;
+    const breakoutHold = breakoutRangeHold(
+      "long",
+      [
+        ...(closeReclaim ? [{ candle: prevBar, atr: atrSeries[prev] ?? atrNow }] : []),
+        ...(lastBar.low <= bbLower ? [{ candle: lastBar, atr: atrNow }] : []),
+      ],
+      strategy.maxBreakAtr,
+    );
 
-    if (isAdxTrendAgainst({ adxNow, adxMax: strategy.adxMax })) {
-      reason = adxTrendAgainstReason("long", adxNow, strategy.adxMax);
-    } else if (reclaimDepth < strategy.minReclaimDepth) {
+    if (reclaimDepth < strategy.minReclaimDepth) {
       reason =
         `Lower reclaim ignored: depth ${pct(reclaimDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
+    } else if (breakoutHold != null) {
+      reason = breakoutHold;
     } else if (diBlocksEntry("long", plusDi, minusDi, strategy.diRatio)) {
       reason = diBlockReason("long", plusDi, minusDi, strategy.diRatio);
     } else {
@@ -408,7 +419,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
-        `${adxGateNote(adxNow, strategy.adxMax)}; ` +
         `${diPassNote("long", plusDi, minusDi, strategy.diRatio)}; ` +
         `depth ${pct(reclaimDepth)}`;
     }
@@ -425,12 +435,20 @@ export function evaluateBollinger(input: BollingerInput): Signal {
     } else if (rejectedUpper && fees != null) {
       const bandWidth = bbUpper - bbMid;
       const rejectDepth = bandWidth > 0 ? (bbUpper - close) / bandWidth : 0;
-      if (isAdxTrendAgainst({ adxNow, adxMax: strategy.adxMax })) {
-        reason = adxTrendAgainstReason("short", adxNow, strategy.adxMax);
-      } else if (rejectDepth < strategy.minReclaimDepth) {
+      const breakoutHold = breakoutRangeHold(
+        "short",
+        [
+          ...(closeReject ? [{ candle: prevBar, atr: atrSeries[prev] ?? atrNow }] : []),
+          ...(lastBar.high >= bbUpper ? [{ candle: lastBar, atr: atrNow }] : []),
+        ],
+        strategy.maxBreakAtr,
+      );
+      if (rejectDepth < strategy.minReclaimDepth) {
         reason =
           `Upper rejection ignored: depth ${pct(rejectDepth)} < min ${pct(strategy.minReclaimDepth)} ` +
           `(close ${fmt(close)} vs upper ${fmt(bbUpper)} → mid ${fmt(bbMid)})`;
+      } else if (breakoutHold != null) {
+        reason = breakoutHold;
       } else if (diBlocksEntry("short", plusDi, minusDi, strategy.diRatio)) {
         reason = diBlockReason("short", plusDi, minusDi, strategy.diRatio);
       } else {
@@ -438,7 +456,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
-          `${adxGateNote(adxNow, strategy.adxMax)}; ` +
           `${diPassNote("short", plusDi, minusDi, strategy.diRatio)}; ` +
           `depth ${pct(rejectDepth)}`;
       }
@@ -483,7 +500,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid or on an adverse time stop. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid or on an adverse time stop. ADX is recorded and does not gate entries. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
@@ -492,9 +509,9 @@ export class BollingerStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, adxMax, diRatio, timeStopBars } = this.params;
+    const { timeframe, period, stdDev, diRatio, timeStopBars } = this.params;
     const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
-    return `bollinger (${timeframe} BB${period}×${stdDev} ADX${adxMax} DI${diRatio}${stop})`;
+    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${stop})`;
   }
 
   getId(): string {
@@ -548,21 +565,28 @@ export class BollingerStrategy implements Strategy {
   }
 }
 
-/**
- * High ADX blocks a mean-reversion entry. ADX at or below `adxMax` does not block.
- * +DI/−DI are not part of this gate.
- */
-export function isAdxTrendAgainst(input: { adxNow: number; adxMax: number }): boolean {
-  return input.adxNow > input.adxMax;
-}
-
-function adxTrendAgainstReason(side: "long" | "short", adxNow: number, adxMax: number): string {
+function breakoutRangeHold(
+  side: "long" | "short",
+  bars: { candle: Candle; atr: number | null | undefined }[],
+  maxBreakAtr: number,
+): string | null {
+  if (!(maxBreakAtr > 0)) return null;
   const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
-  return `${head}: ADX ${fmt(adxNow)} > ${adxMax}`;
-}
-
-function adxGateNote(adxNow: number, adxMax: number): string {
-  return `ADX ${fmt(adxNow)} <= ${adxMax}`;
+  for (const bar of bars) {
+    const atrValue = bar.atr;
+    if (atrValue == null || !(atrValue > 0)) {
+      return `${head}: ATR not warm`;
+    }
+    const range = bar.candle.high - bar.candle.low;
+    const maxRange = maxBreakAtr * atrValue;
+    if (range > maxRange) {
+      return (
+        `${head}: breakout range ${fmt(range)} > ${fmt(maxRange)} ` +
+        `(${maxBreakAtr}×ATR ${fmt(atrValue)})`
+      );
+    }
+  }
+  return null;
 }
 
 /**

@@ -1,12 +1,13 @@
 import {
   readCandles,
+  readCloseBefore,
   readInteriorGaps,
   readRangeBounds,
   upsertCandles,
   type CandleRangeBounds,
 } from "../../db/candles.js";
-import { candleIntervalSeconds, expectedCandleCount } from "../candle.js";
-import type { Candle, CandleSource, FetchCandlesOptions, Market } from "../../types.js";
+import { candleIntervalSeconds, createCandle, expectedCandleCount } from "../candle.js";
+import type { Candle, CandleSource, FetchCandlesOptions, Market, Timeframe } from "../../types.js";
 
 /**
  * Read OHLCV from Timescale and fill gaps through an inner {@link Market}.
@@ -75,7 +76,20 @@ export class CachedMarket implements Market {
           fromTime: window.from,
           toTime: window.to,
         });
-        await upsertCandles(this.source, pair.poolAddress, timeframe, page);
+        const candlesWithGaps = fillMissingCandles(
+          page,
+          timeframe,
+          window.from,
+          window.to,
+          window.fromPrice,
+        );
+        const inserted = await upsertCandles(
+          this.source,
+          pair.poolAddress,
+          timeframe,
+          candlesWithGaps,
+        );
+        console.log(`Inserted ${inserted} candles from fetched ${page.length}`);
       }
 
       const nextBounds = await readRangeBounds(
@@ -122,6 +136,84 @@ export class CachedMarket implements Market {
   }
 }
 
+/** Flat bars may run forward to the window end, but not past this far ahead of now. */
+const FILL_AHEAD_LIMIT_SECONDS = 24 * 60 * 60;
+
+/**
+ * Insert a flat bar for every missing open from `fromTime` through `untilTime`.
+ * A leading gap uses `fromPrice` (the last close stored before `fromTime`).
+ * The forward run stops at `nowSeconds + 24h` when that is earlier.
+ * OHLC is the previous close and volume is 0.
+ */
+export function fillMissingCandles(
+  candles: Candle[],
+  timeframe: Timeframe,
+  fromTime: number,
+  untilTime: number,
+  fromPrice?: number,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): Candle[] {
+  const step = candleIntervalSeconds(timeframe);
+  const end = Math.min(untilTime, nowSeconds + FILL_AHEAD_LIMIT_SECONDS);
+  const sorted = [...candles].sort((a, b) => a.time - b.time);
+  const filled: Candle[] = [];
+  const first = sorted[0];
+  if (fromPrice !== undefined && (first === undefined || first.time > fromTime)) {
+    const seed = createCandle({
+      time: fromTime - step,
+      open: fromPrice,
+      high: fromPrice,
+      low: fromPrice,
+      close: fromPrice,
+      volume: 0,
+      timeframe,
+      ...(first !== undefined ? { source: first.source } : {}),
+    });
+    const leadUntil = first === undefined ? end : Math.min(first.time, end);
+    appendFlat(filled, seed, fromTime, leadUntil, step, timeframe);
+  }
+  for (const candle of sorted) {
+    const prev = filled.at(-1);
+    if (prev !== undefined && candle.time > prev.time + step) {
+      appendFlat(filled, prev, prev.time + step, Math.min(candle.time, end), step, timeframe);
+    }
+    if (candle.time === prev?.time) {
+      filled[filled.length - 1] = candle;
+      continue;
+    }
+    filled.push(candle);
+  }
+  const last = filled.at(-1);
+  if (last !== undefined) {
+    appendFlat(filled, last, last.time + step, end, step, timeframe);
+  }
+  return filled;
+}
+
+function appendFlat(
+  filled: Candle[],
+  prev: Candle,
+  fromTime: number,
+  untilTime: number,
+  step: number,
+  timeframe: Timeframe,
+): void {
+  for (let time = fromTime; time < untilTime; time += step) {
+    filled.push(
+      createCandle({
+        time,
+        open: prev.close,
+        high: prev.close,
+        low: prev.close,
+        close: prev.close,
+        volume: 0,
+        timeframe,
+        source: prev.source,
+      }),
+    );
+  }
+}
+
 /** Edge holes plus any skip between two stored bars. */
 async function windowsToFill(
   source: CandleSource,
@@ -134,7 +226,7 @@ async function windowsToFill(
 ): Promise<TimeWindow[]> {
   const edges = missingWindows(bounds, fromTime, toTime, intervalSeconds);
   if (bounds.count >= expectedCandleCount(fromTime, toTime, intervalSeconds)) {
-    return edges;
+    return attachFromPrices(source, poolAddress, timeframe, edges);
   }
   const interior = await readInteriorGaps(
     source,
@@ -144,12 +236,29 @@ async function windowsToFill(
     toTime,
     intervalSeconds,
   );
-  return [...edges, ...interior];
+  const windows = [...edges, ...interior].sort((a, b) => a.from - b.from);
+  return attachFromPrices(source, poolAddress, timeframe, windows);
+}
+
+async function attachFromPrices(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: FetchCandlesOptions["timeframe"],
+  windows: TimeWindow[],
+): Promise<TimeWindow[]> {
+  const priced: TimeWindow[] = [];
+  for (const window of windows) {
+    const fromPrice = await readCloseBefore(source, poolAddress, timeframe, window.from);
+    priced.push(fromPrice === undefined ? window : { ...window, fromPrice });
+  }
+  return priced;
 }
 
 interface TimeWindow {
   from: number;
   to: number;
+  /** Close of the latest stored bar before `from`, when the database has one. */
+  fromPrice?: number;
 }
 
 /**

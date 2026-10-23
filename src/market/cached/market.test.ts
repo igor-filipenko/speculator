@@ -5,7 +5,7 @@ import { query, resetSpeculatorDbCache } from "../../db/db.js";
 import { truncateBotAndMarket, useTestDb } from "../../db/test-db.js";
 import { createCandle } from "../candle.js";
 import type { Candle, FetchCandlesOptions, Market, PairConfig, Timeframe } from "../../types.js";
-import { CachedMarket } from "./market.js";
+import { CachedMarket, fillMissingCandles } from "./market.js";
 
 const SOL_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 const JUP_POOL = "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL";
@@ -236,6 +236,7 @@ describe("CachedMarket", () => {
 
     assert.equal(inner.fetched, 1);
     assert.equal(inner.calls[0]?.fromTime, open + interval);
+    assert.equal(inner.calls[0]?.toTime, open + 2 * interval);
     assert.equal(loaded.length, 2);
     assert.equal(loaded[1]?.close, 9);
   });
@@ -260,6 +261,7 @@ describe("CachedMarket", () => {
 
     assert.equal(inner.fetched, 1);
     assert.equal(inner.calls[0]?.fromTime, open + 2 * interval);
+    assert.equal(inner.calls[0]?.toTime, open + 2 * interval + 40);
     assert.equal(loaded.at(-1)?.close, 4);
   });
 
@@ -333,6 +335,7 @@ describe("CachedMarket", () => {
 
     assert.equal(inner.fetched, 1);
     assert.equal(inner.calls[0]?.fromTime, open);
+    assert.equal(inner.calls[0]?.toTime, open + interval);
     assert.equal(loaded.length, 1);
     assert.equal(loaded[0]?.close, 8);
 
@@ -344,5 +347,237 @@ describe("CachedMarket", () => {
     });
     assert.equal(inner.fetched, 1);
     assert.equal(again[0]?.close, 8);
+  });
+
+  it("upserts flat zero-volume bars for timestamps missing inside a page", async () => {
+    const timeframe = "15m" as const;
+    const interval = 15 * 60;
+    const open = 1_680_000_000;
+    const rows = [candle(open, 10), candle(open + 2 * interval, 14)];
+    const inner = new StubMarket(rows);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 3 * interval,
+    });
+
+    assert.equal(inner.calls[0]?.fromTime, open);
+    assert.equal(inner.calls[0]?.toTime, open + 3 * interval);
+    assert.deepEqual(
+      loaded.map((row) => row.time),
+      [open, open + interval, open + 2 * interval],
+    );
+    assert.equal(loaded[1]?.open, 10);
+    assert.equal(loaded[1]?.high, 10);
+    assert.equal(loaded[1]?.low, 10);
+    assert.equal(loaded[1]?.close, 10);
+    assert.equal(loaded[1]?.volume, 0);
+    assert.equal(loaded[2]?.close, 14);
+  });
+
+  it("fills a leading gap from the close stored before the window", async () => {
+    const timeframe = "1m" as const;
+    const open = 1_690_000_000;
+    const prior = createCandle({
+      time: open - 60,
+      open: 7,
+      high: 9,
+      low: 6,
+      close: 8,
+      volume: 3,
+      timeframe,
+    });
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [prior]);
+    const later = candle(open + 120, 12);
+    const inner = new StubMarket([later]);
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime: open + 180,
+    });
+
+    assert.equal(inner.calls[0]?.fromTime, open);
+    assert.equal(inner.calls[0]?.toTime, open + 180);
+    assert.deepEqual(
+      loaded.map((row) => row.time),
+      [open, open + 60, open + 120],
+    );
+    assert.equal(loaded[0]?.close, 8);
+    assert.equal(loaded[0]?.volume, 0);
+    assert.equal(loaded[1]?.close, 8);
+    assert.equal(loaded[1]?.volume, 0);
+    assert.equal(loaded[2]?.close, 12);
+  });
+
+  it("fills an empty page through window.to from the close stored before from", async () => {
+    const timeframe = "1m" as const;
+    const open = 1_692_000_000;
+    const prior = createCandle({
+      time: open - 60,
+      open: 4,
+      high: 6,
+      low: 3,
+      close: 5,
+      volume: 2,
+      timeframe,
+    });
+    await upsertCandles("gecko-terminal", SOL_POOL, timeframe, [prior]);
+    const inner = new StubMarket();
+    const toTime = open + 180;
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime,
+    });
+
+    assert.equal(inner.fetched, 1);
+    assert.deepEqual(
+      loaded.map((row) => row.time),
+      [open, open + 60, open + 120],
+    );
+    assert.ok(loaded.every((row) => row.close === 5 && row.volume === 0));
+  });
+
+  it("fills a vendor tail through the cache window and not into the 15 minute pad", async () => {
+    const timeframe = "1m" as const;
+    const open = 1_691_000_000;
+    const last = createCandle({
+      time: open,
+      open: 4,
+      high: 6,
+      low: 3,
+      close: 5,
+      volume: 2,
+      timeframe,
+    });
+    const inner = new StubMarket([last]);
+    const toTime = open + 180;
+
+    const loaded = await new CachedMarket(inner).fetchCandles({
+      pair: solPair,
+      timeframe,
+      fromTime: open,
+      toTime,
+    });
+
+    assert.deepEqual(
+      loaded.map((row) => row.time),
+      [open, open + 60, open + 120],
+    );
+    assert.equal(loaded[1]?.close, 5);
+    assert.equal(loaded[1]?.volume, 0);
+    assert.equal(loaded[2]?.close, 5);
+    const past = await readCandles("gecko-terminal", SOL_POOL, timeframe, toTime, toTime + 15 * 60);
+    assert.equal(past.length, 0);
+  });
+});
+
+describe("fillMissingCandles", () => {
+  it("repeats the previous close across a gap and leaves real bars untouched", () => {
+    const interval = 60;
+    const open = 1_700_000_000;
+    const first = createCandle({
+      time: open,
+      open: 9,
+      high: 11,
+      low: 8,
+      close: 10,
+      volume: 4,
+      timeframe: "1m",
+    });
+    const third = createCandle({
+      time: open + 3 * interval,
+      open: 12,
+      high: 13,
+      low: 11,
+      close: 12,
+      volume: 5,
+      timeframe: "1m",
+    });
+
+    const filled = fillMissingCandles([third, first], "1m", open, open + 4 * interval);
+
+    assert.deepEqual(
+      filled.map((row) => row.time),
+      [open, open + interval, open + 2 * interval, open + 3 * interval],
+    );
+    assert.equal(filled[1]?.close, 10);
+    assert.equal(filled[1]?.volume, 0);
+    assert.equal(filled[2]?.close, 10);
+    assert.equal(filled[0]?.high, 11);
+    assert.equal(filled[3]?.volume, 5);
+  });
+
+  it("carries the last close through untilTime and stops 24 hours ahead of now", () => {
+    const interval = 60;
+    const open = 1_700_000_000;
+    const last = createCandle({
+      time: open,
+      open: 4,
+      high: 6,
+      low: 3,
+      close: 5,
+      volume: 2,
+      timeframe: "1m",
+    });
+    const day = 24 * 60 * 60;
+
+    const toWindowEnd = fillMissingCandles(
+      [last],
+      "1m",
+      open,
+      open + 3 * interval,
+      undefined,
+      open + 10 * day,
+    );
+    assert.deepEqual(
+      toWindowEnd.map((row) => row.time),
+      [open, open + interval, open + 2 * interval],
+    );
+    assert.equal(toWindowEnd[1]?.close, 5);
+    assert.equal(toWindowEnd[1]?.volume, 0);
+    assert.equal(toWindowEnd[2]?.high, 5);
+
+    const capped = fillMissingCandles([last], "1m", open, open + 3 * day, undefined, open);
+    assert.equal(capped.at(-1)?.time, open + day - interval);
+    assert.equal(capped.length, day / interval);
+    assert.ok(capped.every((row, index) => index === 0 || row.volume === 0));
+  });
+
+  it("uses fromPrice to open a window the page does not cover", () => {
+    const interval = 60;
+    const open = 1_700_000_000;
+    const later = createCandle({
+      time: open + 2 * interval,
+      open: 8,
+      high: 9,
+      low: 7,
+      close: 9,
+      volume: 1,
+      timeframe: "1m",
+    });
+
+    const lead = fillMissingCandles([later], "1m", open, open + 3 * interval, 4);
+    assert.deepEqual(
+      lead.map((row) => row.time),
+      [open, open + interval, open + 2 * interval],
+    );
+    assert.equal(lead[0]?.close, 4);
+    assert.equal(lead[0]?.volume, 0);
+    assert.equal(lead[2]?.close, 9);
+
+    const empty = fillMissingCandles([], "1m", open, open + 3 * interval, 4);
+    assert.deepEqual(
+      empty.map((row) => row.time),
+      [open, open + interval, open + 2 * interval],
+    );
+    assert.ok(empty.every((row) => row.close === 4 && row.volume === 0));
+    assert.deepEqual(fillMissingCandles([], "1m", open, open + 3 * interval), []);
   });
 });

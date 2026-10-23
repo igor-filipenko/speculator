@@ -97,7 +97,7 @@ export class GeckoTerminalMarket implements Market {
       }
 
       console.log(
-        `  OHLCV page ${page + 1}: ${batch.length} bars ` +
+        `  OHLCV ${timeframe} page ${page + 1}: ${batch.length} bars ` +
           `(${new Date(oldest.time * 1000).toISOString()} → ${new Date(newest.time * 1000).toISOString()}) ` +
           `total=${byTime.size}`,
       );

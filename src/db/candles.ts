@@ -104,6 +104,30 @@ export async function readRangeBounds(
   return bounds;
 }
 
+/** Close of the latest bar strictly before `beforeTime`, when one is stored. */
+export async function readCloseBefore(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+  beforeTime: number,
+): Promise<number | undefined> {
+  const rows = await query<{ close: number }>(
+    `
+    SELECT close
+    FROM market.candles
+    WHERE source = $1
+      AND pool_address = $2
+      AND timeframe = $3
+      AND time < to_timestamp($4)
+    ORDER BY time DESC
+    LIMIT 1
+    `,
+    [source, poolAddress, timeframe, beforeTime],
+  );
+  const close = rows[0]?.close;
+  return close === undefined ? undefined : Number(close);
+}
+
 /**
  * Open intervals `(prev, next)` where stored bars skip more than one period.
  * A skip whose two neighbors were written by the same upsert is a vendor omission
@@ -174,9 +198,9 @@ export async function upsertCandles(
   poolAddress: string,
   timeframe: Timeframe,
   candles: Candle[],
-): Promise<void> {
+): Promise<number> {
   if (candles.length === 0) {
-    return;
+    return 0;
   }
   // Postgres rejects INSERT … ON CONFLICT when the same conflict key appears twice in one statement.
   // Gecko pages can include duplicate timestamps (100 bars → 99 unique).
@@ -185,6 +209,7 @@ export async function upsertCandles(
     byTime.set(c.time, c);
   }
   const unique = [...byTime.values()];
+  let inserted = 0;
 
   for (let i = 0; i < unique.length; i += UPSERT_BATCH_SIZE) {
     const batch = unique.slice(i, i + UPSERT_BATCH_SIZE);
@@ -202,7 +227,7 @@ export async function upsertCandles(
         c.volume,
       );
     }
-    await query(
+    const rows = await query<{ time: Date }>(
       `
       INSERT INTO market.candles (source, pool_address, timeframe, time, open, high, low, close, volume)
       VALUES ${valuesPlaceholders(batch.length, CANDLE_UPSERT_COLUMNS)}
@@ -213,10 +238,13 @@ export async function upsertCandles(
         close = EXCLUDED.close,
         volume = EXCLUDED.volume,
         fetched_at = now()
+      RETURNING time
       `,
       values,
     );
+    inserted += rows.length;
   }
+  return inserted;
 }
 
 export async function deleteCandles(

@@ -342,108 +342,6 @@ describe("evaluateBollinger filters", () => {
     assert.match(covered.reason, /profitable price/);
   });
 
-  it("covers a short when the close is at least 1×ATR against the entry after timeStopBars", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const perpsFees = {
-      openFeePct: 0.0006,
-      closeFeePct: 0.0006,
-      borrowFeePctPerHour: 0.000007,
-    };
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopBars: 2 }),
-      price: last.close,
-      entryPrice: last.close * 0.9,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees,
-    });
-    assert.equal(signal.side, "BUY", signal.reason);
-    assert.match(signal.reason, /Time stop/);
-    assert.match(signal.reason, /after 2 bars/);
-  });
-
-  it("does not time-stop a short before timeStopBars have elapsed", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopBars: 2 }),
-      price: last.close,
-      entryPrice: last.close * 0.9,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
-    });
-    assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /Waiting for profitable price/);
-  });
-
-  it("does not time-stop a short whose close is only a tick against the entry", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopBars: 2, timeStopAtr: 50 }),
-      price: last.close,
-      entryPrice: last.close * 0.999,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
-    });
-    assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /Waiting for profitable price/);
-  });
-
-  it("sells a long when the close is at least 1×ATR against the entry after timeStopBars", () => {
-    const candles = reclaimLowerBand();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopBars: 2 }),
-      price: last.close,
-      entryPrice: last.close * 1.1,
-      openedAt,
-      at,
-    });
-    assert.equal(signal.side, "SELL", signal.reason);
-    assert.match(signal.reason, /Time stop/);
-  });
-
-  it("keeps a profitable exit ahead of the time stop", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 4 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopBars: 2 }),
-      price: last.close * 1.05,
-      entryPrice: last.close * 1.02,
-      openedAt,
-      at,
-    });
-    assert.equal(signal.side, "SELL", signal.reason);
-    assert.match(signal.reason, /profitable price/);
-  });
-
   it("holds a short cover when the perps fee schedule is missing", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
@@ -706,7 +604,7 @@ describe("BollingerStrategy", () => {
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB20/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /DI1\.2/);
-    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /tStop2/);
+    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop/);
     assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), /bollinger/);
     assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), /bollinger/);
   });

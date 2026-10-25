@@ -1,6 +1,5 @@
 import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { candleIntervalSeconds } from "../../market/candle.js";
 import type {
   Candle,
   MarketIndicators,
@@ -50,14 +49,6 @@ export interface BollingerParams {
   minRewardRisk: number;
   /** Stop distance beyond the entry-bar extreme, in ATRs. */
   stopAtr: number;
-  /**
-   * Closed bars to wait before an adverse time stop. 0 disables.
-   * Mean-reversion that is still going the wrong way is scratched here,
-   * before the hard stop.
-   */
-  timeStopBars: number;
-  /** Last closed bar must be at least this many ATRs against the entry. */
-  timeStopAtr: number;
 }
 
 /**
@@ -174,8 +165,6 @@ export function bollingerParamsFor(): BollingerParams {
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
     stopAtr: 2.5,
-    timeStopBars: 2,
-    timeStopAtr: 1,
   };
 }
 
@@ -222,8 +211,6 @@ export interface BollingerInput {
  * Regime and DI do not block a mid exit.
  * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
  * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
- * After `timeStopBars` closed bars, exit when the last close is at least
- * `timeStopAtr` × ATR against the entry. Wicks do not count.
  */
 export function evaluateBollinger(input: BollingerInput): Signal {
   const { pair, candles, strategy, price } = input;
@@ -313,20 +300,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
       };
     }
-    const timed = adverseTimeStopReason({
-      side: "long",
-      entry,
-      close,
-      openedAt: input.openedAt,
-      at,
-      timeframe: strategy.timeframe,
-      atrNow,
-      timeStopBars: strategy.timeStopBars,
-      timeStopAtr: strategy.timeStopAtr,
-    });
-    if (timed != null) {
-      return { ...base, side: "SELL", reason: timed };
-    }
     return {
       ...base,
       side: "HOLD",
@@ -335,17 +308,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   }
 
   if (short) {
-    const timed = adverseTimeStopReason({
-      side: "short",
-      entry,
-      close,
-      openedAt: input.openedAt,
-      at,
-      timeframe: strategy.timeframe,
-      atrNow,
-      timeStopBars: strategy.timeStopBars,
-      timeStopAtr: strategy.timeStopAtr,
-    });
     const fees = input.perpsFees;
     if (fees != null) {
       const heldMs = input.openedAt != null ? at.getTime() - input.openedAt.getTime() : 0;
@@ -365,17 +327,11 @@ export function evaluateBollinger(input: BollingerInput): Signal {
           reason: `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
         };
       }
-      if (timed != null) {
-        return { ...base, side: "BUY", reason: timed };
-      }
       return {
         ...base,
         side: "HOLD",
         reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
       };
-    }
-    if (timed != null) {
-      return { ...base, side: "BUY", reason: timed };
     }
     return {
       ...base,
@@ -500,7 +456,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid or on an adverse time stop. ADX is recorded and does not gate entries. */
+/** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. ADX is recorded and does not gate entries. */
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
@@ -509,9 +465,8 @@ export class BollingerStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, diRatio, timeStopBars } = this.params;
-    const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
-    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${stop})`;
+    const { timeframe, period, stdDev, diRatio } = this.params;
+    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio})`;
   }
 
   getId(): string {
@@ -627,55 +582,6 @@ function diPassNote(
     return `+DI ${fmt(plusDi)} <= ${diRatio}× -DI ${fmt(minusDi)}`;
   }
   return `-DI ${fmt(minusDi)} <= ${diRatio}× +DI ${fmt(plusDi)}`;
-}
-
-/**
- * Failed mean-reversion: after `timeStopBars`, the last **close** is at least
- * `timeStopAtr` × ATR against the entry. The forming bar's wick does not count.
- */
-function adverseTimeStopReason(input: {
-  side: "long" | "short";
-  entry: number;
-  close: number;
-  openedAt: Date | undefined;
-  at: Date;
-  timeframe: Timeframe;
-  atrNow: number | null | undefined;
-  timeStopBars: number;
-  timeStopAtr: number;
-}): string | null {
-  if (
-    input.timeStopBars <= 0 ||
-    !(input.timeStopAtr > 0) ||
-    input.openedAt == null ||
-    input.atrNow == null ||
-    !(input.atrNow > 0) ||
-    !(input.entry > 0)
-  ) {
-    return null;
-  }
-
-  const intervalSec = candleIntervalSeconds(input.timeframe);
-  if (intervalSec <= 0) {
-    return null;
-  }
-
-  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
-  const barsHeld = Math.floor(elapsedSec / intervalSec);
-  if (barsHeld < input.timeStopBars) {
-    return null;
-  }
-
-  const adverse = input.side === "long" ? input.entry - input.close : input.close - input.entry;
-  const minAdverse = input.timeStopAtr * input.atrNow;
-  if (!(adverse >= minAdverse)) {
-    return null;
-  }
-
-  return (
-    `Time stop: close ${fmt(input.close)} is ${fmt(adverse)} against entry ${fmt(input.entry)} ` +
-    `after ${input.timeStopBars} bars (>= ${fmt(minAdverse)} = ${input.timeStopAtr}×ATR)`
-  );
 }
 
 function fmt(n: number): string {

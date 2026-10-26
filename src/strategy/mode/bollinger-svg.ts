@@ -1,11 +1,19 @@
-import type { Candle } from "../../types.js";
+import type { Candle, Timeframe } from "../../types.js";
 import { bollinger, dmi } from "../indicators.js";
-import type { BollingerParams } from "./bollinger.js";
+
+/** Band fields the chart reads. Bollinger and band-walker both satisfy this. */
+export interface BollingerChartParams {
+  timeframe: Timeframe;
+  period: number;
+  stdDev: number;
+  adxPeriod: number;
+  diRatio: number;
+}
 
 export interface BollingerChartInput {
   pair: string;
   candles: Candle[];
-  strategy: BollingerParams;
+  strategy: BollingerChartParams;
   width?: number;
   height?: number;
 }

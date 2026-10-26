@@ -26,7 +26,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
 | -------------------- | ----------------------------------------------------------------------------------- |
 | `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
 | `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
-| `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`)                         |
+| `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian` \| `band-walker`)        |
 | `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
 | `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |

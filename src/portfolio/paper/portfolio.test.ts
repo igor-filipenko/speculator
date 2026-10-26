@@ -121,3 +121,86 @@ describe("PaperPortfolio short", () => {
     assert.equal(portfolio.getSnapshot(90).cashUsdc, 1000 + 100 - openFee - holdFee);
   });
 });
+
+describe("PaperPortfolio applyPositionDataSync", () => {
+  function open(intent: "open-long" | "open-short", slPrice: number): PaperPortfolio {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({ ...order(intent, 100, 1), slPrice, strategyId: "band-walker" });
+    return portfolio;
+  }
+
+  it("raises a long stop and leaves size and entry alone", () => {
+    const portfolio = open("open-long", 90);
+    const moved = portfolio.applyPositionDataSync({
+      pair: "SOL/USDC",
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      reason: "trail",
+      slPrice: 95,
+    });
+    assert.equal(moved, true);
+    const position = portfolio.getSnapshot(100).position;
+    assert.equal(position.slPrice, 95);
+    assert.equal(position.size, 1);
+    assert.equal(position.entryPrice, 100);
+    assert.equal(position.side, "long");
+    assert.equal(portfolio.getSnapshot(100).trades.length, 1);
+  });
+
+  it("refuses a looser long stop, a flat book, and another pair", () => {
+    const portfolio = open("open-long", 95);
+    assert.equal(
+      portfolio.applyPositionDataSync({
+        pair: "SOL/USDC",
+        at: new Date(),
+        reason: "trail",
+        slPrice: 94,
+      }),
+      false,
+    );
+    assert.equal(portfolio.getSnapshot(100).position.slPrice, 95);
+    const flat = new PaperPortfolio("SOL/USDC", 1000);
+    assert.equal(
+      flat.applyPositionDataSync({
+        pair: "SOL/USDC",
+        at: new Date(),
+        reason: "trail",
+        slPrice: 95,
+      }),
+      false,
+    );
+    assert.equal(
+      portfolio.applyPositionDataSync({
+        pair: "ETH/USDC",
+        at: new Date(),
+        reason: "trail",
+        slPrice: 96,
+      }),
+      false,
+    );
+    assert.equal(portfolio.getSnapshot(100).position.slPrice, 95);
+  });
+
+  it("lowers a short stop", () => {
+    const portfolio = open("open-short", 110);
+    assert.equal(
+      portfolio.applyPositionDataSync({
+        pair: "SOL/USDC",
+        at: new Date(),
+        reason: "trail",
+        slPrice: 105,
+      }),
+      true,
+    );
+    assert.equal(portfolio.getSnapshot(100).position.slPrice, 105);
+    assert.equal(
+      portfolio.applyPositionDataSync({
+        pair: "SOL/USDC",
+        at: new Date(),
+        reason: "trail",
+        slPrice: 108,
+      }),
+      false,
+    );
+    assert.equal(portfolio.getSnapshot(100).position.slPrice, 105);
+  });
+});

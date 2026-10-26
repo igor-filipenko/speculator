@@ -18,6 +18,7 @@ import type {
   Trend,
   Volatility,
 } from "../types.js";
+import { BandWalkerStrategy } from "./mode/band-walker.js";
 import { BollingerStrategy } from "./mode/bollinger.js";
 import { DonchianStrategy } from "./mode/donchian.js";
 
@@ -122,6 +123,7 @@ type StrategyFactory = (trend: Trend, volatility: Volatility) => Strategy;
 
 /** Implementations keyed by `strategy.registry.id`. */
 const strategyFactories = new Map<string, StrategyFactory>([
+  ["band-walker", (trend, volatility) => new BandWalkerStrategy(trend, volatility)],
   ["bollinger", (trend, volatility) => new BollingerStrategy(trend, volatility)],
   ["donchian", (trend, volatility) => new DonchianStrategy(trend, volatility)],
 ]);
@@ -133,7 +135,7 @@ const registeredById = new Map<string, RegisteredStrategy>();
  * `trend` and 1h `volatility`. The registry row is cached for the process.
  * Bollinger entries are a closed-bar band touch. A long is blocked when −DI
  * leads +DI, and a short when +DI leads −DI. Donchian volume SMA multiplier
- * scales with both.
+ * scales with both. Band-walker uses one parameter set on 1h.
  */
 export async function loadStrategy(
   id: string,

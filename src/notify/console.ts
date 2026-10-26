@@ -4,9 +4,10 @@ import type {
   MtfSnapshot,
   Order,
   PerpsFees,
+  PositionData,
+  PortfolioSnapshot,
   Risk,
   Signal,
-  PortfolioSnapshot,
   Trade,
 } from "../types.js";
 
@@ -90,6 +91,11 @@ export function logSignal(signal: Signal): void {
       ` strategy=${signal.strategyId}${sl}${tp} minR:R=${signal.minRewardRisk.toFixed(2)}` +
       ` — ${signal.reason}${meta}`,
   );
+}
+
+export function logPositionData(data: PositionData): void {
+  const ts = data.at.toISOString();
+  console.log(`[${ts}] ${data.pair} STOP ${data.slPrice.toFixed(4)} — ${data.reason}`);
 }
 
 export function logRisk(risk: Risk): void {

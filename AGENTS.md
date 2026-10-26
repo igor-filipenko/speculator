@@ -44,7 +44,7 @@ src/ highlights:
   db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
   market/               # OHLCV clients (gecko, binance), Timescale cache, HTF/1h indicators
   exchange/             # emulated, or jupiter (spot long + perps short)
-  strategy/             # indicators + bollinger/donchian + SVGs
+  strategy/             # indicators + bollinger/donchian/band-walker + SVGs
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
@@ -56,7 +56,7 @@ src/ highlights:
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
 - Strategy knobs live on the mode `*Params` object (`bollingerParamsFor` / `donchianParamsFor` / …). Do not add magic numbers inside `evaluate*`.
-- Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
+- Flow: Strategy signal → RiskManager result → exchange order, or a `position-data` book update (no order) → Portfolio applyOrder / applyPositionData.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
 - When changing strategy defaults, update `.env.example` (and README) together.

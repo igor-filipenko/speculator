@@ -1,10 +1,12 @@
 import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { tighterStopPrice } from "../../strategy/risk-manager.js";
 import type {
   Order,
   PairConfig,
   Portfolio,
   Position,
+  PositionData,
   PortfolioSnapshot,
   Trade,
 } from "../../types.js";
@@ -193,6 +195,28 @@ export class PaperPortfolio implements Portfolio {
       case "buy-sol":
         return null;
     }
+  }
+
+  /**
+   * Tighten the stored stop in memory. No trade and no database write.
+   * Backtests use this; paper trading persists through {@link applyPositionData}.
+   */
+  applyPositionDataSync(data: PositionData): boolean {
+    const next = tighterStopPrice(
+      this.position.side,
+      this.position.size,
+      this.position.slPrice,
+      data.slPrice,
+    );
+    if (next == null || data.pair !== this.position.pair) return false;
+    this.position = { ...this.position, slPrice: next };
+    return true;
+  }
+
+  /** Tighten the stored stop and upsert the paper book. Does not insert a trade. */
+  async applyPositionData(data: PositionData): Promise<void> {
+    if (!this.applyPositionDataSync(data)) return;
+    await upsertPaperPortfolio(this.toPersisted());
   }
 
   /**

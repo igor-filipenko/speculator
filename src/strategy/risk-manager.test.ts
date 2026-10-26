@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
-import type { PortfolioSnapshot, Signal } from "../types.js";
+import type { PortfolioSnapshot, Signal, SignalSide } from "../types.js";
 import { evaluateProtectiveExit, GenericRiskManager } from "./risk-manager.js";
 
 describe("evaluateProtectiveExit", () => {
@@ -305,5 +305,127 @@ describe("SOL reserve top-up", () => {
     if (buy.kind === "risk") {
       assert.match(buy.risk.reason, /already long/);
     }
+  });
+});
+
+describe("position-data stop", () => {
+  const risk = new GenericRiskManager();
+
+  function held(side: "long" | "short", slPrice: number): PortfolioSnapshot {
+    return {
+      cashUsdc: 1000,
+      position: {
+        pair: "SOL/USDC",
+        side,
+        size: 1,
+        entryPrice: 100,
+        strategyId: "band-walker",
+        slPrice,
+        openedAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+      realizedPnl: 0,
+      equity: 1000,
+      trades: [],
+      nativeSol: 1,
+      insufficientSol: 0,
+      simulated: true,
+    };
+  }
+
+  function sig(input: {
+    side?: SignalSide;
+    slPrice?: number;
+    barLow: number;
+    barHigh: number;
+  }): Signal {
+    return {
+      pair: "SOL/USDC",
+      strategyId: "band-walker",
+      side: input.side ?? "HOLD",
+      reason: "walk holds",
+      price: 100,
+      at: new Date("2026-01-01T02:00:00.000Z"),
+      ...(input.slPrice !== undefined ? { slPrice: input.slPrice } : {}),
+      tpPrices: [],
+      minRewardRisk: 0,
+      meta: { barLow: input.barLow, barHigh: input.barHigh },
+    };
+  }
+
+  it("returns a book update when the long stop only tightens", () => {
+    const result = risk.check(sig({ slPrice: 95, barLow: 96, barHigh: 101 }), held("long", 90), []);
+    assert.equal(result.kind, "position-data");
+    if (result.kind === "position-data") {
+      assert.equal(result.data.slPrice, 95);
+      assert.equal(result.data.pair, "SOL/USDC");
+      assert.equal(result.data.reason, "walk holds");
+    }
+  });
+
+  it("ignores a looser long stop", () => {
+    const result = risk.check(sig({ slPrice: 85, barLow: 96, barHigh: 101 }), held("long", 90), []);
+    assert.equal(result.kind, "no-command");
+  });
+
+  it("closes a long at the tighter stop when this bar already trades through it", () => {
+    const result = risk.check(sig({ slPrice: 95, barLow: 94, barHigh: 101 }), held("long", 90), []);
+    assert.equal(result.kind, "protective-command");
+    if (result.kind === "protective-command") {
+      assert.equal(result.command.intent, "close-long");
+      assert.equal(result.command.priceHint, 95);
+      assert.match(result.command.reason, /95\.0000/);
+    }
+  });
+
+  it("returns a book update when the short stop only tightens", () => {
+    const result = risk.check(
+      sig({ slPrice: 105, barLow: 99, barHigh: 104 }),
+      held("short", 110),
+      [],
+    );
+    assert.equal(result.kind, "position-data");
+    if (result.kind === "position-data") assert.equal(result.data.slPrice, 105);
+  });
+
+  it("ignores a looser short stop", () => {
+    const result = risk.check(
+      sig({ slPrice: 115, barLow: 99, barHigh: 104 }),
+      held("short", 110),
+      [],
+    );
+    assert.equal(result.kind, "no-command");
+  });
+
+  it("closes a short at the tighter stop when this bar already trades through it", () => {
+    const result = risk.check(
+      sig({ slPrice: 105, barLow: 99, barHigh: 106 }),
+      held("short", 110),
+      [],
+    );
+    assert.equal(result.kind, "protective-command");
+    if (result.kind === "protective-command") {
+      assert.equal(result.command.intent, "close-short");
+      assert.equal(result.command.priceHint, 105);
+    }
+  });
+
+  it("does not trail off a repeated entry while already long", () => {
+    const result = risk.check(
+      sig({ side: "BUY", slPrice: 95, barLow: 94, barHigh: 101 }),
+      held("long", 90),
+      [],
+    );
+    assert.equal(result.kind, "risk");
+    if (result.kind === "risk") assert.match(result.risk.reason, /already long/);
+  });
+
+  it("keeps a strategy close on the exchange when the tighter stop is not hit", () => {
+    const result = risk.check(
+      sig({ side: "SELL", slPrice: 95, barLow: 96, barHigh: 101 }),
+      held("long", 90),
+      [],
+    );
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") assert.equal(result.command.intent, "close-long");
   });
 });

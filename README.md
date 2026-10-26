@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
+| `STRATEGY`                            | `bollinger` (default), `donchian`, or `band-walker`                                   |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default) or `binance`                                 |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
@@ -340,6 +340,28 @@ A long exits when a closed close crosses the prior **20-bar low**, when price gi
 
 The opening signal sets a hard stop **3×ATR** from the entry price. There is no take-profit and no reward:risk gate; the channel exit, giveback, time stop, and hard stop end the trade. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
 
+### Band walk (`band-walker`)
+
+Trend ride on **1h** SOL/USDC, run on its own (`STRATEGY=band-walker`). It uses the same Bollinger bands as a location measure and takes the continuation Bollinger fades. There is no take-profit and no reward:risk gate. `/chart` draws the Bollinger mid/upper/lower bands and +DI/−DI.
+
+A **closed** bar opens a long when its close is above the upper band, the middle band is higher than it was `slopeBars` ago, at least `walkHits` of the last `walkWindow` closes have %B ≥ `percentBMin`, and +DI > `diRatio` × −DI. A short is the mirror (close below the lower band, falling middle, %B ≤ 1 − `percentBMin`, −DI leading) and needs a perps fee schedule. The entry is the first bar of that walk. A later bar of the same walk does not open again, including after a stop-out, until the walk breaks and restarts. ADX is recorded and does not gate. HTF trend does not gate. A forming bar is ignored for entries and for the trail extreme.
+
+An open long sells when a closed bar closes back below the middle. An open short covers when a closed bar closes back above the middle. That close is an invalidation, not a target. The hard stop is `position.slPrice`. The risk manager closes when the bar low (long) or bar high (short) trades through it.
+
+Parameters in `bandWalkerParamsFor`:
+
+- `timeframe` **1h**. Twenty bars is about a day, which is the intermediate SOL trend this ride is meant to hold. 15m is the mean-reversion chart.
+- `period` **20**, `stdDev` **2**. Default Bollinger width. %B and a close outside the band are defined on that width.
+- `atrPeriod` **14**. Stop volatility, separate from the 20-bar band.
+- `adxPeriod` **14**. DI gate and the recorded ADX share this length.
+- `diRatio` **1.2**. The same lead Bollinger uses to refuse the opposite trade. `0` disables the gate. Exits ignore it.
+- `slopeBars` **5**. The middle must have drifted with the walk for five hours.
+- `walkWindow` **5**, `walkHits` **3**, `percentBMin` **0.8**. Three of the last five closes sit in the outer fifth of the band. The signal bar itself must still close outside the band. The same five bars set the initial stop extreme.
+- `stopAtr` **0.5**. Initial stop is half an ATR past the lowest low (long) or highest high (short) of that window.
+- `trailArmAtr` **1.5**, `trailAtr` **2.5**, `trailLockEntry` **true**. After the closed-bar extreme is 1.5×ATR in favor of the fill, the stop becomes that extreme minus 2.5×ATR (long) or plus 2.5×ATR (short), and not worse than the fill. The forming bar does not move the extreme.
+
+A tighter candidate is a `position-data` result. The engine writes `slPrice` on the book and does not send an order. A candidate the current bar has already traded through is a protective close instead. A looser price is ignored. Opening size still uses the initial stop and is not recomputed when the stop tightens.
+
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 
 ## Project layout
@@ -372,6 +394,7 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
   strategy/mode/donchian.ts
+  strategy/mode/band-walker.ts # 1h close outside BB(20, 2); trailed slPrice, no take-profit
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart

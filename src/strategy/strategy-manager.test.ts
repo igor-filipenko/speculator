@@ -215,9 +215,14 @@ describe("applyMarketIndicators", () => {
 });
 
 describe("loadStrategy", () => {
-  it("builds bollinger and donchian from strategy.registry", async () => {
+  it("builds bollinger, donchian, and band-walker from strategy.registry", async () => {
     assert.equal((await loadStrategy("bollinger", "flat", "low")).getId(), "bollinger");
     assert.equal((await loadStrategy("donchian", "flat", "low")).getId(), "donchian");
+    assert.equal((await loadStrategy("band-walker", "flat", "low")).getId(), "band-walker");
+    assert.match(
+      (await loadStrategy("band-walker", "bullish", "high")).getDisplayName(),
+      /1h BB20×2/,
+    );
   });
 
   it("rejects an id that is not in strategy.registry", async () => {

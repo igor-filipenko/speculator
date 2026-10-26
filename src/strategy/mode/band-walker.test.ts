@@ -112,9 +112,9 @@ describe("bandWalkerParamsFor", () => {
   it("uses the 1h walk defaults", () => {
     const p = bandWalkerParamsFor();
     assert.equal(p.timeframe, "1h");
-    assert.equal(p.period, 20);
+    assert.equal(p.period, 30);
     assert.equal(p.stdDev, 2);
-    assert.equal(p.atrPeriod, 14);
+    assert.equal(p.atrPeriod, 20);
     assert.equal(p.adxPeriod, 14);
     assert.equal(p.diRatio, 1.2);
     assert.equal(p.slopeBars, 5);
@@ -123,7 +123,7 @@ describe("bandWalkerParamsFor", () => {
     assert.equal(p.percentBMin, 0.8);
     assert.equal(p.stopAtr, 0.5);
     assert.equal(p.trailArmAtr, 1.5);
-    assert.equal(p.trailAtr, 2.5);
+    assert.equal(p.trailAtr, 4);
     assert.equal(p.trailLockEntry, true);
   });
 });
@@ -357,10 +357,10 @@ describe("BandWalkerStrategy", () => {
   it("names the 1h walk and charts Bollinger bands", () => {
     const strategy = new BandWalkerStrategy();
     assert.equal(strategy.getId(), "band-walker");
-    assert.match(strategy.getDisplayName(), /1h BB20×2 %B0\.8 3\/5 DI1\.2/);
+    assert.match(strategy.getDisplayName(), /1h BB30×2 %B0\.8 3\/5 DI1\.2/);
     assert.equal(strategy.getRequiredCandles().timeframe, "1h");
     const svg = strategy.buildChartSvg("SOL/USDC", rally());
     assert.match(svg, /1h/);
-    assert.match(svg, /BB\(20, 2\)/);
+    assert.match(svg, /BB\(30, 2\)/);
   });
 });

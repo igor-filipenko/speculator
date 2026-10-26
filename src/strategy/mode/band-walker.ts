@@ -52,9 +52,9 @@ export interface BandWalkerParams {
 export function bandWalkerParamsFor(): BandWalkerParams {
   return {
     timeframe: "1h",
-    period: 20,
+    period: 30,
     stdDev: 2,
-    atrPeriod: 14,
+    atrPeriod: 20,
     adxPeriod: 14,
     diRatio: 1.2,
     slopeBars: 5,
@@ -63,7 +63,7 @@ export function bandWalkerParamsFor(): BandWalkerParams {
     percentBMin: 0.8,
     stopAtr: 0.5,
     trailArmAtr: 1.5,
-    trailAtr: 2.5,
+    trailAtr: 4,
     trailLockEntry: true,
   };
 }
@@ -278,7 +278,7 @@ export function evaluateBandWalker(input: BandWalkerInput): Signal {
   return { ...base, side, reason, slPrice };
 }
 
-/** 1h band walk: closed-bar close outside BB(20, 2), rising or falling middle, 3 of 5 %B, DI lead. No take-profit. */
+/** 1h band walk: closed-bar close outside BB(30, 2), rising or falling middle, 3 of 5 %B, DI lead. No take-profit. */
 export class BandWalkerStrategy implements Strategy {
   private readonly params: BandWalkerParams;
 

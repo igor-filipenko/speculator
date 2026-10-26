@@ -350,15 +350,15 @@ An open long sells when a closed bar closes back below the middle. An open short
 
 Parameters in `bandWalkerParamsFor`:
 
-- `timeframe` **1h**. Twenty bars is about a day, which is the intermediate SOL trend this ride is meant to hold. 15m is the mean-reversion chart.
-- `period` **20**, `stdDev` **2**. Default Bollinger width. %B and a close outside the band are defined on that width.
-- `atrPeriod` **14**. Stop volatility, separate from the 20-bar band.
+- `timeframe` **1h**. Thirty bars is a little more than a day, which is the intermediate SOL trend this ride is meant to hold. 15m is the mean-reversion chart.
+- `period` **30**, `stdDev` **2**. A longer middle than the default 20, so a close outside the band and a cross back through the middle both take longer. %B is still defined on 2σ.
+- `atrPeriod` **20**. Stop volatility, shorter than the 30-bar band so the trail is not a copy of the band width.
 - `adxPeriod` **14**. DI gate and the recorded ADX share this length.
 - `diRatio` **1.2**. The same lead Bollinger uses to refuse the opposite trade. `0` disables the gate. Exits ignore it.
 - `slopeBars` **5**. The middle must have drifted with the walk for five hours.
 - `walkWindow` **5**, `walkHits` **3**, `percentBMin` **0.8**. Three of the last five closes sit in the outer fifth of the band. The signal bar itself must still close outside the band. The same five bars set the initial stop extreme.
 - `stopAtr` **0.5**. Initial stop is half an ATR past the lowest low (long) or highest high (short) of that window.
-- `trailArmAtr` **1.5**, `trailAtr` **2.5**, `trailLockEntry` **true**. After the closed-bar extreme is 1.5×ATR in favor of the fill, the stop becomes that extreme minus 2.5×ATR (long) or plus 2.5×ATR (short), and not worse than the fill. The forming bar does not move the extreme.
+- `trailArmAtr` **1.5**, `trailAtr` **4**, `trailLockEntry` **true**. After the closed-bar extreme is 1.5×ATR in favor of the fill, the stop becomes that extreme minus 4×ATR (long) or plus 4×ATR (short), and not worse than the fill. The forming bar does not move the extreme.
 
 A tighter candidate is a `position-data` result. The engine writes `slPrice` on the book and does not send an order. A candidate the current bar has already traded through is a protective close instead. A looser price is ignored. Opening size still uses the initial stop and is not recomputed when the stop tightens.
 
@@ -394,7 +394,7 @@ src/
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
   strategy/mode/donchian.ts
-  strategy/mode/band-walker.ts # 1h close outside BB(20, 2); trailed slPrice, no take-profit
+  strategy/mode/band-walker.ts # 1h close outside BB(30, 2); trailed slPrice, no take-profit
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   strategy/mode/bollinger-svg.ts # BB SVG for /chart

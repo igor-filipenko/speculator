@@ -221,7 +221,7 @@ describe("loadStrategy", () => {
     assert.equal((await loadStrategy("band-walker", "flat", "low")).getId(), "band-walker");
     assert.match(
       (await loadStrategy("band-walker", "bullish", "high")).getDisplayName(),
-      /1h BB20×2/,
+      /1h BB30×2/,
     );
   });
 

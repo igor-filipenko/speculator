@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
-import { formingCandle, intraBarPrices, intraBarTicks, randomIntraBarPrices } from "./intra-bar.js";
+import {
+  formingCandle,
+  intraBarPrices,
+  intraBarTicks,
+  minuteQuoteTicks,
+  randomIntraBarPrices,
+} from "./intra-bar.js";
 
 function bar(open: number, high: number, low: number, close: number): Candle {
-  return { time: 1_700_000_000, open, high, low, close, volume: 10 };
+  return createCandle({ time: 1_700_000_000, open, high, low, close, volume: 10 });
 }
 
 /** Midpoint of the high–low range (intra-bar volatility sample). */
@@ -147,5 +154,73 @@ describe("randomIntraBarPrices", () => {
     const path = randomIntraBarPrices(doji, seededRng(0));
     assert.equal(path.length, 1);
     assert.equal(path[0], 100);
+  });
+});
+
+describe("minuteQuoteTicks", () => {
+  const closed = createCandle({
+    time: 1_700_000_000,
+    open: 100,
+    high: 110,
+    low: 90,
+    close: 105,
+    volume: 10,
+    timeframe: "15m",
+  });
+
+  function minute(
+    offsetSec: number,
+    open: number,
+    high: number,
+    low: number,
+    close: number,
+  ): Candle {
+    return createCandle({
+      time: closed.time + offsetSec,
+      open,
+      high,
+      low,
+      close,
+      volume: 1,
+      timeframe: "1m",
+    });
+  }
+
+  it("fills at each 1m close and never at the 15m high", () => {
+    const ticks = minuteQuoteTicks(closed, [
+      minute(60, 104, 109, 103, 104),
+      minute(0, 100, 102, 99, 101),
+    ]);
+    assert.deepEqual(
+      ticks.map((tick) => tick.price),
+      [101, 104],
+    );
+    assert.deepEqual(
+      ticks.map((tick) => tick.atSec),
+      [closed.time + 60, closed.time + 120],
+    );
+    assert.ok(ticks.every((tick) => tick.price !== closed.high));
+  });
+
+  it("expands the forming bar with 1m wicks seen so far", () => {
+    const ticks = minuteQuoteTicks(closed, [
+      minute(0, 100, 102, 99, 101),
+      minute(60, 101, 108, 97, 104),
+    ]);
+    assert.equal(ticks[0]!.forming.high, 102);
+    assert.equal(ticks[0]!.forming.low, 99);
+    assert.equal(ticks[0]!.forming.close, 101);
+    assert.equal(ticks[1]!.forming.high, 108);
+    assert.equal(ticks[1]!.forming.low, 97);
+    assert.equal(ticks[1]!.forming.close, 104);
+    assert.equal(ticks[1]!.forming.open, closed.open);
+  });
+
+  it("throws when the signal bar has no 1m child", () => {
+    assert.throws(() => minuteQuoteTicks(closed, []), /No 1m candles/);
+    assert.throws(
+      () => minuteQuoteTicks(closed, [minute(15 * 60, 100, 100, 100, 100)]),
+      /No 1m candles/,
+    );
   });
 });

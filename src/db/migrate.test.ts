@@ -65,7 +65,7 @@ describe("migrations", () => {
     );
     assert.deepEqual(
       labels.map((r) => r.label),
-      ["15m", "5m", "1h", "4h", "1d"].sort(),
+      ["15m", "5m", "1h", "4h", "1d", "1m"].sort(),
     );
   });
 

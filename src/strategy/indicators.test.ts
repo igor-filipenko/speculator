@@ -9,8 +9,10 @@ import {
   ema,
   keltner,
   percentile,
+  relativeVolume,
   rsi,
   sma,
+  stochastic,
 } from "./indicators.js";
 
 describe("atr", () => {
@@ -232,6 +234,20 @@ describe("sma", () => {
   });
 });
 
+describe("relativeVolume", () => {
+  it("divides the bar by the previous period's SMA and skips the current bar", () => {
+    const volumes = [1, 1, 1, 1, 4];
+    const series = relativeVolume(volumes, 4);
+    assert.equal(series[0], null);
+    assert.equal(series[3], null);
+    assert.equal(series[4], 4);
+  });
+
+  it("rejects invalid period", () => {
+    assert.throws(() => relativeVolume([], 0), /RVOL period/);
+  });
+});
+
 describe("donchian", () => {
   it("returns nulls until warm and matches max high / min low", () => {
     const candles = [
@@ -271,5 +287,39 @@ describe("ema/rsi smoke", () => {
     assert.equal(series[0], null);
     assert.equal(series[2], null);
     assert.ok(series[3] != null);
+  });
+});
+
+describe("stochastic", () => {
+  it("matches slow %K and %D", () => {
+    const candles = [
+      { high: 10, low: 8, close: 9 },
+      { high: 11, low: 9, close: 10 },
+      { high: 12, low: 7, close: 8 },
+      { high: 13, low: 9, close: 12 },
+    ];
+    const series = stochastic(candles, 3, 1, 2);
+    assert.equal(series.k[0], null);
+    assert.equal(series.k[1], null);
+    assert.equal(series.k[2], 20);
+    assert.ok(Math.abs(series.k[3]! - (100 * 5) / 6) < 1e-9);
+    assert.equal(series.d[2], null);
+    assert.ok(Math.abs(series.d[3]! - (20 + (100 * 5) / 6) / 2) < 1e-9);
+  });
+
+  it("treats a flat window as 0", () => {
+    const candles = [
+      { high: 5, low: 5, close: 5 },
+      { high: 5, low: 5, close: 5 },
+    ];
+    const series = stochastic(candles, 2, 1, 1);
+    assert.equal(series.k[1], 0);
+    assert.equal(series.d[1], 0);
+  });
+
+  it("rejects invalid periods", () => {
+    assert.throws(() => stochastic([], 0, 1, 1), /%K period/);
+    assert.throws(() => stochastic([], 1, 0, 1), /smoothing/);
+    assert.throws(() => stochastic([], 1, 1, 0), /%D period/);
   });
 });

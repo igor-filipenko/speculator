@@ -3,12 +3,13 @@ import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
 import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated/emulated-quote.js";
-import { candleIntervalSeconds } from "../market/gecko-terminal.js";
-import { loadCachedCandles } from "../market/ohlcv-cache.js";
+import { candleIntervalSeconds } from "../market/candle.js";
+import { createMarket } from "../market/manager.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import {
   isOrder,
   type Candle,
+  type Market,
   type MarketIndicators,
   type Order,
   type PairConfig,
@@ -16,7 +17,7 @@ import {
   type StrategyManager,
   type Trade,
 } from "../types.js";
-import { intraBarTicks } from "../backtest/intra-bar.js";
+import { intraBarTicks, minuteQuoteTicks } from "../backtest/intra-bar.js";
 import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
 import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
@@ -27,7 +28,6 @@ export interface BacktestCliOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now when only `--from` is set. */
   toTime?: number;
-  forceRefresh: boolean;
   /** Print simulated trades and chart; when false, metrics only. */
   verbose: boolean;
   /** CLI override for strategy (takes precedence over env STRATEGY). */
@@ -43,6 +43,11 @@ export interface BacktestCliOptions {
    * Mutually exclusive with `monteCarloRuns`. Requires N ≥ 2.
    */
   walkForwardFolds?: number;
+  /**
+   * Quote series inside each signal bar. Unset keeps the synthetic OHLC path.
+   * `1m` steps on real minute closes. Mutually exclusive with `monteCarloRuns`.
+   */
+  quotes?: "1m";
 }
 
 export interface BacktestCostTotals {
@@ -195,8 +200,6 @@ export interface RunWalkForwardOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
-  forceRefresh?: boolean;
-  /** Number of sequential folds. Must be ≥ 2. */
   walkForwardFolds: number;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
@@ -204,6 +207,10 @@ export interface RunWalkForwardOptions {
   htfCandles?: Candle[];
   /** Inject 1h candles for volatility; skips 1h fetch when set. */
   mtfCandles?: Candle[];
+  /** When `1m`, replay quotes are minute closes. Default is the synthetic OHLC path. */
+  quotes?: "1m";
+  /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
+  minuteCandles?: Candle[];
 }
 
 export interface RunBacktestOptions {
@@ -213,13 +220,16 @@ export interface RunBacktestOptions {
   fromTime?: number;
   /** Exclusive range end (Unix seconds). Defaults to now. */
   toTime?: number;
-  forceRefresh?: boolean;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
   /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
   htfCandles?: Candle[];
   /** Inject 1h candles for volatility; skips 1h fetch when set. */
   mtfCandles?: Candle[];
+  /** When `1m`, replay quotes are minute closes. Default is the synthetic OHLC path. */
+  quotes?: "1m";
+  /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
+  minuteCandles?: Candle[];
   /**
    * Number of additional Monte Carlo runs with randomized intra-bar paths.
    * When > 0, `BacktestResult.monteCarlo` is populated with p5/p50/p95 distributions.
@@ -231,30 +241,31 @@ export interface RunBacktestOptions {
 /**
  * Replay OHLCV through the active strategy/risk from {@link StrategyManager}.
  * Each signal-timeframe bar is walked as a forming candle so `evaluateSignal`
- * sees the same incomplete last bar as live. The path is fixed from the position at the
- * bar open: long visits the high last, short visits the low last, flat follows candle color.
- * HTF and 1h candles are loaded once per pair; market state is evaluated as those bars close.
+ * sees the same incomplete last bar as live. The default path is fixed from the
+ * position at the bar open: long visits the high last, short visits the low last,
+ * flat follows candle color. `quotes: "1m"` steps each bar on real minute closes
+ * instead. HTF and 1h candles are loaded once per pair; market state is evaluated
+ * as those bars close.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
+  if (options.quotes === "1m" && options.monteCarloRuns != null && options.monteCarloRuns > 0) {
+    throw new Error("--quotes 1m and --monte-carlo cannot be combined");
+  }
   const { strategyManager } = options;
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const cacheOpts = {
-    forceRefresh: options.forceRefresh ?? false,
-  };
+  const market = createMarket(options.config.candleSource);
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
     const candles =
       options.candles ??
-      (await loadCachedCandles({
-        symbol: pair.symbol,
-        poolAddress: pair.geckoPoolAddress,
+      (await market.fetchCandles({
+        pair,
         timeframe,
         fromTime,
         toTime,
-        ...cacheOpts,
       }));
 
     if (candles.length === 0) {
@@ -267,21 +278,29 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
     const skipNetwork = options.candles !== undefined;
     const htfCandles = await loadHtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.htfCandles,
       skipFetch: skipNetwork && options.htfCandles === undefined,
-      cacheOpts,
     });
     const mtfCandles = await loadMtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.mtfCandles,
       skipFetch: skipNetwork && options.mtfCandles === undefined,
-      cacheOpts,
+    });
+
+    const minuteCandles = await loadMinuteQuotes({
+      quotes: options.quotes,
+      injected: options.minuteCandles,
+      market,
+      pair,
+      candles,
     });
 
     const pairArgs = {
@@ -293,6 +312,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       startingCashUsdc: options.config.paperCashUsdc,
       fromTime: candles[0]!.time,
       toTime: candles[candles.length - 1]!.time + 1,
+      ...(minuteCandles !== undefined ? { minuteCandles } : {}),
     };
     const result = await replayPair(pairArgs);
 
@@ -324,20 +344,18 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const cacheOpts = { forceRefresh: options.forceRefresh ?? false };
+  const market = createMarket(options.config.candleSource);
 
   const results: WalkForwardResult[] = [];
 
   for (const pair of options.config.pairs) {
     const allCandles =
       options.candles ??
-      (await loadCachedCandles({
-        symbol: pair.symbol,
-        poolAddress: pair.geckoPoolAddress,
+      (await market.fetchCandles({
+        pair,
         timeframe,
         fromTime,
         toTime,
-        ...cacheOpts,
       }));
 
     if (allCandles.length === 0) {
@@ -355,21 +373,29 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
     const skipNetwork = options.candles !== undefined;
     const htfCandles = await loadHtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime: fullFrom,
       toTime: fullTo,
       injected: options.htfCandles,
       skipFetch: skipNetwork && options.htfCandles === undefined,
-      cacheOpts,
     });
     const mtfCandles = await loadMtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime: fullFrom,
       toTime: fullTo,
       injected: options.mtfCandles,
       skipFetch: skipNetwork && options.mtfCandles === undefined,
-      cacheOpts,
+    });
+
+    const minuteCandles = await loadMinuteQuotes({
+      quotes: options.quotes,
+      injected: options.minuteCandles,
+      market,
+      pair,
+      candles: allCandles,
     });
 
     const foldSlices = splitCandlesIntoFolds(allCandles, options.walkForwardFolds);
@@ -394,6 +420,7 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: foldFrom,
         toTime: foldTo,
+        ...(minuteCandles !== undefined ? { minuteCandles } : {}),
       });
       foldResults.push({
         fold: fi + 1,
@@ -467,6 +494,37 @@ export function splitCandlesIntoFolds(candles: Candle[], nFolds: number): Candle
   return folds;
 }
 
+/**
+ * 1m closes covering every signal bar. Omitted when the replay stays on the OHLC path.
+ * Injected minutes are returned as-is. Otherwise they are fetched for
+ * `[first open, last close)`.
+ */
+async function loadMinuteQuotes(args: {
+  quotes: "1m" | undefined;
+  injected: Candle[] | undefined;
+  market: Market;
+  pair: PairConfig;
+  candles: Candle[];
+}): Promise<Candle[] | undefined> {
+  if (args.quotes !== "1m") {
+    return undefined;
+  }
+  if (args.injected !== undefined) {
+    return args.injected;
+  }
+  const first = args.candles[0];
+  const last = args.candles[args.candles.length - 1];
+  if (first === undefined || last === undefined) {
+    return [];
+  }
+  return args.market.fetchCandles({
+    pair: args.pair,
+    timeframe: "1m",
+    fromTime: first.time,
+    toTime: last.time + last.intervalSeconds,
+  });
+}
+
 async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
@@ -476,9 +534,17 @@ async function replayPair(args: {
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
+  /**
+   * Real 1m candles. When set, each signal bar is stepped on minute closes.
+   * When omitted, ticks come from {@link intraBarTicks}.
+   */
+  minuteCandles?: Candle[];
   /** When set, intra-bar prices use random OHLC orderings (Monte Carlo mode). */
   rng?: () => number;
 }): Promise<BacktestResult> {
+  if (args.minuteCandles !== undefined && args.rng !== undefined) {
+    throw new Error("--quotes 1m and --monte-carlo cannot be combined");
+  }
   const { pair, strategyManager, candles, htfCandles, mtfCandles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
@@ -504,7 +570,10 @@ async function replayPair(args: {
     const candle = candles[i]!;
     const closed = candles.slice(0, i);
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
-    const ticks = intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
+    const ticks =
+      args.minuteCandles !== undefined
+        ? minuteQuoteTicks(candle, args.minuteCandles)
+        : intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
 
     // Volume-weighted slippage: set bar USDC volume once per candle.
     // GeckoTerminal volume field is in base token units; multiply by close for USDC equivalent.
@@ -967,25 +1036,30 @@ function meanAndStd(values: number[]): { mean: number; stdDev: number } {
 
 /** Parse CLI flags for `backtest`. */
 export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
-  let forceRefresh = false;
   let verbose = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
   let strategy: string | undefined;
   let monteCarloRuns: number | undefined;
   let walkForwardFolds: number | undefined;
+  let quotes: "1m" | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
       continue;
     }
-    if (arg === "--force-refresh") {
-      forceRefresh = true;
-      continue;
-    }
     if (arg === "--verbose" || arg === "-v") {
       verbose = true;
+      continue;
+    }
+    if (arg === "--quotes" || arg?.startsWith("--quotes=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--quotes");
+      if (value !== "1m") {
+        throw new Error("--quotes only accepts 1m");
+      }
+      quotes = "1m";
+      i = nextIndex;
       continue;
     }
     if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
@@ -1035,7 +1109,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
 
   const result: BacktestCliOptions = {
-    forceRefresh,
     verbose,
   };
   if (fromTime !== undefined) {
@@ -1056,12 +1129,18 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
     }
     result.walkForwardFolds = walkForwardFolds;
   }
+  if (quotes !== undefined) {
+    if (monteCarloRuns !== undefined) {
+      throw new Error("--quotes 1m and --monte-carlo cannot be combined");
+    }
+    result.quotes = quotes;
+  }
   return result;
 }
 
 export async function printBacktestReport(
   result: BacktestResult,
-  options: { verbose?: boolean } = {},
+  options: { verbose?: boolean; quotes?: "1m" } = {},
 ): Promise<void> {
   const { metrics, trades, candles } = result;
   const { strategy, costs } = metrics;
@@ -1113,7 +1192,9 @@ export async function printBacktestReport(
   }
 
   console.log(
-    "(Fills use emulated exchange costs on intra-bar OHLC ticks; last bar is forming, like live.)",
+    options.quotes === "1m"
+      ? "(Fills use emulated exchange costs on 1m closes; last bar is forming, like live.)"
+      : "(Fills use emulated exchange costs on intra-bar OHLC ticks; last bar is forming, like live.)",
   );
 
   if (trades.length === 0) {

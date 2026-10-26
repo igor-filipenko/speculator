@@ -9,7 +9,14 @@ export type OrderIntent = "open-long" | "close-long" | "open-short" | "close-sho
 
 export type OrderType = "market" | "limit";
 
-export type Timeframe = "5m" | "15m" | "1h" | "4h" | "1d";
+export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+
+/**
+ * OHLCV vendors this process can fetch.
+ * Postgres `market.candle_source` lists additional vendors so the column type
+ * does not change when a new client is added.
+ */
+export type CandleSource = "gecko-terminal" | "binance";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";
@@ -97,6 +104,32 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  timeframe: Timeframe;
+  intervalSeconds: number;
+  source: CandleSource;
+  isClosed(atSec: number): boolean;
+}
+
+export interface FetchCandlesOptions {
+  pair: PairConfig;
+  timeframe: Timeframe;
+  /** Inclusive lower bound (Unix seconds) for the series returned to the caller. */
+  fromTime?: number;
+  /**
+   * Exclusive upper bound (Unix seconds). Defaults to now.
+   * Matches replay windows: a bar is included when `fromTime <= time < toTime`.
+   */
+  toTime?: number;
+  /**
+   * Return the cached series without an upstream call when its length matches
+   * the window (a 1h window of 15m bars is 4 candles). A short series is still fetched.
+   */
+  tryUseCache?: boolean;
+}
+
+export interface Market {
+  readonly source: CandleSource;
+  fetchCandles(options: FetchCandlesOptions): Promise<Candle[]>;
 }
 
 export interface Signal {
@@ -126,6 +159,10 @@ export interface Signal {
     emaSlow?: number;
     trendEma?: number;
     rsi?: number;
+    /** Slow stochastic %K on the signal bar. */
+    stochK?: number;
+    /** Slow stochastic %D on the signal bar. */
+    stochD?: number;
     atr?: number;
     adx?: number;
     /** Wilder +DI on the signal timeframe (work-TF trend gate). */
@@ -139,8 +176,10 @@ export interface Signal {
     donchianUpper?: number;
     /** Prior Donchian entry-channel low (short breakout level). */
     donchianLower?: number;
-    /** Prior-bar SMA of volume (breakout filter baseline). */
+    /** Prior-bar SMA of volume (breakout / RVOL baseline). */
     volumeSma?: number;
+    /** Signal-bar volume divided by the prior volume SMA. */
+    rvol?: number;
     /** Last bar low (for ATR stop checks in risk). */
     barLow?: number;
     /** Last bar high (for trailing peak updates in risk). */
@@ -173,8 +212,7 @@ export interface PairConfig {
   quoteMint: string;
   baseDecimals: number;
   quoteDecimals: number;
-  /** GeckoTerminal pool used for OHLCV. */
-  geckoPoolAddress: string;
+  poolAddress: string;
 }
 
 export interface Trade {

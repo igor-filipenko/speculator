@@ -42,7 +42,7 @@ src/ highlights:
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
-  market/               # Gecko OHLCV + HTF/1h MarketIndicators
+  market/               # OHLCV clients (gecko, binance), Timescale cache, HTF/1h indicators
   exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators + bollinger/donchian + SVGs
   risk/risk-manager.ts

@@ -182,6 +182,8 @@ const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
   emaSlow: "EMA slow",
   trendEma: "Trend EMA",
   rsi: "RSI",
+  stochK: "Stoch %K",
+  stochD: "Stoch %D",
   atr: "ATR",
   adx: "ADX",
   plusDi: "+DI",
@@ -192,6 +194,7 @@ const META_LABELS: Record<keyof NonNullable<Signal["meta"]>, string> = {
   donchianUpper: "DC upper",
   donchianLower: "DC lower",
   volumeSma: "Vol SMA",
+  rvol: "RVOL",
   barLow: "Bar low",
   barHigh: "Bar high",
 };

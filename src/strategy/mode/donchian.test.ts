@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../../market/candle.js";
 import type { Candle, MarketIndicators, PerpsFees } from "../../types.js";
 import {
   DonchianStrategy,
@@ -31,14 +32,14 @@ function testParams(overrides: Partial<DonchianParams> = {}): DonchianParams {
 const INTERVAL = 15 * 60;
 
 function bar(time: number, close: number, range = 0.3, volume = 10): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume,
-  };
+  });
 }
 
 /** Quiet range so the last 5-bar high is well defined, then a close above it. */
@@ -172,14 +173,14 @@ describe("evaluateDonchian", () => {
   it("BUYs on the next bar after a closed breakout", () => {
     const candles = rangeThenBreakout({ lastClose: 101.2, lastVolume: 40, lastRange: 0.5 });
     const last = candles[candles.length - 1]!;
-    const next: Candle = {
+    const next = createCandle({
       time: last.time + INTERVAL,
       open: last.close,
       high: last.close,
       low: last.close,
       close: last.close,
       volume: 10,
-    };
+    });
     const at = new Date((next.time + 60) * 1000);
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
@@ -280,14 +281,14 @@ describe("evaluateDonchian", () => {
     const last = candles[candles.length - 1]!;
     const dumped: Candle[] = [
       ...candles,
-      {
+      createCandle({
         time: last.time + INTERVAL,
         open: last.close,
         high: last.close,
         low: last.close - 2,
         close: last.close - 1.5,
         volume: 10,
-      },
+      }),
     ];
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
@@ -331,14 +332,14 @@ describe("evaluateDonchian", () => {
     const entryBar = candles[candles.length - 1]!;
     const openedAt = new Date((entryBar.time + INTERVAL) * 1000);
     // Close below breakout high; high wick well above it.
-    const wick = {
+    const wick = createCandle({
       time: entryBar.time + INTERVAL,
       open: entryBar.close - 0.1,
       high: entryBar.high + 1.0,
       low: entryBar.close - 0.3,
       close: entryBar.close - 0.1,
       volume: 10,
-    };
+    });
     let t = wick.time;
     const after = [wick];
     for (let i = 0; i < 3; i++) {
@@ -574,14 +575,14 @@ describe("evaluateDonchian", () => {
     const last = candles[candles.length - 1]!;
     const dumped: Candle[] = [
       ...candles,
-      {
+      createCandle({
         time: last.time + INTERVAL,
         open: last.close,
         high: last.close,
         low: last.close - 2,
         close: last.close - 1.5,
         volume: 10,
-      },
+      }),
     ];
     const input = {
       pair: "SOL/USDC",
@@ -608,14 +609,14 @@ describe("evaluateDonchian", () => {
     const last = candles[candles.length - 1]!;
     const squeezed: Candle[] = [
       ...candles,
-      {
+      createCandle({
         time: last.time + INTERVAL,
         open: last.close,
         high: last.close + 2,
         low: last.close,
         close: last.close + 1.5,
         volume: 10,
-      },
+      }),
     ];
     const signal = evaluateDonchian({
       pair: "SOL/USDC",
@@ -730,8 +731,22 @@ describe("stricter entries", () => {
     const last = candles[candles.length - 1]!;
     const ran: Candle[] = [
       ...candles,
-      { time: last.time + INTERVAL, open: 101.2, high: 106, low: 101.2, close: 105, volume: 10 },
-      { time: last.time + 2 * INTERVAL, open: 105, high: 105, low: 100.9, close: 101, volume: 10 },
+      createCandle({
+        time: last.time + INTERVAL,
+        open: 101.2,
+        high: 106,
+        low: 101.2,
+        close: 105,
+        volume: 10,
+      }),
+      createCandle({
+        time: last.time + 2 * INTERVAL,
+        open: 105,
+        high: 105,
+        low: 100.9,
+        close: 101,
+        volume: 10,
+      }),
     ];
     const input = {
       pair: "SOL/USDC",

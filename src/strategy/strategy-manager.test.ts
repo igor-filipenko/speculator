@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { resetSpeculatorDbCache } from "../db/db.js";
 import { useTestDb } from "../db/test-db.js";
+import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
 import { GenericRiskManager } from "./risk-manager.js";
 import {
@@ -24,14 +25,14 @@ after(async () => {
 });
 
 function bar(time: number, close: number, range = 0.5): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume: 1,
-  };
+  });
 }
 
 function series(count: number, startPrice: number, delta: number): Candle[] {
@@ -47,14 +48,15 @@ function series(count: number, startPrice: number, delta: number): Candle[] {
 }
 
 function mtfBar(time: number, close: number, range: number): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume: 1,
-  };
+    timeframe: "1h",
+  });
 }
 
 /** Flat closes + wide high/low → BB inside Keltner (squeeze). */
@@ -187,7 +189,8 @@ describe("applyMarketIndicators", () => {
     assert.equal(high.volatility, "high");
     await manager.applyMarketIndicators(high);
     assert.notEqual(manager.getActiveStrategy(), strategyBefore);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("ADX40"));
+    assert.equal(manager.getActiveStrategy().getDisplayName(), strategyBefore.getDisplayName());
+    assert.ok(manager.getActiveStrategy().getDisplayName().includes("DI"));
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
@@ -538,17 +541,21 @@ describe("evaluateMarketIndicators volatility", () => {
   it("attaches 1h support and resistance from swing clusters", () => {
     const start = 1_700_000_000;
     const hour = 60 * 60;
-    const mtfCandles: Candle[] = [
-      { time: start, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + 2 * hour, open: 105, high: 110, low: 100, close: 105, volume: 1 },
-      { time: start + 3 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + 4 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + 5 * hour, open: 95, high: 100, low: 90, close: 95, volume: 1 },
-      { time: start + 6 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + 7 * hour, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: start + 8 * hour, open: 100, high: 102, low: 98, close: 100, volume: 1 },
-    ];
+    const mtfCandles: Candle[] = (
+      [
+        [start, 100, 101, 99, 100],
+        [start + hour, 100, 101, 99, 100],
+        [start + 2 * hour, 105, 110, 100, 105],
+        [start + 3 * hour, 100, 101, 99, 100],
+        [start + 4 * hour, 100, 101, 99, 100],
+        [start + 5 * hour, 95, 100, 90, 95],
+        [start + 6 * hour, 100, 101, 99, 100],
+        [start + 7 * hour, 100, 101, 99, 100],
+        [start + 8 * hour, 100, 102, 98, 100],
+      ] as const
+    ).map(([time, open, high, low, close]) =>
+      createCandle({ time, open, high, low, close, volume: 1, timeframe: "1h" }),
+    );
     const indicators = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),

@@ -72,12 +72,11 @@ export function formingCandle(closed: Candle, pricesSeen: readonly number[]): Ca
     }
   }
   return {
-    time: closed.time,
+    ...closed,
     open,
     high,
     low,
     close: last,
-    volume: closed.volume,
   };
 }
 
@@ -105,6 +104,53 @@ export function intraBarTicks(
       price,
       atSec: candle.time + (step === 0 ? 0 : Math.floor((i * step) / n)),
       forming: formingCandle(candle, seen),
+    });
+  }
+  return ticks;
+}
+
+/**
+ * Quote path from real 1-minute bars inside `bar`.
+ *
+ * Each tick price is that minute's close, at the minute's close time.
+ * The forming signal bar's high/low expand with the 1m wicks seen so far
+ * (hard stops read those), and its close is the latest 1m close.
+ * Throws when the signal bar has no 1m child — there is no OHLC-path fallback.
+ */
+export function minuteQuoteTicks(bar: Candle, minutes: readonly Candle[]): IntraBarTick[] {
+  const end = bar.time + bar.intervalSeconds;
+  const inside = minutes
+    .filter((minute) => minute.time >= bar.time && minute.time < end)
+    .slice()
+    .sort((a, b) => a.time - b.time);
+  if (inside.length === 0) {
+    throw new Error(
+      `No 1m candles for ${new Date(bar.time * 1000).toISOString()} ${bar.timeframe} bar`,
+    );
+  }
+
+  const ticks: IntraBarTick[] = [];
+  let high = bar.open;
+  let low = bar.open;
+  let volume = 0;
+  for (const minute of inside) {
+    if (minute.high > high) {
+      high = minute.high;
+    }
+    if (minute.low < low) {
+      low = minute.low;
+    }
+    volume += minute.volume;
+    ticks.push({
+      price: minute.close,
+      atSec: minute.time + minute.intervalSeconds,
+      forming: {
+        ...bar,
+        high,
+        low,
+        close: minute.close,
+        volume,
+      },
     });
   }
   return ticks;

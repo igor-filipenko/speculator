@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { useTestDb } from "../db/test-db.js";
 import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
+import { createCandle } from "../market/candle.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import { GenericRiskManager } from "../strategy/risk-manager.js";
 import {
@@ -44,6 +45,7 @@ function makeConfig(cash = 1000): AppConfig {
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
     paperCashUsdc: cash,
+    candleSource: "gecko-terminal",
     botId: "test",
     solanaRpcUrl: "https://api.mainnet-beta.solana.com",
     slippageBps: 50,
@@ -56,7 +58,7 @@ function makeConfig(cash = 1000): AppConfig {
         quoteMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         baseDecimals: 9,
         quoteDecimals: 6,
-        geckoPoolAddress: SOL_USDC_POOL,
+        poolAddress: SOL_USDC_POOL,
       },
     ],
   };
@@ -146,14 +148,16 @@ function series(count: number, startPrice: number, delta: number, start = 1_700_
   let price = startPrice;
   for (let i = 0; i < count; i++) {
     price += delta;
-    candles.push({
-      time: start + i * interval,
-      open: price - delta / 2,
-      high: price + 0.5,
-      low: price - 0.5,
-      close: price,
-      volume: 10,
-    });
+    candles.push(
+      createCandle({
+        time: start + i * interval,
+        open: price - delta / 2,
+        high: price + 0.5,
+        low: price - 0.5,
+        close: price,
+        volume: 10,
+      }),
+    );
   }
   return candles;
 }
@@ -165,34 +169,30 @@ function htfSeries(count: number, startPrice: number, delta: number, start: numb
   for (let i = 0; i < count; i++) {
     price += delta;
     const close = price;
-    candles.push({
-      time: start + i * interval,
-      open: close - delta / 2,
-      high: close + Math.abs(delta) + 0.2,
-      low: close - Math.abs(delta) - 0.2,
-      close,
-      volume: 1,
-    });
+    candles.push(
+      createCandle({
+        time: start + i * interval,
+        open: close - delta / 2,
+        high: close + Math.abs(delta) + 0.2,
+        low: close - Math.abs(delta) - 0.2,
+        close,
+        volume: 1,
+        timeframe: "4h",
+      }),
+    );
   }
   return candles;
 }
 
 describe("parseBacktestArgs", () => {
-  it("parses --force-refresh and --verbose", () => {
-    assert.deepEqual(parseBacktestArgs(["--force-refresh"]), {
-      forceRefresh: true,
-      verbose: false,
-    });
+  it("parses --verbose", () => {
     assert.deepEqual(parseBacktestArgs(["--verbose"]), {
-      forceRefresh: false,
       verbose: true,
     });
     assert.deepEqual(parseBacktestArgs(["-v"]), {
-      forceRefresh: false,
       verbose: true,
     });
     assert.deepEqual(parseBacktestArgs([]), {
-      forceRefresh: false,
       verbose: false,
     });
   });
@@ -223,6 +223,18 @@ describe("parseBacktestArgs", () => {
     assert.equal(parseBacktestArgs(["--monte-carlo=100"]).monteCarloRuns, 100);
     assert.throws(() => parseBacktestArgs(["--monte-carlo", "0"]), /positive integer/);
     assert.throws(() => parseBacktestArgs(["--monte-carlo", "abc"]), /positive integer/);
+  });
+
+  it("parses --quotes 1m and rejects other values and --monte-carlo", () => {
+    assert.equal(parseBacktestArgs(["--quotes", "1m"]).quotes, "1m");
+    assert.equal(parseBacktestArgs(["--quotes=1m", "--verbose"]).quotes, "1m");
+    assert.equal(parseBacktestArgs(["--walk-forward", "3", "--quotes", "1m"]).quotes, "1m");
+    assert.throws(() => parseBacktestArgs(["--quotes", "5m"]), /only accepts 1m/);
+    assert.throws(() => parseBacktestArgs(["--quotes"]), /requires a value/);
+    assert.throws(
+      () => parseBacktestArgs(["--quotes", "1m", "--monte-carlo", "10"]),
+      /cannot be combined/,
+    );
   });
 });
 
@@ -344,17 +356,59 @@ describe("runBacktest", () => {
     assert.ok(adverse > 0);
   });
 
+  it("fills a --quotes 1m replay at the minute close, not the OHLC open", async () => {
+    const candles = series(20, 100, 0.2);
+    const startingCash = 1000;
+    const buyIndex = 5;
+    const buyBar = candles[buyIndex]!;
+    const minuteCandles = candles.map((bar) =>
+      createCandle({
+        time: bar.time,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: 1,
+        timeframe: "1m",
+      }),
+    );
+    const [result] = await runBacktest({
+      config: makeConfig(startingCash),
+      strategyManager: managerFor(scriptedStrategy({ buyIndex })),
+      candles,
+      quotes: "1m",
+      minuteCandles,
+    });
+
+    const buy = result?.trades[0];
+    assert.ok(buy);
+    assert.equal(buy.side, "BUY");
+    assert.equal(Math.floor(buy.at.getTime() / 1000), buyBar.time + 60);
+    const openTick = intraBarPrices(buyBar)[0]!;
+    assert.notEqual(buyBar.close, openTick);
+    const emulated = emulateFillPrice({
+      side: "BUY",
+      close: buyBar.close,
+      tier: "liquid",
+      tradeUsdc: startingCash,
+      candleVolumeUsdc: buyBar.volume * buyBar.close,
+    });
+    assert.ok(Math.abs(buy.price - emulated.fillPrice) < 1e-9);
+  });
+
   it("ATR-exits on HOLD when stop level is hit after price crashes", async () => {
     const candles = series(40, 100, 0.2);
     const last = candles[candles.length - 1]!;
-    candles.push({
-      time: last.time + 15 * 60,
-      open: last.close,
-      high: last.close,
-      low: last.close - 20,
-      close: last.close - 15,
-      volume: 5,
-    });
+    candles.push(
+      createCandle({
+        time: last.time + 15 * 60,
+        open: last.close,
+        high: last.close,
+        low: last.close - 20,
+        close: last.close - 15,
+        volume: 5,
+      }),
+    );
 
     const strategy = scriptedStrategy({
       buyIndex: 20,
@@ -385,14 +439,16 @@ describe("runBacktest", () => {
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const candles: Candle[] = Array.from({ length: needed }, (_, i) => ({
-      time: start + i * interval,
-      open: 100,
-      high: 100,
-      low: 100,
-      close: 100,
-      volume: 1,
-    }));
+    const candles: Candle[] = Array.from({ length: needed }, (_, i) =>
+      createCandle({
+        time: start + i * interval,
+        open: 100,
+        high: 100,
+        low: 100,
+        close: 100,
+        volume: 1,
+      }),
+    );
 
     const [result] = await runBacktest({
       config: makeConfig(500),
@@ -445,22 +501,22 @@ describe("runBacktest", () => {
   it("evaluates a forming last candle along the green/red OHLC path", async () => {
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const green: Candle = {
+    const green = createCandle({
       time: start,
       open: 100,
       high: 104,
       low: 98,
       close: 103,
       volume: 5,
-    };
-    const red: Candle = {
+    });
+    const red = createCandle({
       time: start + interval,
       open: 103,
       high: 105,
       low: 97,
       close: 99,
       volume: 5,
-    };
+    });
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
       getDisplayName: () => "recorder",
@@ -514,22 +570,24 @@ describe("runBacktest", () => {
   it("fills a wick BUY at the intra-bar low, not the close", async () => {
     const start = 1_700_000_000;
     const interval = 15 * 60;
-    const warmup: Candle[] = Array.from({ length: 3 }, (_, i) => ({
-      time: start + i * interval,
-      open: 100,
-      high: 100.2,
-      low: 99.8,
-      close: 100,
-      volume: 1,
-    }));
-    const wickBar: Candle = {
+    const warmup: Candle[] = Array.from({ length: 3 }, (_, i) =>
+      createCandle({
+        time: start + i * interval,
+        open: 100,
+        high: 100.2,
+        low: 99.8,
+        close: 100,
+        volume: 1,
+      }),
+    );
+    const wickBar = createCandle({
       time: start + 3 * interval,
       open: 100,
       high: 101,
       low: 95,
       close: 100.5,
       volume: 1,
-    };
+    });
     const strategy: Strategy = {
       getDisplayName: () => "wick-buy",
       getId: () => "bollinger",

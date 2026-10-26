@@ -131,8 +131,9 @@ const registeredById = new Map<string, RegisteredStrategy>();
 /**
  * Load `id` from `strategy.registry` and build the implementation tuned for HTF
  * `trend` and 1h `volatility`. The registry row is cached for the process.
- * Bollinger ADX–RSI gates (no long in bear or 1h high vol; short entries only
- * in bear/flat) and Donchian volume SMA multiplier scale with both.
+ * Bollinger entries are a closed-bar band touch. A long is blocked when −DI
+ * leads +DI, and a short when +DI leads −DI. Donchian volume SMA multiplier
+ * scales with both.
  */
 export async function loadStrategy(
   id: string,

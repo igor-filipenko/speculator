@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal (candles for Bollinger / Donchian)
+- **OHLCV:** GeckoTerminal or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -35,6 +35,7 @@ Edit `.env`:
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
+| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default) or `binance`                                 |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
 | `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
@@ -181,12 +182,12 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
-Offline backtest (replay cached/fetched GeckoTerminal OHLCV with emulated fill costs):
+Offline backtest (replay cached/fetched OHLCV with emulated fill costs):
 
 ```bash
 pnpm backtest
 pnpm backtest -- --from 01-01-2026 --to 01-08-2026
-pnpm backtest -- --from 2026-01-01 --to 2026-08-01 --force-refresh
+pnpm backtest -- --from 2026-01-01 --to 2026-08-01
 pnpm backtest -- --verbose
 ```
 
@@ -194,12 +195,11 @@ pnpm backtest -- --verbose
 | ----------------- | ---------------------------------------------------------------------- |
 | `--from <date>`   | Range start (`YYYY-MM-DD` or `DD-MM-YYYY`, UTC midnight)               |
 | `--to <date>`     | Range end inclusive (same formats; default **now**; requires `--from`) |
-| `--force-refresh` | Delete cached OHLCV rows for the pair and refetch from GeckoTerminal   |
 | `--verbose`, `-v` | Print simulated trades and chart (default: metrics only)               |
 
 Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by pool address) and reused on later runs and by other processes sharing `DATABASE_URL`. Gecko page fetches and Timescale reads/upserts retry on transient failures (connection timeout, disconnect) until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -218,7 +218,7 @@ pnpm regime -- --days 14
 pnpm regime -- --from 01-01-2026 --to 01-08-2026
 ```
 
-Regime accepts `--days` / `--from` / `--to` / `--force-refresh`. Strategy comes from env `STRATEGY`.
+Regime accepts `--days` / `--from` / `--to`. Strategy comes from env `STRATEGY`. Candles come from `CANDLE_SOURCE`.
 
 Single iteration (smoke test):
 
@@ -326,17 +326,9 @@ ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair 
 
 ### Bollinger flat (`bollinger`)
 
-Mean-reversion for ranging or bullish-dip markets (15m, BB period 14). **No new BUYs when HTF trend is bearish/unknown or 1h volatility is high** (exits at mid, the adverse time stop, and the ATR hard stop still fire). Buys on a **closed** 15m **lower-band reclaim** — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with close still below mid. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range:
+Mean-reversion on 15m (BB 14, 2.5σ). Buys on a **closed** lower-band reclaim — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with the close still below mid. Shorts are the mirror at the upper band and need a perps fee schedule. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range.
 
-| Regime            | Entry                                                                                     | Exit                                                         | ATR stop/trail |
-| ----------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------- |
-| bullish / low     | wick or close reclaim; RSI &lt; 53; ADX ≤ 36; reclaim depth ≥ 10%; fee-adjusted R:R ≥ 0.2 | close ≥ BB mid **and** above the fill after the exit-leg fee | 2.5× / 3×      |
-| bullish / squeeze | RSI &lt; 55; ADX ≤ 40; stdDev 1.4; reclaim depth ≥ 12%; fee-adjusted R:R ≥ 0.2            | same                                                         | 2.5× / 3×      |
-| flat / low        | RSI &lt; 55; ADX ≤ 39; stdDev 1.5; reclaim depth ≥ 10%; fee-adjusted R:R ≥ 0.2            | same                                                         | 2.5× / 3×      |
-| flat / squeeze    | RSI &lt; 50; ADX ≤ 32; stdDev 1.4; reclaim depth ≥ 12%; fee-adjusted R:R ≥ 0.2            | same                                                         | 2.5× / 3×      |
-| bear or 1h high   | HOLD (no BUY)                                                                             | same                                                         | regime ATR     |
-
-Reclaim depth is `(close − lower) / (mid − lower)`. An opening signal is held when the middle-band target does not clear round-trip fees (`reward > 0`) or when that fee-adjusted reward per unit of stop risk is below 0.2. A long pays spot slippage and pool fee on the entry and on the target; a short pays perps open and close fees plus slippage on both legs. Borrow is charged on the exit once the hold is known. The fixed priority fee and volume impact depend on size, which is chosen after the signal, so they are not in the ratio. After **2 closed 15m bars**, a long is sold and a short is covered when the last **close** is at least **1×ATR against the entry** (a wick through that level does not count), so a fade that is going the wrong way is scratched before the hard stop. A long exits only when price is at least the mid and high enough that the sell fill clears the entry after the exit-leg fee. A short covers only when a perps fee schedule is present and price is at or below the mid **and** low enough to clear the open fee, close fee, hourly borrow accrued since the fill, and cover slippage. Without that schedule the short stays on hold and an upper-band short is not opened. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus RSI with the oversold line for this mode.
+A long is blocked when −DI > **1.5** × +DI. A short is blocked when +DI > **1.5** × −DI. Equality does not block, and the ratio does not block an exit. ADX is recorded on the signal and does not gate entries. Reclaim depth `(close − lower) / (mid − lower)` must be ≥ 1% (the short uses the mirror from the upper band). A candle that traded through the band is ignored when its range is wider than **2.5×ATR**. An opening signal is held when the middle-band target does not clear round-trip fees (`reward > 0`) or when that fee-adjusted reward per unit of stop risk is below 0.5. A long pays spot slippage and pool fee on the entry and on the target; a short pays perps open and close fees plus slippage on both legs. Borrow is charged on the exit once the hold is known. The fixed priority fee and volume impact depend on size, which is chosen after the signal, so they are not in the ratio. The hard stop sits **3×ATR** beyond the signal-bar extreme. A long exits only when price is at least the mid and high enough that the sell fill clears the entry after the exit-leg fee. A short covers only when a perps fee schedule is present and price is at or below the mid **and** low enough to clear the open fee, close fee, hourly borrow accrued since the fill, and cover slippage. Without that schedule the short stays on hold and an upper-band short is not opened. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus +DI and −DI.
 
 ### Donchian breakout (`donchian`)
 
@@ -367,14 +359,17 @@ src/
   config.ts                # zod + env
   types.ts
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
-  market/gecko-terminal.ts
+  market/gecko/            # GeckoTerminalMarket
+  market/binance/          # BinanceMarket spot klines
+  market/cached/           # CachedMarket (Timescale gap fill)
+  market/manager.ts        # createMarket(CandleSource)
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
   market/levels.ts         # swing-pivot S/R clusters
   exchange/jupiter/        # spot long (Swap API V2) + perps short
   exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
-  strategy/indicators.ts   # hand-rolled EMA/RSI/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
+  strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/bollinger.ts
   strategy/mode/donchian.ts
   strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager

@@ -26,6 +26,7 @@ GRANT SELECT ON TABLE solana.pools TO speculator;
 REVOKE ALL ON SCHEMA market FROM speculator;
 GRANT USAGE ON SCHEMA market TO speculator;
 GRANT USAGE ON TYPE market.timeframe TO speculator;
+GRANT USAGE ON TYPE market.candle_source TO speculator;
 REVOKE ALL ON TABLE market.candles FROM speculator;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE market.candles TO speculator;
 REVOKE ALL ON TABLE market.signals FROM speculator;

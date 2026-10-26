@@ -16,9 +16,6 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --verbose
 
 # Different strategy
 pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
-
-# Force-refresh OHLCV cache from GeckoTerminal
-pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 ```
 
 ---
@@ -30,7 +27,6 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 | `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
 | `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
 | `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`)                         |
-| `--force-refresh`    | Delete cached candles and re-fetch from GeckoTerminal                               |
 | `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
 | `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |
@@ -40,7 +36,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --force-refresh
 ## Output fields
 
 ```
-=== Backtest SOL/USDC | bollinger (15m BB14×1.4 ADX32 RSI50 tStop2) ===
+=== Backtest SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
 Candles: 2658 | 2026-09-01T00:00:00.000Z → 2026-09-30T23:45:01.000Z
 Start: 100.00 USDC → End equity: 184.43 USDC (+84.43%)
 Buy & hold: 114.42 USDC (+14.42%) | vs hold: +70.01 USDC (+70.01% pp)
@@ -121,7 +117,7 @@ pnpm backtest -- \
 ```
 
 ```
-=== Walk-Forward SOL/USDC | bollinger (15m BB14×1.4 ADX32 RSI50 tStop2) ===
+=== Walk-Forward SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
 Period: 2026-07-01 → 2026-09-30 | 6 folds × ~1488 candles each
 
 Fold  Period                   Candles     Return       vs B&H   Sharpe   Max DD     PF

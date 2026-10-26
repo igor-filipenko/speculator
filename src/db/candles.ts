@@ -1,9 +1,12 @@
-import type { Candle, Timeframe } from "../types.js";
+import { createCandle } from "../market/candle.js";
+import type { Candle, CandleSource, Timeframe } from "../types.js";
 import { query, type SqlValue } from "./db.js";
 
 export interface CandleRangeBounds {
   minTime?: number;
   maxTime?: number;
+  /** `fetched_at` of the newest bar in the window (Unix seconds). */
+  newestFetchedAt?: number;
   count: number;
 }
 
@@ -21,6 +24,7 @@ function asUnix(value: string | number | bigint): number {
 }
 
 export async function readCandles(
+  source: CandleSource,
   poolAddress: string,
   timeframe: Timeframe,
   fromTime: number,
@@ -32,25 +36,31 @@ export async function readCandles(
       EXTRACT(EPOCH FROM time)::BIGINT AS time,
       open, high, low, close, volume
     FROM market.candles
-    WHERE pool_address = $1
-      AND timeframe = $2
-      AND time >= to_timestamp($3)
-      AND time < to_timestamp($4)
+    WHERE source = $1
+      AND pool_address = $2
+      AND timeframe = $3
+      AND time >= to_timestamp($4)
+      AND time < to_timestamp($5)
     ORDER BY time
     `,
-    [poolAddress, timeframe, fromTime, toTime],
+    [source, poolAddress, timeframe, fromTime, toTime],
   );
-  return rows.map((row) => ({
-    time: asUnix(row.time),
-    open: Number(row.open),
-    high: Number(row.high),
-    low: Number(row.low),
-    close: Number(row.close),
-    volume: Number(row.volume),
-  }));
+  return rows.map((row) =>
+    createCandle({
+      time: asUnix(row.time),
+      open: Number(row.open),
+      high: Number(row.high),
+      low: Number(row.low),
+      close: Number(row.close),
+      volume: Number(row.volume),
+      timeframe,
+      source,
+    }),
+  );
 }
 
 export async function readRangeBounds(
+  source: CandleSource,
   poolAddress: string,
   timeframe: Timeframe,
   fromTime: number,
@@ -59,20 +69,23 @@ export async function readRangeBounds(
   const rows = await query<{
     min_time: string | number | bigint | null;
     max_time: string | number | bigint | null;
+    newest_fetched_at: string | number | bigint | null;
     cnt: string | number | bigint;
   }>(
     `
     SELECT
       EXTRACT(EPOCH FROM min(time))::BIGINT AS min_time,
       EXTRACT(EPOCH FROM max(time))::BIGINT AS max_time,
+      EXTRACT(EPOCH FROM (array_agg(fetched_at ORDER BY time DESC))[1])::BIGINT AS newest_fetched_at,
       count(*)::BIGINT AS cnt
     FROM market.candles
-    WHERE pool_address = $1
-      AND timeframe = $2
-      AND time >= to_timestamp($3)
-      AND time < to_timestamp($4)
+    WHERE source = $1
+      AND pool_address = $2
+      AND timeframe = $3
+      AND time >= to_timestamp($4)
+      AND time < to_timestamp($5)
     `,
-    [poolAddress, timeframe, fromTime, toTime],
+    [source, poolAddress, timeframe, fromTime, toTime],
   );
   const row = rows[0];
   if (!row || Number(row.cnt) === 0) {
@@ -85,12 +98,86 @@ export async function readRangeBounds(
   if (row.max_time != null) {
     bounds.maxTime = asUnix(row.max_time);
   }
+  if (row.newest_fetched_at != null) {
+    bounds.newestFetchedAt = asUnix(row.newest_fetched_at);
+  }
   return bounds;
+}
+
+/** Close of the latest bar strictly before `beforeTime`, when one is stored. */
+export async function readCloseBefore(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+  beforeTime: number,
+): Promise<number | undefined> {
+  const rows = await query<{ close: number }>(
+    `
+    SELECT close
+    FROM market.candles
+    WHERE source = $1
+      AND pool_address = $2
+      AND timeframe = $3
+      AND time < to_timestamp($4)
+    ORDER BY time DESC
+    LIMIT 1
+    `,
+    [source, poolAddress, timeframe, beforeTime],
+  );
+  const close = rows[0]?.close;
+  return close === undefined ? undefined : Number(close);
+}
+
+/**
+ * Open intervals `(prev, next)` where stored bars skip more than one period.
+ * A skip whose two neighbors were written by the same upsert is a vendor omission
+ * (GeckoTerminal drops a timestamp inside a page). Refetching it returns that same page.
+ */
+export async function readInteriorGaps(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+  fromTime: number,
+  toTime: number,
+  intervalSeconds: number,
+): Promise<{ from: number; to: number }[]> {
+  const rows = await query<{ prev: string | number | bigint; next: string | number | bigint }>(
+    `
+    WITH ordered AS (
+      SELECT EXTRACT(EPOCH FROM time)::BIGINT AS t, fetched_at
+      FROM market.candles
+      WHERE source = $1
+        AND pool_address = $2
+        AND timeframe = $3
+        AND time >= to_timestamp($4)
+        AND time < to_timestamp($5)
+    ),
+    steps AS (
+      SELECT
+        t AS prev,
+        LEAD(t) OVER (ORDER BY t) AS next,
+        fetched_at AS prev_fetched,
+        LEAD(fetched_at) OVER (ORDER BY t) AS next_fetched
+      FROM ordered
+    )
+    SELECT prev, next
+    FROM steps
+    WHERE next IS NOT NULL
+      AND next > prev + $6
+      AND prev_fetched IS DISTINCT FROM next_fetched
+    ORDER BY prev
+    `,
+    [source, poolAddress, timeframe, fromTime, toTime, intervalSeconds],
+  );
+  return rows.map((row) => ({
+    from: asUnix(row.prev) + intervalSeconds,
+    to: asUnix(row.next),
+  }));
 }
 
 /** PostgreSQL bind protocol rejects a statement with more than 65535 parameters. */
 const MAX_BIND_PARAMS = 65_535;
-const CANDLE_UPSERT_COLUMNS = 8;
+const CANDLE_UPSERT_COLUMNS = 9;
 const UPSERT_BATCH_SIZE = Math.floor(MAX_BIND_PARAMS / CANDLE_UPSERT_COLUMNS);
 
 function valuesPlaceholders(rowCount: number, columnCount: number): string {
@@ -107,12 +194,13 @@ function valuesPlaceholders(rowCount: number, columnCount: number): string {
 }
 
 export async function upsertCandles(
+  source: CandleSource,
   poolAddress: string,
   timeframe: Timeframe,
   candles: Candle[],
-): Promise<void> {
+): Promise<number> {
   if (candles.length === 0) {
-    return;
+    return 0;
   }
   // Postgres rejects INSERT … ON CONFLICT when the same conflict key appears twice in one statement.
   // Gecko pages can include duplicate timestamps (100 bars → 99 unique).
@@ -121,12 +209,14 @@ export async function upsertCandles(
     byTime.set(c.time, c);
   }
   const unique = [...byTime.values()];
+  let inserted = 0;
 
   for (let i = 0; i < unique.length; i += UPSERT_BATCH_SIZE) {
     const batch = unique.slice(i, i + UPSERT_BATCH_SIZE);
     const values: SqlValue[] = [];
     for (const c of batch) {
       values.push(
+        source,
         poolAddress,
         timeframe,
         new Date(c.time * 1000),
@@ -137,41 +227,52 @@ export async function upsertCandles(
         c.volume,
       );
     }
-    await query(
+    const rows = await query<{ time: Date }>(
       `
-      INSERT INTO market.candles (pool_address, timeframe, time, open, high, low, close, volume)
+      INSERT INTO market.candles (source, pool_address, timeframe, time, open, high, low, close, volume)
       VALUES ${valuesPlaceholders(batch.length, CANDLE_UPSERT_COLUMNS)}
-      ON CONFLICT (pool_address, timeframe, time) DO UPDATE SET
+      ON CONFLICT (source, pool_address, timeframe, time) DO UPDATE SET
         open = EXCLUDED.open,
         high = EXCLUDED.high,
         low = EXCLUDED.low,
         close = EXCLUDED.close,
         volume = EXCLUDED.volume,
         fetched_at = now()
+      RETURNING time
       `,
       values,
     );
+    inserted += rows.length;
   }
+  return inserted;
 }
 
-export async function deleteCandles(poolAddress: string, timeframe: Timeframe): Promise<void> {
+export async function deleteCandles(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+): Promise<void> {
   await query(
     `
     DELETE FROM market.candles
-    WHERE pool_address = $1 AND timeframe = $2
+    WHERE source = $1 AND pool_address = $2 AND timeframe = $3
     `,
-    [poolAddress, timeframe],
+    [source, poolAddress, timeframe],
   );
 }
 
-export async function candleCount(poolAddress: string, timeframe: Timeframe): Promise<number> {
+export async function candleCount(
+  source: CandleSource,
+  poolAddress: string,
+  timeframe: Timeframe,
+): Promise<number> {
   const rows = await query<{ cnt: string | number | bigint }>(
     `
     SELECT count(*)::BIGINT AS cnt
     FROM market.candles
-    WHERE pool_address = $1 AND timeframe = $2
+    WHERE source = $1 AND pool_address = $2 AND timeframe = $3
     `,
-    [poolAddress, timeframe],
+    [source, poolAddress, timeframe],
   );
   return rows[0] ? Number(rows[0].cnt) : 0;
 }

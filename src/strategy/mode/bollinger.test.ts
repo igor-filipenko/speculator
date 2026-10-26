@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../../market/candle.js";
 import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
 import { TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import {
@@ -8,41 +9,39 @@ import {
   bollingerNetReward,
   bollingerParamsFor,
   bollingerStopPrice,
-  isAdxTrendAgainst,
+  diBlocksEntry,
   type BollingerInput,
   type BollingerParams,
 } from "./bollinger.js";
-import { rsi } from "../indicators.js";
 
 function baseParams(overrides: Partial<BollingerParams> = {}): BollingerParams {
   return { ...bollingerParamsFor(), ...overrides };
 }
 
-/** Loose filters so fixtures still fire BUY/SELL without the live oversold/ADX gates. */
+/** Loose filters so fixtures still fire BUY/SELL without the live DI gate. */
 function looseFilters(overrides: Partial<BollingerParams> = {}): BollingerParams {
   return baseParams({
     period: 10,
     stdDev: 2,
     atrPeriod: 5,
     adxPeriod: 5,
-    adxMax: 100,
     minReclaimDepth: 0,
-    rsiPeriod: 5,
-    rsiBuyMax: 100,
+    maxBreakAtr: 0,
+    diRatio: Number.POSITIVE_INFINITY,
     minRewardRisk: 0,
     ...overrides,
   });
 }
 
 function bar(time: number, close: number, range = 0.2): Candle {
-  return {
+  return createCandle({
     time,
     open: close,
     high: close + range,
     low: close - range,
     close,
     volume: 10,
-  };
+  });
 }
 
 const INTERVAL = 4 * 60 * 60;
@@ -85,64 +84,15 @@ function rejectUpperBand(): Candle[] {
   return candles;
 }
 
-/** Filters loose enough that only the ADX gate can block this wick. */
+/** Depth, breakout width, DI, and reward gates off so a wick can still short. */
 function rejectionFilters(overrides: Partial<BollingerParams> = {}): BollingerParams {
   return baseParams({
     minReclaimDepth: 0,
-    rsiBuyMax: 100,
+    maxBreakAtr: 0,
+    diRatio: Number.POSITIVE_INFINITY,
     minRewardRisk: 0,
     ...overrides,
   });
-}
-
-/**
- * Trend, then a tight range so the band catches price, then a red wick
- * through the upper band with the close still above the mid.
- */
-function trendThenUpperWick(direction: "up" | "down"): Candle[] {
-  const start = 1_700_000_000;
-  const interval = 15 * 60;
-  const candles: Candle[] = [];
-  let price = direction === "down" ? 150 : 50;
-  const step = direction === "down" ? -1.1 : 1.1;
-  for (let i = 0; i < 40; i++) {
-    const open = price;
-    price += step;
-    const close = price;
-    candles.push({
-      time: start + candles.length * interval,
-      open,
-      high: Math.max(open, close) + 0.05,
-      low: Math.min(open, close) - 0.15,
-      close,
-      volume: 10,
-    });
-  }
-  let px = price;
-  for (let i = 0; i < 16; i++) {
-    const open = px;
-    const close = px + (i % 2 === 0 ? -0.35 : 0.35);
-    px = close;
-    candles.push({
-      time: start + candles.length * interval,
-      open,
-      high: Math.max(open, close) + 0.05,
-      low: Math.min(open, close) - 0.05,
-      close,
-      volume: 10,
-    });
-  }
-  const base = candles[candles.length - 1]!.close;
-  const t = candles[candles.length - 1]!.time;
-  candles.push({
-    time: t + interval,
-    open: base + 0.8,
-    high: base + 2.5,
-    low: base - 0.2,
-    close: base,
-    volume: 10,
-  });
-  return candles;
 }
 
 /** Flat series ending near/above the middle of the band. */
@@ -166,14 +116,16 @@ function wickReclaimLower(): Candle[] {
     candles.push(bar(start + i * INTERVAL, price, 0.25));
   }
   const t = start + 50 * INTERVAL;
-  candles.push({
-    time: t,
-    open: 98.9,
-    high: 99.3,
-    low: 96.6,
-    close: 99.2,
-    volume: 10,
-  });
+  candles.push(
+    createCandle({
+      time: t,
+      open: 98.9,
+      high: 99.3,
+      low: 96.6,
+      close: 99.2,
+      volume: 10,
+    }),
+  );
   return candles;
 }
 
@@ -208,12 +160,15 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /Lower BB close reclaim/i);
     assert.ok(signal.meta?.bbLower != null);
     assert.ok(signal.meta?.atr != null);
-    assert.ok(signal.meta?.rsi != null);
+    assert.ok(signal.meta?.adx != null);
+    assert.ok(signal.meta?.plusDi != null);
+    assert.ok(signal.meta?.minusDi != null);
     const mid = signal.meta?.bbMid;
     assert.ok(mid != null && mid > signal.price);
     assert.deepEqual(signal.tpPrices, [mid]);
     assert.equal(signal.minRewardRisk, 0);
-    assert.equal(bollingerParamsFor().minRewardRisk, 0.2);
+    assert.equal(bollingerParamsFor().minRewardRisk, 0.3);
+    assert.equal(bollingerParamsFor().maxBreakAtr, 2.5);
   });
 
   it("does not pyramid when already long below mid", () => {
@@ -244,49 +199,25 @@ describe("evaluateBollinger filters", () => {
     assert.equal(signal.side, "HOLD");
   });
 
-  it("ignores reclaim when ADX exceeds adxMax", () => {
-    const candles = reclaimLowerBand();
-    const strategy = looseFilters({ adxMax: 0 });
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy,
-      price: candles[candles.length - 1]!.close,
-    });
-    assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /ADX .+ > 0/);
-  });
-
-  it("shorts an upper rejection when ADX is at or below adxMax", () => {
-    const candles = trendThenUpperWick("down");
+  it("does not short a rising series that never rejects the upper band", () => {
+    const start = 1_700_000_000;
+    const candles: Candle[] = [];
+    for (let i = 0; i < 40; i++) {
+      candles.push(bar(start + i * INTERVAL, 100 + i * 0.15, 0.05));
+    }
     const last = candles[candles.length - 1]!;
+    const at = new Date((last.time + 15 * 60) * 1000);
+    const perpsFees = { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 };
     const signal = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy: rejectionFilters({ adxMax: 100 }),
-      // The wick closes only a tick above the mid; the quote has to sit further
-      // out or round-trip fees consume the reward.
-      price: last.close + 0.5,
-      at: new Date((last.time + 15 * 60) * 1000),
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
-    });
-    assert.equal(signal.side, "SELL", signal.reason);
-    assert.match(signal.reason, /ADX .+ <= 100/);
-  });
-
-  it("ignores an upper rejection when ADX exceeds adxMax", () => {
-    const candles = trendThenUpperWick("up");
-    const last = candles[candles.length - 1]!;
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: rejectionFilters({ adxMax: 0 }),
+      strategy: rejectionFilters(),
       price: last.close,
-      at: new Date((last.time + 15 * 60) * 1000),
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
+      at,
+      perpsFees,
     });
     assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /Upper rejection ignored: ADX .+ > 0/);
+    assert.match(signal.reason, /no upper rejection/);
   });
 
   it("holds a reclaim when fees consume the move to the mid", () => {
@@ -411,108 +342,6 @@ describe("evaluateBollinger filters", () => {
     assert.match(covered.reason, /profitable price/);
   });
 
-  it("covers a short when the close is at least 1×ATR against the entry after timeStopBars", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const perpsFees = {
-      openFeePct: 0.0006,
-      closeFeePct: 0.0006,
-      borrowFeePctPerHour: 0.000007,
-    };
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters(),
-      price: last.close,
-      entryPrice: last.close * 0.9,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees,
-    });
-    assert.equal(signal.side, "BUY", signal.reason);
-    assert.match(signal.reason, /Time stop/);
-    assert.match(signal.reason, /after 2 bars/);
-  });
-
-  it("does not time-stop a short before timeStopBars have elapsed", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters(),
-      price: last.close,
-      entryPrice: last.close * 0.9,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
-    });
-    assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /Waiting for profitable price/);
-  });
-
-  it("does not time-stop a short whose close is only a tick against the entry", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters({ timeStopAtr: 50 }),
-      price: last.close,
-      entryPrice: last.close * 0.999,
-      positionSide: "short",
-      openedAt,
-      at,
-      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
-    });
-    assert.equal(signal.side, "HOLD", signal.reason);
-    assert.match(signal.reason, /Waiting for profitable price/);
-  });
-
-  it("sells a long when the close is at least 1×ATR against the entry after timeStopBars", () => {
-    const candles = reclaimLowerBand();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 2 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters(),
-      price: last.close,
-      entryPrice: last.close * 1.1,
-      openedAt,
-      at,
-    });
-    assert.equal(signal.side, "SELL", signal.reason);
-    assert.match(signal.reason, /Time stop/);
-  });
-
-  it("keeps a profitable exit ahead of the time stop", () => {
-    const candles = reboundToMid();
-    const last = candles[candles.length - 1]!;
-    const at = new Date();
-    const openedAt = new Date(at.getTime() - 4 * 15 * 60 * 1000);
-    const signal = evalBb({
-      pair: "SOL/USDC",
-      candles,
-      strategy: looseFilters(),
-      price: last.close * 1.05,
-      entryPrice: last.close * 1.02,
-      openedAt,
-      at,
-    });
-    assert.equal(signal.side, "SELL", signal.reason);
-    assert.match(signal.reason, /profitable price/);
-  });
-
   it("holds a short cover when the perps fee schedule is missing", () => {
     const candles = reboundToMid();
     const last = candles[candles.length - 1]!;
@@ -571,23 +400,16 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /minExit=/);
   });
 
-  it("ignores reclaim when RSI is not oversold", () => {
+  it("blocks a lower reclaim when -DI leads +DI", () => {
     const candles = reclaimLowerBand();
-    const rsiPeriod = 5;
-    const rsiNow = rsi(
-      candles.map((c) => c.close),
-      rsiPeriod,
-    ).at(-1);
-    assert.ok(rsiNow != null);
     const signal = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy: looseFilters({ rsiPeriod, rsiBuyMax: rsiNow }),
+      strategy: looseFilters({ diRatio: 1 }),
       price: candles[candles.length - 1]!.close,
     });
-    assert.equal(signal.side, "HOLD");
-    assert.match(signal.reason, /RSI/);
-    assert.match(signal.reason, /not oversold/);
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /-DI .+ > 1× \+DI/);
   });
 
   it("emits BUY on a same-bar wick reclaim (green close back inside)", () => {
@@ -622,14 +444,14 @@ describe("evaluateBollinger filters", () => {
     const candles = wickReclaimLower();
     const last = candles[candles.length - 1]!;
     const interval = 15 * 60;
-    const next: Candle = {
+    const next = createCandle({
       time: last.time + interval,
       open: last.close,
       high: last.close,
       low: last.close,
       close: last.close,
       volume: 10,
-    };
+    });
     const at = new Date((next.time + 60) * 1000);
     const signal = evalBb({
       pair: "SOL/USDC",
@@ -687,22 +509,18 @@ describe("evaluateBollinger filters", () => {
     assert.match(signal.reason, /Price .+ profitable price/);
   });
 
-  it("emits BUY when reclaim RSI is below rsiBuyMax", () => {
-    const candles = reclaimLowerBand();
-    const rsiPeriod = 5;
-    const rsiNow = rsi(
-      candles.map((c) => c.close),
-      rsiPeriod,
-    ).at(-1);
-    assert.ok(rsiNow != null);
+  it("blocks an upper rejection when +DI leads -DI", () => {
+    const candles = rejectUpperBand();
+    const last = candles[candles.length - 1]!;
     const signal = evalBb({
       pair: "SOL/USDC",
       candles,
-      strategy: looseFilters({ rsiPeriod, rsiBuyMax: rsiNow + 1 }),
-      price: candles[candles.length - 1]!.close,
+      strategy: looseFilters({ diRatio: 1 }),
+      price: last.close,
+      perpsFees: { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 },
     });
-    assert.equal(signal.side, "BUY", signal.reason);
-    assert.match(signal.reason, /RSI/);
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /\+DI .+ > 1× -DI/);
   });
 
   it("ignores reclaim when depth is below minReclaimDepth", () => {
@@ -716,6 +534,18 @@ describe("evaluateBollinger filters", () => {
     assert.equal(signal.side, "HOLD");
     assert.match(signal.reason, /depth/);
   });
+
+  it("ignores a breakout candle wider than maxBreakAtr", () => {
+    const candles = reclaimLowerBand();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy: looseFilters({ maxBreakAtr: 0.01 }),
+      price: candles[candles.length - 1]!.close,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /breakout range/);
+  });
 });
 
 describe("bollingerStopPrice", () => {
@@ -726,11 +556,21 @@ describe("bollingerStopPrice", () => {
   });
 });
 
-describe("isAdxTrendAgainst", () => {
-  it("blocks only when ADX is above adxMax", () => {
-    assert.equal(isAdxTrendAgainst({ adxNow: 62, adxMax: 39 }), true);
-    assert.equal(isAdxTrendAgainst({ adxNow: 39, adxMax: 39 }), false);
-    assert.equal(isAdxTrendAgainst({ adxNow: 20, adxMax: 39 }), false);
+describe("diBlocksEntry", () => {
+  it("blocks a short when +DI leads -DI by more than diRatio", () => {
+    assert.equal(diBlocksEntry("short", 30, 10, 1.5), true);
+    assert.equal(diBlocksEntry("long", 30, 10, 1.5), false);
+  });
+
+  it("blocks a long when -DI leads +DI by more than diRatio", () => {
+    assert.equal(diBlocksEntry("long", 10, 30, 1.5), true);
+    assert.equal(diBlocksEntry("short", 10, 30, 1.5), false);
+  });
+
+  it("allows both sides when neither DI leads by the ratio", () => {
+    assert.equal(diBlocksEntry("long", 20, 18, 1.5), false);
+    assert.equal(diBlocksEntry("short", 20, 18, 1.5), false);
+    assert.equal(diBlocksEntry("short", 15, 10, 1.5), false);
   });
 });
 
@@ -762,7 +602,9 @@ describe("BollingerStrategy", () => {
 
   it("names BB params in the display name", () => {
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
-    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB14/);
+    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB20/);
+    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /DI1\.2/);
+    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop/);
     assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), /bollinger/);
     assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), /bollinger/);
   });

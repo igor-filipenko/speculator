@@ -17,6 +17,7 @@ import type {
   Trend,
   Volatility,
 } from "../types.js";
+import { createMarket } from "../market/manager.js";
 import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
 import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
@@ -25,7 +26,6 @@ export interface RegimeCliOptions {
   days: number;
   fromTime?: number;
   toTime?: number;
-  forceRefresh: boolean;
 }
 
 export interface RegimeChange {
@@ -66,7 +66,6 @@ export interface RunRegimeOptions {
   days?: number;
   fromTime?: number;
   toTime?: number;
-  forceRefresh?: boolean;
   htfCandles?: Candle[];
   mtfCandles?: Candle[];
 }
@@ -78,28 +77,28 @@ export interface RunRegimeOptions {
 export async function runRegime(options: RunRegimeOptions): Promise<RegimeResult[]> {
   const { strategyManager } = options;
   const { fromTime, toTime } = resolveReplayWindow(options);
-  const cacheOpts = { forceRefresh: options.forceRefresh ?? false };
+  const market = createMarket(options.config.candleSource);
   const skipNetwork = options.htfCandles !== undefined || options.mtfCandles !== undefined;
 
   const results: RegimeResult[] = [];
   for (const pair of options.config.pairs) {
     const htfCandles = await loadHtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.htfCandles,
       skipFetch: skipNetwork && options.htfCandles === undefined,
-      cacheOpts,
     });
     const mtfCandles = await loadMtfCandles({
       pair,
+      market,
       strategyManager,
       fromTime,
       toTime,
       injected: options.mtfCandles,
       skipFetch: skipNetwork && options.mtfCandles === undefined,
-      cacheOpts,
     });
 
     if (htfCandles.length === 0 && mtfCandles.length === 0) {
@@ -246,7 +245,6 @@ export function segmentsFromChanges(changes: RegimeChange[], endTime: number): R
 /** Parse CLI flags for `regime`. */
 export function parseRegimeArgs(argv: string[]): RegimeCliOptions {
   let days = 0;
-  let forceRefresh = false;
   let daysExplicit = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
@@ -254,10 +252,6 @@ export function parseRegimeArgs(argv: string[]): RegimeCliOptions {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      continue;
-    }
-    if (arg === "--force-refresh") {
-      forceRefresh = true;
       continue;
     }
     if (arg === "--days" || arg?.startsWith("--days=")) {
@@ -300,7 +294,6 @@ export function parseRegimeArgs(argv: string[]): RegimeCliOptions {
 
   const result: RegimeCliOptions = {
     days: daysExplicit ? days : 0,
-    forceRefresh,
   };
   if (fromTime !== undefined) {
     result.fromTime = fromTime;

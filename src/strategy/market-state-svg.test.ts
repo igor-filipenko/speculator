@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createCandle } from "../market/candle.js";
 import type { Candle, MarketIndicators, PriceLevel } from "../types.js";
 import { buildMarketStateSvg } from "./market-state-svg.js";
 import { htfParamsFor } from "./strategy-manager.js";
@@ -12,14 +13,17 @@ function makeCandles(n: number): Candle[] {
     const close = price + ((i % 3) - 1) * 0.5;
     const high = Math.max(open, close) + 0.3;
     const low = Math.min(open, close) - 0.3;
-    out.push({
-      time: 1_700_000_000 + i * 4 * 3600,
-      open,
-      high,
-      low,
-      close,
-      volume: 1000 + i,
-    });
+    out.push(
+      createCandle({
+        time: 1_700_000_000 + i * 4 * 3600,
+        open,
+        high,
+        low,
+        close,
+        volume: 1000 + i,
+        timeframe: "4h",
+      }),
+    );
     price = close;
   }
   return out;

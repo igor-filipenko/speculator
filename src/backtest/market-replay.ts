@@ -1,15 +1,14 @@
-import { candleIntervalSeconds } from "../market/gecko-terminal.js";
-import { loadCachedCandles } from "../market/ohlcv-cache.js";
-import type { Candle, MarketIndicators, PairConfig, StrategyManager } from "../types.js";
+import { candleIntervalSeconds } from "../market/candle.js";
+import type { Candle, Market, MarketIndicators, PairConfig, StrategyManager } from "../types.js";
 
 export interface LoadReplayCandlesArgs {
   pair: PairConfig;
+  market: Market;
   strategyManager: StrategyManager;
   fromTime: number;
   toTime: number;
   injected: Candle[] | undefined;
   skipFetch: boolean;
-  cacheOpts: { forceRefresh: boolean };
 }
 
 export async function loadHtfCandles(args: LoadReplayCandlesArgs): Promise<Candle[]> {
@@ -22,13 +21,11 @@ export async function loadHtfCandles(args: LoadReplayCandlesArgs): Promise<Candl
 
   const required = args.strategyManager.getRequiredHtfCandles();
   const interval = candleIntervalSeconds(required.timeframe);
-  const candles = await loadCachedCandles({
-    symbol: args.pair.symbol,
-    poolAddress: args.pair.geckoPoolAddress,
+  const candles = await args.market.fetchCandles({
+    pair: args.pair,
     timeframe: required.timeframe,
     fromTime: args.fromTime - required.count * interval,
     toTime: args.toTime,
-    ...args.cacheOpts,
   });
   if (candles.length === 0) {
     console.log(`[${args.pair.symbol}] no HTF ${required.timeframe} candles; market state skipped`);
@@ -46,13 +43,11 @@ export async function loadMtfCandles(args: LoadReplayCandlesArgs): Promise<Candl
 
   const required = args.strategyManager.getRequiredMtfCandles();
   const interval = candleIntervalSeconds(required.timeframe);
-  const candles = await loadCachedCandles({
-    symbol: args.pair.symbol,
-    poolAddress: args.pair.geckoPoolAddress,
+  const candles = await args.market.fetchCandles({
+    pair: args.pair,
     timeframe: required.timeframe,
     fromTime: args.fromTime - required.count * interval,
     toTime: args.toTime,
-    ...args.cacheOpts,
   });
   if (candles.length === 0) {
     console.log(`[${args.pair.symbol}] no MTF ${required.timeframe} candles; volatility skipped`);

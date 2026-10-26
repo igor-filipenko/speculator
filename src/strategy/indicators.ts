@@ -27,6 +27,26 @@ export function sma(values: number[], period: number): (number | null)[] {
   return out;
 }
 
+/**
+ * Relative volume. At index `i`, `volume[i] / SMA(volume[i − period .. i − 1])`.
+ * The current bar is not in the average, so a climax print is measured against
+ * the baseline it did not inflate. Null until `period` prior bars exist, and
+ * null when that average is not positive.
+ */
+export function relativeVolume(volumes: number[], period: number): (number | null)[] {
+  if (period < 1) {
+    throw new Error("RVOL period must be >= 1");
+  }
+  const baseline = sma(volumes, period);
+  const out: (number | null)[] = Array.from({ length: volumes.length }, () => null);
+  for (let i = period; i < volumes.length; i++) {
+    const avg = baseline[i - 1];
+    if (avg == null || !(avg > 0)) continue;
+    out[i] = volumes[i]! / avg;
+  }
+  return out;
+}
+
 /** Exponential moving average over `period` closes. Returns nulls until warm. */
 export function ema(values: number[], period: number): (number | null)[] {
   if (period < 1) {
@@ -102,6 +122,93 @@ function rsiFromAverages(avgGain: number, avgLoss: number): number {
   }
   const rs = avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
+}
+
+export interface StochasticCandle {
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface StochasticSeries {
+  /** Slow %K. First value at index `kPeriod + smooth - 2`. */
+  k: (number | null)[];
+  /** %D, an SMA of %K. First value at index `kPeriod + smooth + dPeriod - 3`. */
+  d: (number | null)[];
+}
+
+/**
+ * Slow stochastic. Raw %K is `100 × (close − lowest low) / (highest high − lowest low)`
+ * over `kPeriod` bars (0 when that window is flat). %K is an SMA of the raw value
+ * over `smooth` bars. %D is an SMA of %K over `dPeriod` bars.
+ * TradingView defaults are 14, 3, 3.
+ */
+export function stochastic(
+  candles: StochasticCandle[],
+  kPeriod: number,
+  smooth: number,
+  dPeriod: number,
+): StochasticSeries {
+  if (kPeriod < 1) {
+    throw new Error("Stochastic %K period must be >= 1");
+  }
+  if (smooth < 1) {
+    throw new Error("Stochastic %K smoothing must be >= 1");
+  }
+  if (dPeriod < 1) {
+    throw new Error("Stochastic %D period must be >= 1");
+  }
+
+  const n = candles.length;
+  const k: (number | null)[] = Array.from({ length: n }, () => null);
+  const d: (number | null)[] = Array.from({ length: n }, () => null);
+  if (n < kPeriod) {
+    return { k, d };
+  }
+
+  const raw: number[] = [];
+  for (let i = kPeriod - 1; i < n; i++) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = i - kPeriod + 1; j <= i; j++) {
+      const c = candles[j]!;
+      hh = Math.max(hh, c.high);
+      ll = Math.min(ll, c.low);
+    }
+    const span = hh - ll;
+    const close = candles[i]!.close;
+    raw.push(span > 0 ? (100 * (close - ll)) / span : 0);
+  }
+
+  const kSmoothed = sma(raw, smooth);
+  for (let i = 0; i < kSmoothed.length; i++) {
+    const value = kSmoothed[i];
+    if (value != null) {
+      k[i + kPeriod - 1] = value;
+    }
+  }
+
+  const kValues: number[] = [];
+  const kIndexes: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const value = k[i];
+    if (value != null) {
+      kValues.push(value);
+      kIndexes.push(i);
+    }
+  }
+  const dSmoothed = sma(kValues, dPeriod);
+  for (let i = 0; i < dSmoothed.length; i++) {
+    const value = dSmoothed[i];
+    if (value != null) {
+      const index = kIndexes[i];
+      if (index != null) {
+        d[index] = value;
+      }
+    }
+  }
+
+  return { k, d };
 }
 
 export interface AtrCandle {

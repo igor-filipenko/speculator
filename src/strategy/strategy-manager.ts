@@ -18,8 +18,8 @@ import type {
   Trend,
   Volatility,
 } from "../types.js";
-import { BollingerStrategy } from "./mode/bollinger.js";
-import { DonchianStrategy } from "./mode/donchian.js";
+import { BollingerStrategy, bollingerParamsFor, type BollingerParams } from "./mode/bollinger.js";
+import { DonchianStrategy, donchianParamsFor, type DonchianParams } from "./mode/donchian.js";
 
 export {
   classifyHighLow,
@@ -32,10 +32,18 @@ export {
   type MtfParams,
 } from "../market/htf.js";
 
+/** Numeric overrides merged onto `*ParamsFor(trend, volatility)` on every reload. */
+export interface StrategyParamPatch {
+  bollinger?: Partial<BollingerParams>;
+  donchian?: Partial<DonchianParams>;
+}
+
 export interface SimpleStrategyManagerOptions {
   /** `strategy.registry.id`. */
   strategyId: string;
   htf: HtfTimeframe;
+  /** Kept across regime reloads. Omitted fields stay on the regime defaults. */
+  paramPatch?: StrategyParamPatch;
 }
 
 /**
@@ -47,11 +55,13 @@ export class SimpleStrategyManager implements StrategyManager {
   private readonly params: HtfParams;
   private readonly mtfParams: MtfParams;
   private readonly strategyId: string;
+  private readonly paramPatch: StrategyParamPatch | undefined;
   private strategy: Strategy;
   private riskManager: RiskManager;
 
   private constructor(options: SimpleStrategyManagerOptions, strategy: Strategy) {
     this.strategyId = options.strategyId;
+    this.paramPatch = options.paramPatch;
     this.strategy = strategy;
     this.riskManager = new GenericRiskManager();
     this.params = htfParamsFor(options.htf);
@@ -59,7 +69,7 @@ export class SimpleStrategyManager implements StrategyManager {
   }
 
   static async create(options: SimpleStrategyManagerOptions): Promise<SimpleStrategyManager> {
-    const strategy = await loadStrategy(options.strategyId, "flat", "low");
+    const strategy = await loadStrategy(options.strategyId, "flat", "low", options.paramPatch);
     return new SimpleStrategyManager(options, strategy);
   }
 
@@ -105,7 +115,12 @@ export class SimpleStrategyManager implements StrategyManager {
     indicators: MarketIndicators,
     lastMarketIndicators?: MarketIndicators,
   ): Promise<boolean> {
-    this.strategy = await loadStrategy(this.strategyId, indicators.trend, indicators.volatility);
+    this.strategy = await loadStrategy(
+      this.strategyId,
+      indicators.trend,
+      indicators.volatility,
+      this.paramPatch,
+    );
     this.riskManager = createRiskManager(indicators.trend, this.strategy);
     return (
       lastMarketIndicators?.trend !== indicators.trend ||
@@ -118,12 +133,28 @@ export function createRiskManager(_trend: Trend, _strategy: Strategy): RiskManag
   return new GenericRiskManager();
 }
 
-type StrategyFactory = (trend: Trend, volatility: Volatility) => Strategy;
+type StrategyFactory = (
+  trend: Trend,
+  volatility: Volatility,
+  patch?: StrategyParamPatch,
+) => Strategy;
 
 /** Implementations keyed by `strategy.registry.id`. */
 const strategyFactories = new Map<string, StrategyFactory>([
-  ["bollinger", (trend, volatility) => new BollingerStrategy(trend, volatility)],
-  ["donchian", (trend, volatility) => new DonchianStrategy(trend, volatility)],
+  [
+    "bollinger",
+    (trend, volatility, patch) =>
+      new BollingerStrategy(trend, volatility, mergeParams(bollingerParamsFor(), patch?.bollinger)),
+  ],
+  [
+    "donchian",
+    (trend, volatility, patch) =>
+      new DonchianStrategy(
+        trend,
+        volatility,
+        mergeParams(donchianParamsFor(trend, volatility), patch?.donchian),
+      ),
+  ],
 ]);
 
 const registeredById = new Map<string, RegisteredStrategy>();
@@ -139,6 +170,7 @@ export async function loadStrategy(
   id: string,
   trend: Trend,
   volatility: Volatility,
+  patch?: StrategyParamPatch,
 ): Promise<Strategy> {
   const registered = await registeredStrategy(id);
   const create = strategyFactories.get(registered.id);
@@ -147,7 +179,21 @@ export async function loadStrategy(
       `Strategy "${registered.id}" (${registered.name}) is registered but has no implementation`,
     );
   }
-  return create(trend, volatility);
+  return create(trend, volatility, patch);
+}
+
+function mergeParams<T extends object>(base: T, patch: Partial<T> | undefined): T {
+  if (patch === undefined) {
+    return base;
+  }
+  const merged = { ...base };
+  for (const key of Object.keys(patch) as (keyof T)[]) {
+    const value = patch[key];
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 async function registeredStrategy(id: string): Promise<RegisteredStrategy> {

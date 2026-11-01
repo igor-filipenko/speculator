@@ -194,6 +194,45 @@ describe("applyMarketIndicators", () => {
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 
+  it("keeps a Bollinger param patch when the regime reloads the strategy", async () => {
+    const manager = await SimpleStrategyManager.create({
+      strategyId: "bollinger",
+      htf: "4h",
+      paramPatch: { bollinger: { period: 14, stdDev: 1.5 } },
+    });
+    assert.match(manager.getActiveStrategy().getDisplayName(), /BB14×1\.5/);
+    const high = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    await manager.applyMarketIndicators(high);
+    assert.match(manager.getActiveStrategy().getDisplayName(), /BB14×1\.5/);
+  });
+
+  it("keeps a Donchian entry period while the regime volume multiplier changes", async () => {
+    const manager = await SimpleStrategyManager.create({
+      strategyId: "donchian",
+      htf: "4h",
+      paramPatch: { donchian: { entryPeriod: 55 } },
+    });
+    const first = evaluateMarketIndicators({
+      pair: "SOL/USDC",
+      candles: series(250, 50, 0.8),
+      price: 250,
+      at,
+      params,
+    });
+    await manager.applyMarketIndicators(first);
+    assert.match(manager.getActiveStrategy().getDisplayName(), /DC55\//);
+    const squeezed = { ...first, volatility: "squeeze" as const };
+    await manager.applyMarketIndicators(squeezed, first);
+    assert.match(manager.getActiveStrategy().getDisplayName(), /DC55\//);
+    assert.match(manager.getActiveStrategy().getDisplayName(), /×2\.1/);
+  });
+
   it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", async () => {
     const manager = await SimpleStrategyManager.create({ strategyId: "donchian", htf: "4h" });
     assert.equal(manager.getActiveStrategy().getId(), "donchian");

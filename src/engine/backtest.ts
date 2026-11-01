@@ -817,7 +817,7 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
  * Returns a closure that produces values in [0, 1) from the given seed.
  * Using a deterministic seed per run makes Monte Carlo results reproducible.
  */
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
   return function (): number {
     s = (s + 0x6d2b79f5) >>> 0;

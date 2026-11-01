@@ -451,9 +451,9 @@ export class DonchianStrategy implements Strategy {
   private readonly params: DonchianParams;
   private readonly trend: Trend;
 
-  constructor(trend: Trend = "flat", volatility: Volatility = "low") {
+  constructor(trend: Trend = "flat", volatility: Volatility = "low", params?: DonchianParams) {
     this.trend = trend;
-    this.params = donchianParamsFor(trend, volatility);
+    this.params = params ?? donchianParamsFor(trend, volatility);
   }
 
   getDisplayName(): string {

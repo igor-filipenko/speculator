@@ -460,8 +460,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 export class BollingerStrategy implements Strategy {
   private readonly params: BollingerParams;
 
-  constructor(_trend: Trend = "flat", _volatility: Volatility = "low") {
-    this.params = bollingerParamsFor();
+  constructor(_trend: Trend = "flat", _volatility: Volatility = "low", params?: BollingerParams) {
+    this.params = params ?? bollingerParamsFor();
   }
 
   getDisplayName(): string {

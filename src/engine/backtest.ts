@@ -255,7 +255,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const market = createMarket(options.config.candleSource);
+  const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
@@ -344,7 +344,7 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const market = createMarket(options.config.candleSource);
+  const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
 
   const results: WalkForwardResult[] = [];
 
@@ -575,8 +575,7 @@ async function replayPair(args: {
         ? minuteQuoteTicks(candle, args.minuteCandles)
         : intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
 
-    // Volume-weighted slippage: set bar USDC volume once per candle.
-    // GeckoTerminal volume field is in base token units; multiply by close for USDC equivalent.
+    // Volume-weighted slippage. Every source stores base-token volume.
     exchange.setCandleVolumeUsdc(candle.volume * candle.close);
 
     for (const tick of ticks) {

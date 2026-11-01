@@ -77,7 +77,7 @@ export interface RunRegimeOptions {
 export async function runRegime(options: RunRegimeOptions): Promise<RegimeResult[]> {
   const { strategyManager } = options;
   const { fromTime, toTime } = resolveReplayWindow(options);
-  const market = createMarket(options.config.candleSource);
+  const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
   const skipNetwork = options.htfCandles !== undefined || options.mtfCandles !== undefined;
 
   const results: RegimeResult[] = [];

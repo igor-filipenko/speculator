@@ -16,7 +16,7 @@ export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
  * Postgres `market.candle_source` lists additional vendors so the column type
  * does not change when a new client is added.
  */
-export type CandleSource = "gecko-terminal" | "binance";
+export type CandleSource = "gecko-terminal" | "binance" | "birdeye";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";

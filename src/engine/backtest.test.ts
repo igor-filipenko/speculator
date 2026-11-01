@@ -42,6 +42,7 @@ function makeConfig(cash = 1000): AppConfig {
     strategy: "bollinger",
     htf: "4h",
     jupiterApiKey: "",
+    birdeyeApiKey: "",
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
     paperCashUsdc: cash,

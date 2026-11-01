@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
+- **OHLCV:** GeckoTerminal, Birdeye pair candles, or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -35,7 +35,8 @@ Edit `.env`:
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
-| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default) or `binance`                                 |
+| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default), `binance`, or `birdeye`                     |
+| `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool               |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
 | `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
@@ -199,7 +200,7 @@ pnpm backtest -- --verbose
 
 Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines; `birdeye` uses the Solana pool). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -361,6 +362,7 @@ src/
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
   market/gecko/            # GeckoTerminalMarket
   market/binance/          # BinanceMarket spot klines
+  market/birdeye/          # BirdeyeMarket pair OHLCV
   market/cached/           # CachedMarket (Timescale gap fill)
   market/manager.ts        # createMarket(CandleSource)
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol

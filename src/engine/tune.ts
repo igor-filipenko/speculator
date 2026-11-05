@@ -1015,6 +1015,7 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   const stdDev = values["stdDev"];
   const atrPeriod = values["atrPeriod"];
   const adxPeriod = values["adxPeriod"];
+  const adxMax = values["adxMax"];
   const diRatio = values["diRatio"];
   const minReclaimDepth = values["minReclaimDepth"];
   const maxBreakAtr = values["maxBreakAtr"];
@@ -1030,6 +1031,7 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   if (stdDev !== undefined) patch.stdDev = stdDev;
   if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
   if (adxPeriod !== undefined) patch.adxPeriod = adxPeriod;
+  if (adxMax !== undefined) patch.adxMax = adxMax;
   if (diRatio !== undefined) patch.diRatio = diRatio;
   if (minReclaimDepth !== undefined) patch.minReclaimDepth = minReclaimDepth;
   if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;

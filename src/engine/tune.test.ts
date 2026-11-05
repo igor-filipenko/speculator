@@ -407,16 +407,19 @@ describe("timeframe axis", () => {
   const primary = Array.from({ length: 16 }, (_, i) => quarter(i));
   const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
 
-  it("defaults the search to the 15m signal timeframe and a separate ADX period", () => {
+  it("defaults the search to the signal timeframe and a separate ADX period", () => {
     const strategy = new BollingerStrategy();
     const defaults = defaultLevels(strategy, strategy.getSearchDefaults());
-    assert.equal(defaults["timeframe"], 15);
+    assert.equal(defaults["timeframe"], 60);
     assert.equal(defaults["period"], 20);
-    assert.equal(defaults["adxPeriod"], 20);
+    assert.equal(defaults["adxPeriod"], 28);
+    assert.equal(defaults["adxMax"], 20);
     const period = strategy.axes.find((axis) => axis.key === "period");
     const adxPeriod = strategy.axes.find((axis) => axis.key === "adxPeriod");
+    const adxMax = strategy.axes.find((axis) => axis.key === "adxMax");
     assert.ok(period);
     assert.ok(adxPeriod);
+    assert.ok(adxMax);
     assert.notDeepEqual(period.levels, adxPeriod.levels);
   });
 

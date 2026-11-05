@@ -26,11 +26,16 @@ export interface BollingerParams {
   stdDev: number;
   /** Wilder ATR period (into Signal.meta for risk stops). */
   atrPeriod: number;
-  /** Wilder ADX period. Recorded on the signal; it does not gate entries. */
+  /** Wilder ADX / DI period. */
   adxPeriod: number;
   /**
+   * New fades only while ADX is below this. At or above it the tape is trending
+   * and the band touch waits for a range. 0 disables. Exits ignore it.
+   */
+  adxMax: number;
+  /**
    * Block a short when +DI is above this multiple of −DI, and a long when −DI
-   * is above this multiple of +DI. 1.5 means that side is clearly leading.
+   * is above this multiple of +DI. 1 blocks as soon as that side leads.
    * Exits ignore it.
    */
   diRatio: number;
@@ -168,7 +173,8 @@ export function bollingerParamsFor(): BollingerParams {
     stdDev: 1.3,
     atrPeriod: 20,
     adxPeriod: 28,
-    diRatio: 1.5,
+    adxMax: 20,
+    diRatio: 1,
     minReclaimDepth: 0.1,
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
@@ -183,6 +189,7 @@ export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
     { key: "timeframe", levels: [15, 60] },
     { key: "period", levels: [14, 20, 30] },
     { key: "adxPeriod", levels: [14, 20, 28] },
+    { key: "adxMax", levels: [0, 20, 25] },
     { key: "stdDev", levels: [1.2, 1.3, 1.5, 2, 2.2, 2.5] },
     { key: "diRatio", levels: [1, 1.2, 1.5, 2] },
     { key: "minReclaimDepth", levels: [0.05, 0.1, 0.2] },
@@ -223,8 +230,8 @@ export interface BollingerInput {
  * or prior close ≤ prior lower then close > lower, when close < mid
  * and reclaim depth ≥ minReclaimDepth.
  * A candle that traded through the band is ignored when its range exceeds `maxBreakAtr` × ATR.
+ * A new fade is skipped when ADX ≥ `adxMax` (the tape is trending; wait for a range).
  * A long is blocked when −DI > `diRatio` × +DI. A short is blocked when +DI > `diRatio` × −DI.
- * ADX is stored on the signal and does not gate the entry.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and price ≥ middle
  * **and** the quote is high enough that the sell fill clears the entry after the exit-leg fee.
@@ -393,6 +400,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
     } else if (breakoutHold != null) {
       reason = breakoutHold;
+    } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
+      reason = adxBlockReason("long", adxNow, strategy.adxMax);
     } else if (diBlocksEntry("long", plusDi, minusDi, strategy.diRatio)) {
       reason = diBlockReason("long", plusDi, minusDi, strategy.diRatio);
     } else if (trendBlocksEntry("long", input.trend, strategy.trendFilter)) {
@@ -402,6 +411,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
+        `${adxPassNote(adxNow, strategy.adxMax)}; ` +
         `${diPassNote("long", plusDi, minusDi, strategy.diRatio)}; ` +
         `depth ${pct(reclaimDepth)}`;
     }
@@ -432,6 +442,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
           `(close ${fmt(close)} vs upper ${fmt(bbUpper)} → mid ${fmt(bbMid)})`;
       } else if (breakoutHold != null) {
         reason = breakoutHold;
+      } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
+        reason = adxBlockReason("short", adxNow, strategy.adxMax);
       } else if (diBlocksEntry("short", plusDi, minusDi, strategy.diRatio)) {
         reason = diBlockReason("short", plusDi, minusDi, strategy.diRatio);
       } else if (trendBlocksEntry("short", input.trend, strategy.trendFilter)) {
@@ -441,6 +453,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
+          `${adxPassNote(adxNow, strategy.adxMax)}; ` +
           `${diPassNote("short", plusDi, minusDi, strategy.diRatio)}; ` +
           `depth ${pct(rejectDepth)}`;
       }
@@ -485,7 +498,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. ADX is recorded and does not gate entries. */
+/** 1h mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts and fades while ADX ≥ adxMax; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. */
 export class BollingerStrategy implements Strategy {
   readonly axes = BOLLINGER_SEARCH_SPACE.axes;
   private readonly params: BollingerParams;
@@ -499,8 +512,9 @@ export class BollingerStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, diRatio } = this.params;
-    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio})`;
+    const { timeframe, period, stdDev, diRatio, adxMax } = this.params;
+    const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
+    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${adx})`;
   }
 
   getId(): string {
@@ -576,6 +590,24 @@ function breakoutRangeHold(
     }
   }
   return null;
+}
+
+/**
+ * Range gate. A new fade waits while ADX is at or above `adxMax`.
+ * `adxMax` ≤ 0 leaves the gate off. Exits do not call this.
+ */
+export function adxBlocksEntry(adx: number, adxMax: number): boolean {
+  if (!(adxMax > 0)) return false;
+  return adx >= adxMax;
+}
+
+function adxBlockReason(side: "long" | "short", adx: number, adxMax: number): string {
+  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  return `${head}: ADX ${fmt(adx)} >= ${adxMax}, waiting for a range`;
+}
+
+function adxPassNote(adx: number, adxMax: number): string {
+  return adxMax > 0 ? `ADX ${fmt(adx)} < ${adxMax}` : `ADX ${fmt(adx)}`;
 }
 
 /**

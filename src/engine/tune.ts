@@ -5,10 +5,17 @@ import { createMarket } from "../market/manager.js";
 import { createCandle } from "../market/candle.js";
 import { loadHtfCandles, loadMtfCandles } from "../backtest/market-replay.js";
 import { readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
-import { bollingerParamsFor, type BollingerParams } from "../strategy/mode/bollinger.js";
-import { donchianParamsFor, type DonchianParams } from "../strategy/mode/donchian.js";
+import type { BollingerParams } from "../strategy/mode/bollinger.js";
+import type { DonchianParams } from "../strategy/mode/donchian.js";
 import { SimpleStrategyManager, type StrategyParamPatch } from "../strategy/strategy-manager.js";
-import type { Candle, CandleSource, PairConfig, Strategy, Timeframe } from "../types.js";
+import type {
+  Candle,
+  CandleSource,
+  PairConfig,
+  SearchSpace,
+  Strategy,
+  Timeframe,
+} from "../types.js";
 import {
   mulberry32,
   parseBacktestDate,
@@ -29,18 +36,6 @@ export const TUNE_DEFAULT_MIN_RETURN_PCT = 0;
 export const TUNE_DEFAULT_MIN_PROFIT_FACTOR = 1.1;
 const NEIGHBOR_FILL_LEADERS = 3;
 const PROFIT_FACTOR_CAP = 999;
-
-export interface SearchAxis {
-  key: string;
-  levels: readonly number[];
-}
-
-export interface SearchSpace {
-  strategyId: "bollinger" | "donchian";
-  axes: readonly SearchAxis[];
-  /** Drop a combination. Absent means every combination is valid. */
-  accept?: (values: Readonly<Record<string, number>>) => boolean;
-}
 
 export interface SampledVariant {
   indexes: readonly number[];
@@ -147,7 +142,7 @@ export interface RunTuneOptions {
   fromTime?: number;
   toTime?: number;
   days?: number;
-  /** Defaults to the built-in space for `strategyId`. Tests pass a tiny space. */
+  /** Defaults to the active strategy's search space. Tests pass a tiny space. */
   space?: SearchSpace;
   /** Signal candles. When set, skips the network and reuses this series for every pair. */
   candles?: Candle[];
@@ -165,67 +160,16 @@ const TIMEFRAME_BY_MINUTES: Readonly<Record<number, Timeframe>> = {
   60: "1h",
 };
 
-function timeframeMinutes(timeframe: Timeframe): number | undefined {
-  for (const [minutes, label] of Object.entries(TIMEFRAME_BY_MINUTES)) {
-    if (label === timeframe) return Number(minutes);
-  }
-  return undefined;
-}
-
-/** Bollinger decision knobs. `adxPeriod` and `atrPeriod` stay on the defaults. */
-export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
-  strategyId: "bollinger",
-  axes: [
-    { key: "timeframe", levels: [15, 60] },
-    { key: "period", levels: [14, 20, 30] },
-    { key: "stdDev", levels: [1.2, 1.3, 1.5, 2, 2.2, 2.5] },
-    { key: "diRatio", levels: [1, 1.2, 1.5, 2] },
-    { key: "minReclaimDepth", levels: [0.05, 0.1, 0.2] },
-    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 3, 3.5, 4] },
-    { key: "minRewardRisk", levels: [0.1, 0.2, 0.3, 0.4, 0.5] },
-    { key: "stopAtr", levels: [1, 1.5, 2, 2.5, 3, 3.5, 4, 5] },
-    { key: "trendFilter", levels: [0, 1, 2] },
-  ],
-};
-
-/**
- * Donchian knobs that are not the trend × volatility tables.
- * `volumeSmaMult` and `minBreakAtrMult` stay on `donchianParamsFor`.
- */
-export const DONCHIAN_SEARCH_SPACE: SearchSpace = {
-  strategyId: "donchian",
-  axes: [
-    { key: "entryPeriod", levels: [20, 40, 55] },
-    { key: "exitPeriod", levels: [10, 20, 30] },
-    { key: "atrStopMult", levels: [2, 3, 4] },
-    { key: "givebackAtrMult", levels: [3, 4, 5] },
-    { key: "timeStopBars", levels: [0, 3, 6] },
-  ],
-  accept: (values) => {
-    const exitPeriod = values["exitPeriod"];
-    const entryPeriod = values["entryPeriod"];
-    return exitPeriod !== undefined && entryPeriod !== undefined && exitPeriod < entryPeriod;
-  },
-};
-
-export function searchSpaceFor(strategyId: string): SearchSpace {
-  if (strategyId === "bollinger") return BOLLINGER_SEARCH_SPACE;
-  if (strategyId === "donchian") return DONCHIAN_SEARCH_SPACE;
-  throw new Error(
-    `No parameter search space for strategy "${strategyId}". Known: bollinger, donchian`,
-  );
-}
-
-export function defaultLevels(space: SearchSpace): Record<string, number> {
-  const params = space.strategyId === "bollinger" ? bollingerParamsFor() : donchianParamsFor();
-  const source = numericFields(params);
-  const minutes = timeframeMinutes(params.timeframe);
-  if (minutes !== undefined) source["timeframe"] = minutes;
+/** Axis values taken from `source`. Each axis key must be present. */
+export function defaultLevels(
+  space: SearchSpace,
+  source: Readonly<Record<string, number>>,
+): Record<string, number> {
   const defaults: Record<string, number> = {};
   for (const axis of space.axes) {
     const value = source[axis.key];
     if (value === undefined) {
-      throw new Error(`Strategy ${space.strategyId} has no numeric default for ${axis.key}`);
+      throw new Error(`No numeric default for ${axis.key}`);
     }
     defaults[axis.key] = value;
   }
@@ -471,19 +415,15 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
  * same one a default backtest uses.
  */
 export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
-  const space = options.space ?? searchSpaceFor(options.strategyId);
-  if (space.strategyId !== options.strategyId) {
-    throw new Error(
-      `Search space ${space.strategyId} does not match strategy ${options.strategyId}`,
-    );
-  }
-  const defaults = defaultLevels(space);
   const window = replayWindow(options);
   const probe = await SimpleStrategyManager.create({
     strategyId: options.strategyId,
     htf: options.config.htf,
   });
-  const timeframe = probe.getActiveStrategy().getRequiredCandles().timeframe;
+  const strategy = probe.getActiveStrategy();
+  const space = options.space ?? strategy;
+  const defaults = defaultLevels(space, strategy.getSearchDefaults());
+  const timeframe = strategy.getRequiredCandles().timeframe;
   const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
   const skipNetwork = options.candles !== undefined;
   // Other signal timeframes named by a `timeframe` axis. Injected candles skip them.
@@ -1422,14 +1362,6 @@ function distanceFromDefaults(
   return distance;
 }
 
-function numericFields(params: object): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (typeof value === "number") out[key] = value;
-  }
-  return out;
-}
-
 function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -1722,6 +1654,8 @@ function toPortable(metrics: BacktestMetrics): PortableMetrics {
 function fromPortable(metrics: PortableMetrics): BacktestMetrics {
   const { strategyId, strategyName, ...rest } = metrics;
   const strategy: Strategy = {
+    axes: [],
+    getSearchDefaults: () => ({}),
     getDisplayName: () => strategyName,
     getId: () => strategyId,
     getRequiredCandles: () => ({ timeframe: "15m", count: 1 }),

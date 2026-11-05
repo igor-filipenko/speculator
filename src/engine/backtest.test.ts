@@ -108,6 +108,11 @@ function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): 
   };
 }
 
+/** Search-space members for strategies that are not tuned in these tests. */
+function untuned(): Pick<Strategy, "axes" | "getSearchDefaults"> {
+  return { axes: [], getSearchDefaults: () => ({}) };
+}
+
 function scriptedStrategy(opts: {
   buyIndex: number;
   /** Distance below the buy price stored as slPrice when withStop is set. */
@@ -116,6 +121,7 @@ function scriptedStrategy(opts: {
 }): Strategy {
   const stopDistance = opts.stopDistance ?? 100;
   return {
+    ...untuned(),
     getDisplayName: () => "scripted",
     getId: () => "bollinger",
     getRequiredCandles: () => ({ timeframe: "15m", count: 1000 }),
@@ -439,6 +445,7 @@ describe("runBacktest", () => {
     const count = 5;
     const lengths: number[] = [];
     const strategy: Strategy = {
+      ...untuned(),
       getDisplayName: () => "window-probe",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count }),
@@ -470,6 +477,7 @@ describe("runBacktest", () => {
     await useTestDb();
     const seen = new Map<string, boolean>();
     const probe = (): Strategy => ({
+      ...untuned(),
       getDisplayName: () => "perps-probe",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 5 }),
@@ -594,6 +602,7 @@ describe("runBacktest", () => {
     });
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
+      ...untuned(),
       getDisplayName: () => "recorder",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
@@ -664,6 +673,7 @@ describe("runBacktest", () => {
       volume: 1,
     });
     const strategy: Strategy = {
+      ...untuned(),
       getDisplayName: () => "wick-buy",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),

@@ -4,10 +4,10 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { useTestDb } from "../db/test-db.js";
 import { createCandle } from "../market/candle.js";
-import type { Candle } from "../types.js";
+import { BollingerStrategy } from "../strategy/mode/bollinger.js";
+import type { Candle, SearchSpace } from "../types.js";
 import {
   parseTuneArgs,
-  BOLLINGER_SEARCH_SPACE,
   defaultLevels,
   passesGates,
   replayCandles,
@@ -19,7 +19,6 @@ import {
   walkForwardWindows,
   type SampledVariant,
   type ScoredVariant,
-  type SearchSpace,
 } from "./tune.js";
 
 const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
@@ -89,7 +88,6 @@ function scored(
 }
 
 const twoAxisSpace: SearchSpace = {
-  strategyId: "bollinger",
   axes: [
     { key: "a", levels: [0, 1, 2] },
     { key: "b", levels: [0, 1, 2] },
@@ -99,7 +97,6 @@ const twoAxisSpace: SearchSpace = {
 describe("sampleSearchSpace", () => {
   it("balances each Latin-hypercube axis and pins defaults at slot 0", () => {
     const space: SearchSpace = {
-      strategyId: "bollinger",
       axes: [
         { key: "period", levels: [14, 20, 30] },
         { key: "stdDev", levels: [1.5, 2, 2.5] },
@@ -130,7 +127,6 @@ describe("sampleSearchSpace", () => {
 
   it("returns the full factorial when it fits, with defaults first", () => {
     const space: SearchSpace = {
-      strategyId: "bollinger",
       axes: [
         { key: "period", levels: [14, 20] },
         { key: "stdDev", levels: [2, 2.5] },
@@ -148,7 +144,6 @@ describe("sampleSearchSpace", () => {
 
   it("drops Donchian combinations whose exit is not shorter than the entry", () => {
     const space: SearchSpace = {
-      strategyId: "donchian",
       axes: [
         { key: "entryPeriod", levels: [20, 40] },
         { key: "exitPeriod", levels: [10, 20, 30] },
@@ -268,7 +263,6 @@ describe("runTune", () => {
   it("replays a two-point grid on injected candles and keeps the defaults", async () => {
     await useTestDb();
     const space: SearchSpace = {
-      strategyId: "bollinger",
       axes: [{ key: "period", levels: [14, 20] }],
     };
     const [result] = await runTune({
@@ -302,7 +296,6 @@ describe("runTune", () => {
   it("matches the serial replay when two workers finish out of order", async () => {
     await useTestDb();
     const space: SearchSpace = {
-      strategyId: "bollinger",
       axes: [{ key: "period", levels: [14, 20] }],
     };
     const shared = {
@@ -414,8 +407,17 @@ describe("timeframe axis", () => {
   const primary = Array.from({ length: 16 }, (_, i) => quarter(i));
   const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
 
-  it("defaults the search to the 15m signal timeframe", () => {
-    assert.equal(defaultLevels(BOLLINGER_SEARCH_SPACE)["timeframe"], 15);
+  it("defaults the search to the 15m signal timeframe and a separate ADX period", () => {
+    const strategy = new BollingerStrategy();
+    const defaults = defaultLevels(strategy, strategy.getSearchDefaults());
+    assert.equal(defaults["timeframe"], 15);
+    assert.equal(defaults["period"], 20);
+    assert.equal(defaults["adxPeriod"], 20);
+    const period = strategy.axes.find((axis) => axis.key === "period");
+    const adxPeriod = strategy.axes.find((axis) => axis.key === "adxPeriod");
+    assert.ok(period);
+    assert.ok(adxPeriod);
+    assert.notDeepEqual(period.levels, adxPeriod.levels);
   });
 
   it("slices the primary series by index when no timeframe is patched", () => {

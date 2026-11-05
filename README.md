@@ -233,7 +233,7 @@ pnpm tune -- --from 01-01-2026 --to 01-10-2026 --strategy bollinger --max-trials
 | `--min-pf <x>`       | Reject a trial below this profit factor on train (default **1.1**)        |
 | `--jobs <n>`         | Replay workers (default: one per CPU; **1** runs on this thread)          |
 
-Bollinger searches `timeframe` (15m or 1h), `period`, `stdDev`, `diRatio`, `minReclaimDepth`, `maxBreakAtr`, `minRewardRisk`, `stopAtr`, and `trendFilter` (HTF trend gate: 0 off, 1 block counter-trend entries, 2 flat only). Donchian searches `entryPeriod`, `exitPeriod` (exit must be shorter than entry), `atrStopMult`, `givebackAtrMult`, and `timeStopBars`. Regime volume and break tables stay on `donchianParamsFor`. The replay uses the synthetic OHLC path.
+Bollinger searches `timeframe` (15m or 1h), `period` (band lookback), `adxPeriod` (DI lookback), `stdDev`, `diRatio`, `minReclaimDepth`, `maxBreakAtr`, `minRewardRisk`, `stopAtr`, and `trendFilter` (HTF trend gate: 0 off, 1 block counter-trend entries, 2 flat only). `atrPeriod` stays on the Bollinger defaults. Donchian searches `entryPeriod`, `exitPeriod` (exit must be shorter than entry), `atrStopMult`, `givebackAtrMult`, and `timeStopBars`. Regime volume and break tables stay on `donchianParamsFor`. The replay uses the synthetic OHLC path.
 
 Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
 

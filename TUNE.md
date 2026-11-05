@@ -53,7 +53,7 @@ done' >/dev/null 2>&1 & disown
 
 Per fold:
 
-```
+```text
 Fold 4 train 2024-11-03 → 2025-11-01 | test 2025-11-01 → 2026-03-02 (238 trials)
   selected: timeframe=15m period=14 stdDev=2.5 ...
   IS  sharpe 2.45 | return 11.68% | dd 4.12% | trades 36

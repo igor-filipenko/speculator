@@ -334,11 +334,32 @@ export interface RequiredCandles {
   count: number;
 }
 
-export interface Strategy {
+/** One numeric knob in a {@link SearchSpace}. `timeframe` levels are minutes. */
+export interface SearchAxis {
+  key: string;
+  levels: readonly number[];
+}
+
+/**
+ * Grid explored by `pnpm tune`.
+ * Each {@link Strategy} implements this. An absent `accept` keeps every combination.
+ */
+export interface SearchSpace {
+  axes: readonly SearchAxis[];
+  /** Drop a combination. Absent means every combination is valid. */
+  accept?: (values: Readonly<Record<string, number>>) => boolean;
+}
+
+export interface Strategy extends SearchSpace {
   getDisplayName(): string;
   /** `strategy.registry.id` (for example `bollinger`). */
   getId(): string;
   getRequiredCandles(): RequiredCandles;
+  /**
+   * Current numeric knobs. `timeframe` is minutes so it matches that search axis.
+   * Tune reads this for the default point on {@link SearchSpace.axes}.
+   */
+  getSearchDefaults(): Readonly<Record<string, number>>;
   evaluateSignal(
     pair: string,
     candles: Candle[],

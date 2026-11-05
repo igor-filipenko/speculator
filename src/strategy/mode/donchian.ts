@@ -5,6 +5,7 @@ import type {
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
+  SearchSpace,
   Signal,
   SignalSide,
   Strategy,
@@ -115,6 +116,28 @@ export function donchianParamsFor(
     atrStopMult: 3,
   };
 }
+
+/** Exit period must stay shorter than the entry period. */
+function donchianSearchAccept(values: Readonly<Record<string, number>>): boolean {
+  const exitPeriod = values["exitPeriod"];
+  const entryPeriod = values["entryPeriod"];
+  return exitPeriod !== undefined && entryPeriod !== undefined && exitPeriod < entryPeriod;
+}
+
+/**
+ * Knobs that are not the trend × volatility tables.
+ * `volumeSmaMult` and `minBreakAtrMult` stay on {@link donchianParamsFor}.
+ */
+export const DONCHIAN_SEARCH_SPACE: SearchSpace = {
+  axes: [
+    { key: "entryPeriod", levels: [20, 40, 55] },
+    { key: "exitPeriod", levels: [10, 20, 30] },
+    { key: "atrStopMult", levels: [2, 3, 4] },
+    { key: "givebackAtrMult", levels: [3, 4, 5] },
+    { key: "timeStopBars", levels: [0, 3, 6] },
+  ],
+  accept: donchianSearchAccept,
+};
 
 /**
  * Hard stop beyond the fill. Longs sit `atrStopMult` × ATR under the price;
@@ -448,12 +471,21 @@ export function evaluateDonchian(input: DonchianInput): Signal {
 
 /** 15m symmetric Donchian: closed-bar DC40 breakout + SMA volume + EMA50; long on bullish/flat, short on bearish only; exit DC20, 4×ATR giveback armed after a 2×ATR gain, or 3-bar time stop. No take-profit. */
 export class DonchianStrategy implements Strategy {
+  readonly axes = DONCHIAN_SEARCH_SPACE.axes;
   private readonly params: DonchianParams;
   private readonly trend: Trend;
 
   constructor(trend: Trend = "flat", volatility: Volatility = "low", params?: DonchianParams) {
     this.trend = trend;
     this.params = params ?? donchianParamsFor(trend, volatility);
+  }
+
+  accept(values: Readonly<Record<string, number>>): boolean {
+    return donchianSearchAccept(values);
+  }
+
+  getSearchDefaults(): Readonly<Record<string, number>> {
+    return searchDefaults(this.params);
   }
 
   getDisplayName(): string {
@@ -664,6 +696,15 @@ function gaveBackFromExtreme(input: {
       ? input.close <= level || input.price <= level
       : input.close >= level || input.price >= level;
   return hit ? { extreme, level } : null;
+}
+
+function searchDefaults(params: DonchianParams): Record<string, number> {
+  const source: Record<string, number> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "number") source[key] = value;
+  }
+  source["timeframe"] = candleIntervalSeconds(params.timeframe) / 60;
+  return source;
 }
 
 function fmt(n: number): string {

@@ -1,11 +1,13 @@
 import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { candleIntervalSeconds } from "../../market/candle.js";
 import type {
   Candle,
   MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
+  SearchSpace,
   Signal,
   SignalSide,
   Strategy,
@@ -161,12 +163,12 @@ function openingRewardHoldReason(input: {
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(): BollingerParams {
   return {
-    timeframe: "15m",
+    timeframe: "1h",
     period: 20,
-    stdDev: 2.0,
+    stdDev: 1.3,
     atrPeriod: 20,
-    adxPeriod: 20,
-    diRatio: 1.2,
+    adxPeriod: 28,
+    diRatio: 1.5,
     minReclaimDepth: 0.1,
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
@@ -174,6 +176,22 @@ export function bollingerParamsFor(): BollingerParams {
     trendFilter: 0,
   };
 }
+
+/** Decision knobs for `pnpm tune`. `atrPeriod` stays on {@link bollingerParamsFor}. */
+export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
+  axes: [
+    { key: "timeframe", levels: [15, 60] },
+    { key: "period", levels: [14, 20, 30] },
+    { key: "adxPeriod", levels: [14, 20, 28] },
+    { key: "stdDev", levels: [1.2, 1.3, 1.5, 2, 2.2, 2.5] },
+    { key: "diRatio", levels: [1, 1.2, 1.5, 2] },
+    { key: "minReclaimDepth", levels: [0.05, 0.1, 0.2] },
+    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 3, 3.5, 4] },
+    { key: "minRewardRisk", levels: [0.1, 0.2, 0.3, 0.4, 0.5] },
+    { key: "stopAtr", levels: [1, 1.5, 2, 2.5, 3, 3.5, 4, 5] },
+    { key: "trendFilter", levels: [0, 1, 2] },
+  ],
+};
 
 export interface BollingerInput {
   pair: string;
@@ -469,10 +487,15 @@ export function evaluateBollinger(input: BollingerInput): Signal {
 
 /** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. ADX is recorded and does not gate entries. */
 export class BollingerStrategy implements Strategy {
+  readonly axes = BOLLINGER_SEARCH_SPACE.axes;
   private readonly params: BollingerParams;
 
   constructor(_trend: Trend = "flat", _volatility: Volatility = "low", params?: BollingerParams) {
     this.params = params ?? bollingerParamsFor();
+  }
+
+  getSearchDefaults(): Readonly<Record<string, number>> {
+    return searchDefaults(this.params);
   }
 
   getDisplayName(): string {
@@ -612,6 +635,15 @@ function diPassNote(
     return `+DI ${fmt(plusDi)} <= ${diRatio}× -DI ${fmt(minusDi)}`;
   }
   return `-DI ${fmt(minusDi)} <= ${diRatio}× +DI ${fmt(plusDi)}`;
+}
+
+function searchDefaults(params: BollingerParams): Record<string, number> {
+  const source: Record<string, number> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "number") source[key] = value;
+  }
+  source["timeframe"] = candleIntervalSeconds(params.timeframe) / 60;
+  return source;
 }
 
 function fmt(n: number): string {

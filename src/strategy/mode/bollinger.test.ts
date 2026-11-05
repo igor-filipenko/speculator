@@ -10,6 +10,7 @@ import {
   bollingerParamsFor,
   bollingerStopPrice,
   diBlocksEntry,
+  trendBlocksEntry,
   type BollingerInput,
   type BollingerParams,
 } from "./bollinger.js";
@@ -553,6 +554,93 @@ describe("bollingerStopPrice", () => {
     assert.equal(bollingerStopPrice("long", 100, 4, 3), 88);
     assert.equal(bollingerStopPrice("long", 100, 4, 2.5), 90);
     assert.equal(bollingerStopPrice("short", 100, 4, 2.5), 110);
+  });
+});
+
+describe("trendFilter", () => {
+  const fees = { openFeePct: 0.0006, closeFeePct: 0.0006, borrowFeePctPerHour: 0.000007 };
+
+  it("blocks a lower reclaim in a bearish trend when the filter is 1", () => {
+    const candles = reclaimLowerBand();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      trend: "bearish",
+      strategy: looseFilters({ trendFilter: 1 }),
+      price: candles[candles.length - 1]!.close,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /HTF trend is bearish, against a long/);
+  });
+
+  it("lets the same reclaim through when the filter is off or the trend is bullish", () => {
+    const candles = reclaimLowerBand();
+    for (const [trend, trendFilter] of [
+      ["bearish", 0],
+      ["bullish", 1],
+      ["unknown", 1],
+    ] as const) {
+      const signal = evalBb({
+        pair: "SOL/USDC",
+        candles,
+        trend,
+        strategy: looseFilters({ trendFilter }),
+        price: candles[candles.length - 1]!.close,
+      });
+      assert.equal(signal.side, "BUY", `${trend}/${trendFilter}: ${signal.reason}`);
+    }
+  });
+
+  it("blocks an upper rejection in a bullish trend when the filter is 1", () => {
+    const candles = rejectUpperBand();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      trend: "bullish",
+      strategy: looseFilters({ trendFilter: 1 }),
+      price: candles[candles.length - 1]!.close,
+      perpsFees: fees,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, /HTF trend is bullish, against a short/);
+  });
+
+  it("trades only in a flat trend when the filter is 2", () => {
+    const candles = reclaimLowerBand();
+    const price = candles[candles.length - 1]!.close;
+    const strategy = looseFilters({ trendFilter: 2 });
+    assert.equal(evalBb({ pair: "SOL/USDC", candles, trend: "flat", strategy, price }).side, "BUY");
+    const bullish = evalBb({ pair: "SOL/USDC", candles, trend: "bullish", strategy, price });
+    assert.equal(bullish.side, "HOLD");
+    assert.match(bullish.reason, /entries need flat/);
+  });
+
+  it("never gates an exit", () => {
+    const candles = reclaimLowerBand();
+    const last = candles[candles.length - 1]!;
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      trend: "bearish",
+      strategy: looseFilters({ trendFilter: 2 }),
+      price: last.close + 5,
+      entryPrice: last.close,
+      positionSide: "long",
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+  });
+});
+
+describe("trendBlocksEntry", () => {
+  it("covers every mode and trend", () => {
+    assert.equal(trendBlocksEntry("long", "bearish", 0), false);
+    assert.equal(trendBlocksEntry("long", "bearish", 1), true);
+    assert.equal(trendBlocksEntry("long", "bullish", 1), false);
+    assert.equal(trendBlocksEntry("short", "bullish", 1), true);
+    assert.equal(trendBlocksEntry("short", "bearish", 1), false);
+    assert.equal(trendBlocksEntry("long", "flat", 2), false);
+    assert.equal(trendBlocksEntry("short", "bullish", 2), true);
+    assert.equal(trendBlocksEntry("long", "unknown", 2), false);
   });
 });
 

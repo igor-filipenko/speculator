@@ -1,11 +1,14 @@
+import os from "node:os";
+import { isMainThread, parentPort, Worker } from "node:worker_threads";
 import type { AppConfig } from "../config.js";
 import { createMarket } from "../market/manager.js";
+import { createCandle } from "../market/candle.js";
 import { loadHtfCandles, loadMtfCandles } from "../backtest/market-replay.js";
 import { readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 import { bollingerParamsFor, type BollingerParams } from "../strategy/mode/bollinger.js";
 import { donchianParamsFor, type DonchianParams } from "../strategy/mode/donchian.js";
 import { SimpleStrategyManager, type StrategyParamPatch } from "../strategy/strategy-manager.js";
-import type { Candle, PairConfig } from "../types.js";
+import type { Candle, CandleSource, PairConfig, Strategy, Timeframe } from "../types.js";
 import {
   mulberry32,
   parseBacktestDate,
@@ -20,6 +23,10 @@ export const TUNE_DEFAULT_MAX_TRIALS = 96;
 export const TUNE_DEFAULT_SEED = 1;
 export const TUNE_DEFAULT_MIN_TRADES = 8;
 export const TUNE_DEFAULT_MAX_DRAWDOWN_PCT = 40;
+/** A train trial must return more than this percent to be eligible. */
+export const TUNE_DEFAULT_MIN_RETURN_PCT = 0;
+/** A train trial needs at least this profit factor to be eligible. */
+export const TUNE_DEFAULT_MIN_PROFIT_FACTOR = 1.1;
 const NEIGHBOR_FILL_LEADERS = 3;
 const PROFIT_FACTOR_CAP = 999;
 
@@ -50,6 +57,7 @@ export interface ScoredVariant {
   variant: SampledVariant;
   sharpeRatio: number;
   vsHoldReturnPct: number;
+  totalReturnPct: number;
   profitFactor: number;
   roundTrips: number;
   maxDrawdownPct: number;
@@ -68,6 +76,10 @@ export interface TuneCliOptions {
   seed: number;
   minTrades: number;
   maxDrawdownPct: number;
+  minReturnPct: number;
+  minProfitFactor: number;
+  /** Worker count. `1` replays on this thread. */
+  jobs: number;
 }
 
 export interface WalkForwardWindow {
@@ -102,8 +114,15 @@ export interface TuneResult {
   oosSharpe: number;
   baselineReturnPct: number;
   baselineSharpe: number;
-  /** True when the procedure's mean OOS Sharpe does not beat today's defaults. */
+  /** Test folds whose out-of-sample return is above zero. */
+  positiveFolds: number;
+  /**
+   * True unless the search beats today's defaults on mean OOS Sharpe, compounds
+   * a positive OOS return, and is positive in at least two thirds of the folds.
+   */
   keepDefaults: boolean;
+  /** Why `keepDefaults` is true. Empty when the search passes. */
+  keepReasons: string[];
   /** Winner of the last train window (everything before the last fold). */
   nextParams?: Readonly<Record<string, number>>;
 }
@@ -116,6 +135,15 @@ export interface RunTuneOptions {
   seed: number;
   minTrades: number;
   maxDrawdownPct: number;
+  /** Train trials at or below this return are ineligible. Omitted disables the gate. */
+  minReturnPct?: number;
+  /** Train trials below this profit factor are ineligible. Omitted disables the gate. */
+  minProfitFactor?: number;
+  /**
+   * Replay workers. Omitted or `1` keeps the serial loop (tests).
+   * The CLI defaults this to `os.availableParallelism()`.
+   */
+  jobs?: number;
   fromTime?: number;
   toTime?: number;
   days?: number;
@@ -127,17 +155,36 @@ export interface RunTuneOptions {
   mtfCandles?: Candle[];
 }
 
-/** Bollinger decision knobs. `timeframe` and `adxPeriod` stay on the defaults. */
+/**
+ * Signal timeframes a numeric `timeframe` axis may name, keyed by minutes.
+ * The axis is numeric so it fits the same grid as every other knob.
+ */
+const TIMEFRAME_BY_MINUTES: Readonly<Record<number, Timeframe>> = {
+  5: "5m",
+  15: "15m",
+  60: "1h",
+};
+
+function timeframeMinutes(timeframe: Timeframe): number | undefined {
+  for (const [minutes, label] of Object.entries(TIMEFRAME_BY_MINUTES)) {
+    if (label === timeframe) return Number(minutes);
+  }
+  return undefined;
+}
+
+/** Bollinger decision knobs. `adxPeriod` and `atrPeriod` stay on the defaults. */
 export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
   strategyId: "bollinger",
   axes: [
+    { key: "timeframe", levels: [15, 60] },
     { key: "period", levels: [14, 20, 30] },
-    { key: "stdDev", levels: [1.5, 2, 2.5] },
-    { key: "diRatio", levels: [1, 1.2, 1.5] },
+    { key: "stdDev", levels: [1.2, 1.3, 1.5, 2, 2.2, 2.5] },
+    { key: "diRatio", levels: [1, 1.2, 1.5, 2] },
     { key: "minReclaimDepth", levels: [0.05, 0.1, 0.2] },
-    { key: "maxBreakAtr", levels: [2, 2.5, 4] },
-    { key: "minRewardRisk", levels: [0.2, 0.3, 0.5] },
-    { key: "stopAtr", levels: [1.5, 2.5, 3.5] },
+    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 3, 3.5, 4] },
+    { key: "minRewardRisk", levels: [0.1, 0.2, 0.3, 0.4, 0.5] },
+    { key: "stopAtr", levels: [1, 1.5, 2, 2.5, 3, 3.5, 4, 5] },
+    { key: "trendFilter", levels: [0, 1, 2] },
   ],
 };
 
@@ -170,9 +217,10 @@ export function searchSpaceFor(strategyId: string): SearchSpace {
 }
 
 export function defaultLevels(space: SearchSpace): Record<string, number> {
-  const source = numericFields(
-    space.strategyId === "bollinger" ? bollingerParamsFor() : donchianParamsFor(),
-  );
+  const params = space.strategyId === "bollinger" ? bollingerParamsFor() : donchianParamsFor();
+  const source = numericFields(params);
+  const minutes = timeframeMinutes(params.timeframe);
+  if (minutes !== undefined) source["timeframe"] = minutes;
   const defaults: Record<string, number> = {};
   for (const axis of space.axes) {
     const value = source[axis.key];
@@ -285,6 +333,9 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
   let seed = TUNE_DEFAULT_SEED;
   let minTrades = TUNE_DEFAULT_MIN_TRADES;
   let maxDrawdownPct = TUNE_DEFAULT_MAX_DRAWDOWN_PCT;
+  let minReturnPct = TUNE_DEFAULT_MIN_RETURN_PCT;
+  let minProfitFactor = TUNE_DEFAULT_MIN_PROFIT_FACTOR;
+  let jobs = os.availableParallelism();
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -346,6 +397,12 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
       i = nextIndex;
       continue;
     }
+    if (arg === "--jobs" || arg?.startsWith("--jobs=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--jobs");
+      jobs = positiveInt(value, "--jobs");
+      i = nextIndex;
+      continue;
+    }
     if (arg === "--max-dd" || arg?.startsWith("--max-dd=")) {
       const { value, nextIndex } = readFlagValue(argv, i, "--max-dd");
       const parsed = Number(value);
@@ -353,6 +410,26 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
         throw new Error(`Invalid --max-dd value: ${value}`);
       }
       maxDrawdownPct = parsed;
+      i = nextIndex;
+      continue;
+    }
+    if (arg === "--min-return" || arg?.startsWith("--min-return=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--min-return");
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`Invalid --min-return value: ${value}`);
+      }
+      minReturnPct = parsed;
+      i = nextIndex;
+      continue;
+    }
+    if (arg === "--min-pf" || arg?.startsWith("--min-pf=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--min-pf");
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`Invalid --min-pf value: ${value}`);
+      }
+      minProfitFactor = parsed;
       i = nextIndex;
       continue;
     }
@@ -377,6 +454,9 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
     seed,
     minTrades,
     maxDrawdownPct,
+    minReturnPct,
+    minProfitFactor,
+    jobs,
   };
   if (fromTime !== undefined) result.fromTime = fromTime;
   if (toTime !== undefined) result.toTime = toTime;
@@ -406,120 +486,87 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
   const timeframe = probe.getActiveStrategy().getRequiredCandles().timeframe;
   const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
   const skipNetwork = options.candles !== undefined;
+  // Other signal timeframes named by a `timeframe` axis. Injected candles skip them.
+  const altTimeframes: Timeframe[] = skipNetwork
+    ? []
+    : (space.axes.find((axis) => axis.key === "timeframe")?.levels ?? [])
+        .map((minutes) => TIMEFRAME_BY_MINUTES[minutes])
+        .filter((label): label is Timeframe => label !== undefined && label !== timeframe);
 
   const results: TuneResult[] = [];
   for (const pair of options.config.pairs) {
-    const candles =
+    const [candles, htfCandles, mtfCandles] = await Promise.all([
       options.candles ??
-      (await market.fetchCandles({
+        market.fetchCandles({
+          pair,
+          timeframe,
+          fromTime: window.fromTime,
+          toTime: window.toTime,
+        }),
+      loadHtfCandles({
         pair,
-        timeframe,
+        market,
+        strategyManager: probe,
         fromTime: window.fromTime,
         toTime: window.toTime,
-      }));
+        injected: options.htfCandles,
+        skipFetch: skipNetwork && options.htfCandles === undefined,
+      }),
+      loadMtfCandles({
+        pair,
+        market,
+        strategyManager: probe,
+        fromTime: window.fromTime,
+        toTime: window.toTime,
+        injected: options.mtfCandles,
+        skipFetch: skipNetwork && options.mtfCandles === undefined,
+      }),
+    ]);
+    const altCandles: Record<string, Candle[]> = {};
+    for (const label of altTimeframes) {
+      altCandles[label] = await market.fetchCandles({
+        pair,
+        timeframe: label,
+        fromTime: window.fromTime,
+        toTime: window.toTime,
+      });
+      if (altCandles[label]?.length === 0) {
+        throw new Error(`No candles for ${pair.symbol} (${label}) in the replay window`);
+      }
+    }
     if (candles.length === 0) {
       throw new Error(
         `No candles for ${pair.symbol} (${timeframe}) in ` +
           `${new Date(window.fromTime * 1000).toISOString()} → ${new Date(window.toTime * 1000).toISOString()}`,
       );
     }
-    const pairConfig = { ...options.config, pairs: [pair] };
-    const htfCandles = await loadHtfCandles({
-      pair,
-      market,
-      strategyManager: probe,
-      fromTime: candles[0]!.time,
-      toTime: candles[candles.length - 1]!.time + 1,
-      injected: options.htfCandles,
-      skipFetch: skipNetwork && options.htfCandles === undefined,
-    });
-    const mtfCandles = await loadMtfCandles({
-      pair,
-      market,
-      strategyManager: probe,
-      fromTime: candles[0]!.time,
-      toTime: candles[candles.length - 1]!.time + 1,
-      injected: options.mtfCandles,
-      skipFetch: skipNetwork && options.mtfCandles === undefined,
-    });
-
-    const windows = walkForwardWindows(candles, options.folds);
-    const foldResults: TuneFoldResult[] = [];
-    for (const fold of windows) {
-      const trained = await scoreTrain({
-        config: pairConfig,
+    results.push(
+      await tunePair({
+        pair,
+        config: { ...options.config, pairs: [pair] },
         strategyId: options.strategyId,
         space,
         defaults,
-        train: fold.train,
+        candles,
+        altCandles,
         htfCandles,
         mtfCandles,
+        folds: options.folds,
         maxTrials: options.maxTrials,
         seed: options.seed,
         minTrades: options.minTrades,
         maxDrawdownPct: options.maxDrawdownPct,
-        pair,
-        fold: fold.fold,
-      });
-      const baselineMetrics = await replayMetrics({
-        config: pairConfig,
-        strategyId: options.strategyId,
-        candles: fold.test,
-        htfCandles,
-        mtfCandles,
-      });
-      const oosMetrics =
-        trained.winner === undefined
-          ? baselineMetrics
-          : await replayMetrics({
-              config: pairConfig,
-              strategyId: options.strategyId,
-              patch: patchFromValues(options.strategyId, trained.winner.variant.values),
-              candles: fold.test,
-              htfCandles,
-              mtfCandles,
-            });
-      const trainRange = candleRange(fold.train);
-      const testRange = candleRange(fold.test);
-      const foldResult: TuneFoldResult = {
-        fold: fold.fold,
-        trainFrom: trainRange.from,
-        trainTo: trainRange.to,
-        testFrom: testRange.from,
-        testTo: testRange.to,
-        trials: trained.trials,
-        exhaustive: trained.exhaustive,
-        oosMetrics,
-        baselineMetrics,
-      };
-      if (trained.winner !== undefined && trained.winnerMetrics !== undefined) {
-        foldResult.selected = trained.winner.variant.values;
-        foldResult.trainMetrics = trained.winnerMetrics;
-      }
-      foldResults.push(foldResult);
-    }
-
-    const oosReturnPct = compoundReturn(foldResults.map((fold) => fold.oosMetrics.totalReturnPct));
-    const baselineReturnPct = compoundReturn(
-      foldResults.map((fold) => fold.baselineMetrics.totalReturnPct),
+        gates: {
+          minTrades: options.minTrades,
+          maxDrawdownPct: options.maxDrawdownPct,
+          ...(options.minReturnPct !== undefined ? { minReturnPct: options.minReturnPct } : {}),
+          ...(options.minProfitFactor !== undefined
+            ? { minProfitFactor: options.minProfitFactor }
+            : {}),
+        },
+        jobs: options.jobs ?? 1,
+      }),
     );
-    const oosSharpe = mean(foldResults.map((fold) => fold.oosMetrics.sharpeRatio));
-    const baselineSharpe = mean(foldResults.map((fold) => fold.baselineMetrics.sharpeRatio));
-    const last = foldResults[foldResults.length - 1];
-    const result: TuneResult = {
-      pair: pair.symbol,
-      strategyId: options.strategyId,
-      folds: foldResults,
-      oosReturnPct,
-      oosSharpe,
-      baselineReturnPct,
-      baselineSharpe,
-      keepDefaults: !(oosSharpe > baselineSharpe),
-    };
-    if (last?.selected !== undefined) {
-      result.nextParams = last.selected;
-    }
-    results.push(result);
   }
   return results;
 }
@@ -558,7 +605,15 @@ export function printTuneReport(result: TuneResult): void {
       ? "Next params: none"
       : `Next params: ${fmtValues(result.nextParams)}`,
   );
-  console.log(result.keepDefaults ? "Keep defaults." : "Use the next params.");
+  console.log(
+    `Positive test folds: ${result.positiveFolds}/${result.folds.length} ` +
+      `(search) | defaults: ${result.folds.filter((fold) => fold.baselineMetrics.totalReturnPct > 0).length}/${result.folds.length}`,
+  );
+  if (result.keepDefaults) {
+    console.log(`Keep defaults: ${result.keepReasons.join("; ")}.`);
+  } else {
+    console.log("Use the next params.");
+  }
 }
 
 function replayWindow(options: RunTuneOptions): { fromTime: number; toTime: number } {
@@ -571,85 +626,407 @@ function replayWindow(options: RunTuneOptions): { fromTime: number; toTime: numb
   return resolveReplayWindow({ days: options.days ?? TUNE_DEFAULT_DAYS });
 }
 
-async function scoreTrain(args: {
+interface ReplayRequest {
+  patch?: StrategyParamPatch;
+  start: number;
+  /** Exclusive index into the pair's signal candles. */
+  end: number;
+}
+
+interface FoldBound {
+  fold: number;
+  trainStart: number;
+  trainEnd: number;
+  testStart: number;
+  testEnd: number;
+}
+
+interface Wave1Item {
+  kind: "trial" | "baseline";
+  foldIndex: number;
+  variantIndex?: number;
+  request: ReplayRequest;
+}
+
+interface ReplayContext {
+  config: AppConfig;
+  strategyId: string;
+  candles: Candle[];
+  /** Signal candles for the other timeframes on the search axis, by label. */
+  altCandles: Record<string, Candle[]>;
+  htfCandles: Candle[];
+  mtfCandles: Candle[];
+  pool?: ReplayPool;
+}
+
+/** Write values at their sample indexes, ignoring completion order. */
+export function placeByIndex<T>(
+  count: number,
+  entries: readonly { index: number; value: T }[],
+): T[] {
+  const slots: (T | undefined)[] = Array.from({ length: count }, () => undefined);
+  for (const entry of entries) {
+    if (entry.index < 0 || entry.index >= count || slots[entry.index] !== undefined) {
+      throw new Error(`Duplicate or invalid replay index ${entry.index}`);
+    }
+    slots[entry.index] = entry.value;
+  }
+  const out: T[] = [];
+  for (const slot of slots) {
+    if (slot === undefined) {
+      throw new Error("Missing replay result");
+    }
+    out.push(slot);
+  }
+  return out;
+}
+
+function foldBounds(candles: Candle[], nFolds: number): FoldBound[] {
+  const folds = splitCandlesIntoFolds(candles, nFolds);
+  const windows = walkForwardWindows(candles, nFolds);
+  let offset = 0;
+  const ranges = folds.map((fold) => {
+    const start = offset;
+    offset += fold.length;
+    return { start, end: offset };
+  });
+  return windows.map((window, index) => {
+    const train = ranges[index];
+    const test = ranges[index + 1];
+    if (train === undefined || test === undefined) {
+      throw new Error(`Fold ${window.fold} is missing its candle range`);
+    }
+    return {
+      fold: window.fold,
+      trainStart: 0,
+      trainEnd: train.end,
+      testStart: test.start,
+      testEnd: test.end,
+    };
+  });
+}
+
+async function tunePair(args: {
+  pair: PairConfig;
   config: AppConfig;
   strategyId: string;
   space: SearchSpace;
   defaults: Readonly<Record<string, number>>;
-  train: Candle[];
+  candles: Candle[];
+  altCandles: Record<string, Candle[]>;
   htfCandles: Candle[];
   mtfCandles: Candle[];
+  folds: number;
   maxTrials: number;
   seed: number;
   minTrades: number;
   maxDrawdownPct: number;
-  pair: PairConfig;
-  fold: number;
-}): Promise<{
-  winner: ScoredVariant | undefined;
-  winnerMetrics: BacktestMetrics | undefined;
-  trials: number;
-  exhaustive: boolean;
-}> {
+  gates: TrialGates;
+  jobs: number;
+}): Promise<TuneResult> {
+  const bounds = foldBounds(args.candles, args.folds);
   const sample = sampleSearchSpace(args.space, args.maxTrials, args.seed, args.defaults);
-  console.log(
-    `[${args.pair.symbol}] fold ${args.fold}: scoring ${sample.variants.length} train trials` +
-      (sample.exhaustive ? " (full grid)" : " (latin hypercube)"),
-  );
-  const scored: ScoredVariant[] = [];
-  const metricsByKey = new Map<string, BacktestMetrics>();
-  for (const variant of sample.variants) {
-    const metrics = await replayMetrics({
-      config: args.config,
-      strategyId: args.strategyId,
-      patch: patchFromValues(args.strategyId, variant.values),
-      candles: args.train,
-      htfCandles: args.htfCandles,
-      mtfCandles: args.mtfCandles,
-    });
-    metricsByKey.set(variantKey(variant), metrics);
-    scored.push(toScored(variant, metrics, args.minTrades, args.maxDrawdownPct, args.defaults));
-  }
-
-  if (!sample.exhaustive) {
-    const extra = missingNeighborVariants(
-      args.space,
-      topFeasible(scored, NEIGHBOR_FILL_LEADERS),
-      scored,
-    );
-    if (extra.length > 0) {
+  const wave1 = wave1Requests(bounds, sample, args.strategyId);
+  const workerCount = Math.min(Math.max(1, args.jobs), wave1.length);
+  const pool =
+    workerCount > 1
+      ? await ReplayPool.open(workerCount, {
+          config: args.config,
+          strategyId: args.strategyId,
+          candles: args.candles,
+          altCandles: args.altCandles,
+          htfCandles: args.htfCandles,
+          mtfCandles: args.mtfCandles,
+        })
+      : undefined;
+  try {
+    if (pool !== undefined) {
+      console.log(`[${args.pair.symbol}] ${workerCount} workers`);
+    }
+    for (const bound of bounds) {
       console.log(
-        `[${args.pair.symbol}] fold ${args.fold}: scoring ${extra.length} neighbor trials`,
+        `[${args.pair.symbol}] fold ${bound.fold}: scoring ${sample.variants.length} train trials` +
+          (sample.exhaustive ? " (full grid)" : " (latin hypercube)"),
       );
     }
-    for (const variant of extra) {
-      const metrics = await replayMetrics({
-        config: args.config,
-        strategyId: args.strategyId,
-        patch: patchFromValues(args.strategyId, variant.values),
-        candles: args.train,
-        htfCandles: args.htfCandles,
-        mtfCandles: args.mtfCandles,
-      });
-      metricsByKey.set(variantKey(variant), metrics);
-      scored.push(toScored(variant, metrics, args.minTrades, args.maxDrawdownPct, args.defaults));
-    }
-  }
-
-  const winner = pickNeighborhoodWinner(scored, args.space);
-  if (winner === undefined) {
-    return {
-      winner,
-      winnerMetrics: undefined,
-      trials: scored.length,
-      exhaustive: sample.exhaustive,
+    const ctx: ReplayContext = {
+      config: args.config,
+      strategyId: args.strategyId,
+      candles: args.candles,
+      altCandles: args.altCandles,
+      htfCandles: args.htfCandles,
+      mtfCandles: args.mtfCandles,
+      ...(pool !== undefined ? { pool } : {}),
     };
+    const first = await runRequests(
+      wave1.map((item) => item.request),
+      ctx,
+    );
+    const trials = bounds.map(() => [] as BacktestMetrics[]);
+    const baselines: BacktestMetrics[] = [];
+    const metricsByFold = bounds.map(() => new Map<string, BacktestMetrics>());
+    for (let i = 0; i < wave1.length; i++) {
+      const item = wave1[i]!;
+      const metrics = first[i];
+      if (metrics === undefined) {
+        throw new Error(`Fold ${bounds[item.foldIndex]?.fold ?? item.foldIndex} missed a replay`);
+      }
+      if (item.kind === "baseline") {
+        baselines[item.foldIndex] = metrics;
+        continue;
+      }
+      const variant = sample.variants[item.variantIndex ?? -1];
+      if (variant === undefined) {
+        throw new Error(`Fold ${bounds[item.foldIndex]?.fold} missed a train variant`);
+      }
+      trials[item.foldIndex]![item.variantIndex ?? 0] = metrics;
+      metricsByFold[item.foldIndex]!.set(variantKey(variant), metrics);
+    }
+
+    const scoredByFold = bounds.map((_, foldIndex) =>
+      sample.variants.map((variant, variantIndex) => {
+        const metrics = trials[foldIndex]?.[variantIndex];
+        if (metrics === undefined) {
+          throw new Error(`Fold ${bounds[foldIndex]?.fold} missed train metrics`);
+        }
+        return toScored(variant, metrics, args.gates, args.defaults);
+      }),
+    );
+
+    const neighborWave: { foldIndex: number; variant: SampledVariant; request: ReplayRequest }[] =
+      [];
+    if (!sample.exhaustive) {
+      for (let foldIndex = 0; foldIndex < bounds.length; foldIndex++) {
+        const scored = scoredByFold[foldIndex]!;
+        const extra = missingNeighborVariants(
+          args.space,
+          topFeasible(scored, NEIGHBOR_FILL_LEADERS),
+          scored,
+        );
+        const bound = bounds[foldIndex]!;
+        if (extra.length > 0) {
+          console.log(
+            `[${args.pair.symbol}] fold ${bound.fold}: scoring ${extra.length} neighbor trials`,
+          );
+        }
+        for (const variant of extra) {
+          neighborWave.push({
+            foldIndex,
+            variant,
+            request: {
+              patch: patchFromValues(args.strategyId, variant.values),
+              start: bound.trainStart,
+              end: bound.trainEnd,
+            },
+          });
+        }
+      }
+    }
+    const neighborMetrics = await runRequests(
+      neighborWave.map((item) => item.request),
+      ctx,
+    );
+    for (let i = 0; i < neighborWave.length; i++) {
+      const item = neighborWave[i]!;
+      const metrics = neighborMetrics[i];
+      if (metrics === undefined) {
+        throw new Error(`Fold ${bounds[item.foldIndex]?.fold} missed a neighbor replay`);
+      }
+      metricsByFold[item.foldIndex]!.set(variantKey(item.variant), metrics);
+      scoredByFold[item.foldIndex]!.push(
+        toScored(item.variant, metrics, args.gates, args.defaults),
+      );
+    }
+
+    const winners = scoredByFold.map((scored) => pickNeighborhoodWinner(scored, args.space));
+    const oosWave: { foldIndex: number; request: ReplayRequest }[] = [];
+    for (let foldIndex = 0; foldIndex < bounds.length; foldIndex++) {
+      const winner = winners[foldIndex];
+      if (winner === undefined) continue;
+      const bound = bounds[foldIndex]!;
+      oosWave.push({
+        foldIndex,
+        request: {
+          patch: patchFromValues(args.strategyId, winner.variant.values),
+          start: bound.testStart,
+          end: bound.testEnd,
+        },
+      });
+    }
+    const oosMetricsList = await runRequests(
+      oosWave.map((item) => item.request),
+      ctx,
+    );
+    const oosByFold = new Map<number, BacktestMetrics>();
+    for (let i = 0; i < oosWave.length; i++) {
+      const metrics = oosMetricsList[i];
+      if (metrics === undefined) {
+        throw new Error("Missing out-of-sample replay");
+      }
+      oosByFold.set(oosWave[i]!.foldIndex, metrics);
+    }
+
+    const foldResults: TuneFoldResult[] = bounds.map((bound, foldIndex) => {
+      const baseline = baselines[foldIndex];
+      if (baseline === undefined) {
+        throw new Error(`Fold ${bound.fold} is missing its baseline`);
+      }
+      const winner = winners[foldIndex];
+      const oos = winner === undefined ? baseline : oosByFold.get(foldIndex);
+      if (oos === undefined) {
+        throw new Error(`Fold ${bound.fold} is missing its out-of-sample replay`);
+      }
+      const train = candleRange(args.candles.slice(bound.trainStart, bound.trainEnd));
+      const test = candleRange(args.candles.slice(bound.testStart, bound.testEnd));
+      const foldResult: TuneFoldResult = {
+        fold: bound.fold,
+        trainFrom: train.from,
+        trainTo: train.to,
+        testFrom: test.from,
+        testTo: test.to,
+        trials: scoredByFold[foldIndex]!.length,
+        exhaustive: sample.exhaustive,
+        oosMetrics: oos,
+        baselineMetrics: baseline,
+      };
+      if (winner !== undefined) {
+        const trainMetrics = metricsByFold[foldIndex]!.get(variantKey(winner.variant));
+        if (trainMetrics === undefined) {
+          throw new Error(`Fold ${bound.fold} winner is missing its train metrics`);
+        }
+        foldResult.selected = winner.variant.values;
+        foldResult.trainMetrics = trainMetrics;
+      }
+      return foldResult;
+    });
+
+    const oosReturnPct = compoundReturn(foldResults.map((fold) => fold.oosMetrics.totalReturnPct));
+    const baselineReturnPct = compoundReturn(
+      foldResults.map((fold) => fold.baselineMetrics.totalReturnPct),
+    );
+    const result: TuneResult = {
+      pair: args.pair.symbol,
+      strategyId: args.strategyId,
+      folds: foldResults,
+      oosReturnPct,
+      oosSharpe: mean(foldResults.map((fold) => fold.oosMetrics.sharpeRatio)),
+      baselineReturnPct,
+      baselineSharpe: mean(foldResults.map((fold) => fold.baselineMetrics.sharpeRatio)),
+      ...verdict(foldResults, oosReturnPct),
+    };
+    const last = foldResults[foldResults.length - 1];
+    if (last?.selected !== undefined) {
+      result.nextParams = last.selected;
+    }
+    return result;
+  } finally {
+    await pool?.close();
   }
-  const winnerMetrics = metricsByKey.get(variantKey(winner.variant));
-  if (winnerMetrics === undefined) {
-    throw new Error("Train winner is missing its replay metrics");
+}
+
+/** Keep the defaults unless the stitched out-of-sample track is better and profitable. */
+export function verdict(
+  folds: readonly {
+    oosMetrics: Pick<BacktestMetrics, "totalReturnPct" | "sharpeRatio">;
+    baselineMetrics: Pick<BacktestMetrics, "sharpeRatio">;
+  }[],
+  oosReturnPct: number,
+): { positiveFolds: number; keepDefaults: boolean; keepReasons: string[] } {
+  const positiveFolds = folds.filter((fold) => fold.oosMetrics.totalReturnPct > 0).length;
+  const searchSharpe = mean(folds.map((fold) => fold.oosMetrics.sharpeRatio));
+  const baselineSharpe = mean(folds.map((fold) => fold.baselineMetrics.sharpeRatio));
+  const keepReasons: string[] = [];
+  if (!(searchSharpe > baselineSharpe)) {
+    keepReasons.push(
+      `mean OOS sharpe ${searchSharpe.toFixed(2)} does not beat defaults ${baselineSharpe.toFixed(2)}`,
+    );
   }
-  return { winner, winnerMetrics, trials: scored.length, exhaustive: sample.exhaustive };
+  if (!(oosReturnPct > 0)) {
+    keepReasons.push(`OOS compounded return ${oosReturnPct.toFixed(2)}% is not positive`);
+  }
+  if (positiveFolds * 3 < folds.length * 2) {
+    keepReasons.push(`only ${positiveFolds}/${folds.length} test folds are positive (need 2/3)`);
+  }
+  return { positiveFolds, keepDefaults: keepReasons.length > 0, keepReasons };
+}
+
+function wave1Requests(
+  bounds: readonly FoldBound[],
+  sample: SearchSample,
+  strategyId: string,
+): Wave1Item[] {
+  const items: Wave1Item[] = [];
+  for (let foldIndex = 0; foldIndex < bounds.length; foldIndex++) {
+    const bound = bounds[foldIndex]!;
+    for (let variantIndex = 0; variantIndex < sample.variants.length; variantIndex++) {
+      const variant = sample.variants[variantIndex]!;
+      items.push({
+        kind: "trial",
+        foldIndex,
+        variantIndex,
+        request: {
+          patch: patchFromValues(strategyId, variant.values),
+          start: bound.trainStart,
+          end: bound.trainEnd,
+        },
+      });
+    }
+    items.push({
+      kind: "baseline",
+      foldIndex,
+      request: { start: bound.testStart, end: bound.testEnd },
+    });
+  }
+  return items;
+}
+
+async function runRequests(
+  requests: readonly ReplayRequest[],
+  ctx: ReplayContext,
+): Promise<BacktestMetrics[]> {
+  if (requests.length === 0) return [];
+  if (ctx.pool === undefined) {
+    const out: BacktestMetrics[] = [];
+    for (const request of requests) {
+      out.push(await replaySlice(ctx, request));
+    }
+    return out;
+  }
+  return ctx.pool.run(requests);
+}
+
+/**
+ * Signal candles for one replay. The request indexes the primary series. A patch
+ * that names another timeframe replays the same time span on that series.
+ */
+export function replayCandles(
+  primary: readonly Candle[],
+  alt: Readonly<Record<string, readonly Candle[]>>,
+  request: { patch?: StrategyParamPatch; start: number; end: number },
+): Candle[] {
+  const timeframe = request.patch?.bollinger?.timeframe;
+  if (timeframe === undefined || timeframe === primary[0]?.timeframe) {
+    return primary.slice(request.start, request.end);
+  }
+  const series = alt[timeframe];
+  const first = primary[request.start];
+  const last = primary[request.end - 1];
+  if (series === undefined || first === undefined || last === undefined) {
+    throw new Error(`No ${timeframe} candles loaded for this replay`);
+  }
+  const until = last.time + last.intervalSeconds;
+  return series.filter((candle) => candle.time >= first.time && candle.time < until);
+}
+
+async function replaySlice(ctx: ReplayContext, request: ReplayRequest): Promise<BacktestMetrics> {
+  return replayMetrics({
+    config: ctx.config,
+    strategyId: ctx.strategyId,
+    candles: replayCandles(ctx.candles, ctx.altCandles, request),
+    htfCandles: ctx.htfCandles,
+    mtfCandles: ctx.mtfCandles,
+    ...(request.patch !== undefined ? { patch: request.patch } : {}),
+  });
 }
 
 async function replayMetrics(args: {
@@ -693,6 +1070,7 @@ function patchFromValues(
 
 function bollingerPatch(values: Readonly<Record<string, number>>): Partial<BollingerParams> {
   const patch: Partial<BollingerParams> = {};
+  const timeframe = values["timeframe"];
   const period = values["period"];
   const stdDev = values["stdDev"];
   const atrPeriod = values["atrPeriod"];
@@ -702,6 +1080,12 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   const maxBreakAtr = values["maxBreakAtr"];
   const minRewardRisk = values["minRewardRisk"];
   const stopAtr = values["stopAtr"];
+  const trendFilter = values["trendFilter"];
+  if (timeframe !== undefined) {
+    const label = TIMEFRAME_BY_MINUTES[timeframe];
+    if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
+    patch.timeframe = label;
+  }
   if (period !== undefined) patch.period = period;
   if (stdDev !== undefined) patch.stdDev = stdDev;
   if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
@@ -711,6 +1095,7 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;
   if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
   if (stopAtr !== undefined) patch.stopAtr = stopAtr;
+  if (trendFilter !== undefined) patch.trendFilter = trendFilter;
   return patch;
 }
 
@@ -749,21 +1134,48 @@ function donchianPatch(values: Readonly<Record<string, number>>): Partial<Donchi
   return patch;
 }
 
+/** Eligibility gates for a train trial. Absent return/PF gates are off. */
+export interface TrialGates {
+  minTrades: number;
+  maxDrawdownPct: number;
+  minReturnPct?: number;
+  minProfitFactor?: number;
+}
+
+/** True when a trial's metrics clear every gate. */
+export function passesGates(
+  metrics: Pick<
+    BacktestMetrics,
+    "roundTrips" | "maxDrawdownPct" | "totalReturnPct" | "profitFactor"
+  >,
+  gates: TrialGates,
+): boolean {
+  if (metrics.roundTrips < gates.minTrades) return false;
+  if (metrics.maxDrawdownPct > gates.maxDrawdownPct) return false;
+  if (gates.minReturnPct !== undefined && !(metrics.totalReturnPct > gates.minReturnPct)) {
+    return false;
+  }
+  if (gates.minProfitFactor !== undefined && !(metrics.profitFactor >= gates.minProfitFactor)) {
+    return false;
+  }
+  return true;
+}
+
 function toScored(
   variant: SampledVariant,
   metrics: BacktestMetrics,
-  minTrades: number,
-  maxDrawdownPct: number,
+  gates: TrialGates,
   defaults: Readonly<Record<string, number>>,
 ): ScoredVariant {
   return {
     variant,
     sharpeRatio: metrics.sharpeRatio,
     vsHoldReturnPct: metrics.vsHoldReturnPct,
+    totalReturnPct: metrics.totalReturnPct,
     profitFactor: metrics.profitFactor,
     roundTrips: metrics.roundTrips,
     maxDrawdownPct: metrics.maxDrawdownPct,
-    feasible: metrics.roundTrips >= minTrades && metrics.maxDrawdownPct <= maxDrawdownPct,
+    feasible: passesGates(metrics, gates),
     distanceFromDefaults: distanceFromDefaults(variant.values, defaults),
   };
 }
@@ -1061,7 +1473,11 @@ function fmtDay(unixSec: number): string {
 
 function fmtValues(values: Readonly<Record<string, number>>): string {
   return Object.entries(values)
-    .map(([key, value]) => `${key}=${String(value)}`)
+    .map(([key, value]) =>
+      key === "timeframe"
+        ? `timeframe=${TIMEFRAME_BY_MINUTES[value] ?? `${String(value)}m`}`
+        : `${key}=${String(value)}`,
+    )
     .join(" ");
 }
 
@@ -1072,4 +1488,312 @@ function fmtMetrics(prefix: string, metrics: BacktestMetrics): string {
     `dd ${metrics.maxDrawdownPct.toFixed(2)}% | ` +
     `trades ${metrics.roundTrips}`
   );
+}
+
+interface CandlePayload {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timeframe: Timeframe;
+  source: CandleSource;
+}
+
+interface PoolInit {
+  config: AppConfig;
+  strategyId: string;
+  candles: Candle[];
+  altCandles: Record<string, Candle[]>;
+  htfCandles: Candle[];
+  mtfCandles: Candle[];
+}
+
+interface WorkerInitMessage {
+  kind: "init";
+  config: AppConfig;
+  strategyId: string;
+  candles: CandlePayload[];
+  altCandles: Record<string, CandlePayload[]>;
+  htfCandles: CandlePayload[];
+  mtfCandles: CandlePayload[];
+}
+
+interface WorkerJobMessage {
+  kind: "job";
+  id: number;
+  start: number;
+  end: number;
+  patch?: StrategyParamPatch;
+}
+
+type WorkerInbound = WorkerInitMessage | WorkerJobMessage;
+
+interface PortableMetrics extends Omit<BacktestMetrics, "strategy"> {
+  strategyId: string;
+  strategyName: string;
+}
+
+type WorkerOutbound =
+  | { kind: "ready" }
+  | { kind: "result"; id: number; metrics: PortableMetrics }
+  | { kind: "error"; id: number; message: string };
+
+interface PoolTask {
+  id: number;
+  request: ReplayRequest;
+  resolve: (metrics: BacktestMetrics) => void;
+  reject: (error: Error) => void;
+}
+
+class ReplayPool {
+  private readonly workers: Worker[] = [];
+  private readonly idle: Worker[] = [];
+  private readonly inflight = new Map<Worker, PoolTask>();
+  private readonly queue: PoolTask[] = [];
+  private nextId = 1;
+  private closed = false;
+
+  static async open(size: number, init: PoolInit): Promise<ReplayPool> {
+    const pool = new ReplayPool();
+    try {
+      const workers = await Promise.all(Array.from({ length: size }, () => pool.spawn(init)));
+      pool.idle.push(...workers);
+      return pool;
+    } catch (error) {
+      await pool.close();
+      throw error;
+    }
+  }
+
+  async run(requests: readonly ReplayRequest[]): Promise<BacktestMetrics[]> {
+    const entries: { index: number; value: BacktestMetrics }[] = [];
+    await Promise.all(
+      requests.map(async (request, index) => {
+        const value = await this.enqueue(request);
+        entries.push({ index, value });
+      }),
+    );
+    return placeByIndex(requests.length, entries);
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    const closed = new Error("Replay pool closed");
+    for (const task of this.queue.splice(0)) task.reject(closed);
+    for (const task of this.inflight.values()) task.reject(closed);
+    this.inflight.clear();
+    this.idle.length = 0;
+    await Promise.all(this.workers.splice(0).map((worker) => worker.terminate()));
+  }
+
+  private spawn(init: PoolInit): Promise<Worker> {
+    const worker = new Worker(new URL(import.meta.url), { execArgv: workerExecArgv() });
+    this.workers.push(worker);
+    const payload: WorkerInitMessage = {
+      kind: "init",
+      config: init.config,
+      strategyId: init.strategyId,
+      candles: candlePayload(init.candles),
+      altCandles: Object.fromEntries(
+        Object.entries(init.altCandles).map(([label, rows]) => [label, candlePayload(rows)]),
+      ),
+      htfCandles: candlePayload(init.htfCandles),
+      mtfCandles: candlePayload(init.mtfCandles),
+    };
+    return new Promise((resolve, reject) => {
+      const onError = (error: Error): void => {
+        worker.off("message", onMessage);
+        reject(error);
+      };
+      const onMessage = (message: WorkerOutbound): void => {
+        if (message.kind !== "ready") return;
+        worker.off("message", onMessage);
+        worker.off("error", onError);
+        worker.on("message", (next: WorkerOutbound) => this.onMessage(worker, next));
+        worker.on("error", (error: Error) => this.onCrash(worker, error));
+        resolve(worker);
+      };
+      worker.on("message", onMessage);
+      worker.on("error", onError);
+      worker.postMessage(payload);
+    });
+  }
+
+  private enqueue(request: ReplayRequest): Promise<BacktestMetrics> {
+    if (this.closed) return Promise.reject(new Error("Replay pool closed"));
+    const id = this.nextId;
+    this.nextId += 1;
+    return new Promise((resolve, reject) => {
+      this.queue.push({ id, request, resolve, reject });
+      this.dispatch();
+    });
+  }
+
+  private dispatch(): void {
+    while (!this.closed && this.idle.length > 0 && this.queue.length > 0) {
+      const worker = this.idle.pop();
+      const task = this.queue.shift();
+      if (worker === undefined || task === undefined) return;
+      this.inflight.set(worker, task);
+      const message: WorkerJobMessage = {
+        kind: "job",
+        id: task.id,
+        start: task.request.start,
+        end: task.request.end,
+      };
+      if (task.request.patch !== undefined) message.patch = task.request.patch;
+      worker.postMessage(message);
+    }
+  }
+
+  private onMessage(worker: Worker, message: WorkerOutbound): void {
+    if (message.kind === "ready") return;
+    const task = this.inflight.get(worker);
+    this.inflight.delete(worker);
+    if (task === undefined || this.closed) return;
+    if (message.kind === "error") {
+      task.reject(new Error(message.message));
+    } else if (message.id === task.id) {
+      task.resolve(fromPortable(message.metrics));
+    } else {
+      task.reject(new Error(`Worker reply did not match job ${task.id}`));
+    }
+    if (!this.closed) {
+      this.idle.push(worker);
+      this.dispatch();
+    }
+  }
+
+  private onCrash(worker: Worker, error: Error): void {
+    const task = this.inflight.get(worker);
+    this.inflight.delete(worker);
+    task?.reject(error);
+    this.closed = true;
+    for (const queued of this.queue.splice(0)) queued.reject(error);
+  }
+}
+
+function workerExecArgv(): string[] {
+  const argv = process.execArgv;
+  const keep: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    if (arg === "--import" || arg === "--require" || arg === "-r" || arg === "--loader") {
+      const next = argv[i + 1];
+      if (next !== undefined) {
+        keep.push(arg, next);
+        i += 1;
+      }
+      continue;
+    }
+    if (
+      arg.startsWith("--import=") ||
+      arg.startsWith("--require=") ||
+      arg.startsWith("--loader=")
+    ) {
+      keep.push(arg);
+    }
+  }
+  return keep;
+}
+
+function candlePayload(candles: readonly Candle[]): CandlePayload[] {
+  return candles.map((candle) => ({
+    time: candle.time,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+    timeframe: candle.timeframe,
+    source: candle.source,
+  }));
+}
+
+function toPortable(metrics: BacktestMetrics): PortableMetrics {
+  const { strategy, ...rest } = metrics;
+  return { ...rest, strategyId: strategy.getId(), strategyName: strategy.getDisplayName() };
+}
+
+function fromPortable(metrics: PortableMetrics): BacktestMetrics {
+  const { strategyId, strategyName, ...rest } = metrics;
+  const strategy: Strategy = {
+    getDisplayName: () => strategyName,
+    getId: () => strategyId,
+    getRequiredCandles: () => ({ timeframe: "15m", count: 1 }),
+    evaluateSignal: () => {
+      throw new Error("Replay metrics do not evaluate signals");
+    },
+    buildChartSvg: () => "",
+  };
+  return { ...rest, strategy };
+}
+
+function startReplayWorker(): void {
+  const port = parentPort;
+  if (port === null) return;
+  let session: PoolInit | undefined;
+  port.on("message", (message: WorkerInbound) => {
+    if (message.kind === "init") {
+      session = {
+        config: message.config,
+        strategyId: message.strategyId,
+        candles: message.candles.map((row) => createCandle(row)),
+        altCandles: Object.fromEntries(
+          Object.entries(message.altCandles).map(([label, rows]) => [
+            label,
+            rows.map((row) => createCandle(row)),
+          ]),
+        ),
+        htfCandles: message.htfCandles.map((row) => createCandle(row)),
+        mtfCandles: message.mtfCandles.map((row) => createCandle(row)),
+      };
+      port.postMessage({ kind: "ready" } satisfies WorkerOutbound);
+      return;
+    }
+    const current = session;
+    if (current === undefined) {
+      port.postMessage({
+        kind: "error",
+        id: message.id,
+        message: "Worker is not initialized",
+      } satisfies WorkerOutbound);
+      return;
+    }
+    void replayMetrics({
+      config: current.config,
+      strategyId: current.strategyId,
+      candles: replayCandles(current.candles, current.altCandles, {
+        start: message.start,
+        end: message.end,
+        ...(message.patch !== undefined ? { patch: message.patch } : {}),
+      }),
+      htfCandles: current.htfCandles,
+      mtfCandles: current.mtfCandles,
+      ...(message.patch !== undefined ? { patch: message.patch } : {}),
+    }).then(
+      (metrics) => {
+        port.postMessage({
+          kind: "result",
+          id: message.id,
+          metrics: toPortable(metrics),
+        } satisfies WorkerOutbound);
+      },
+      (error: unknown) => {
+        port.postMessage({
+          kind: "error",
+          id: message.id,
+          message: error instanceof Error ? error.message : String(error),
+        } satisfies WorkerOutbound);
+      },
+    );
+  });
+}
+
+if (!isMainThread) {
+  startReplayWorker();
 }

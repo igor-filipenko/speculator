@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { useTestDb } from "../db/test-db.js";
@@ -6,8 +7,14 @@ import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
 import {
   parseTuneArgs,
+  BOLLINGER_SEARCH_SPACE,
+  defaultLevels,
+  passesGates,
+  replayCandles,
   pickNeighborhoodWinner,
+  placeByIndex,
   runTune,
+  verdict,
   sampleSearchSpace,
   walkForwardWindows,
   type SampledVariant,
@@ -71,6 +78,7 @@ function scored(
     variant,
     sharpeRatio,
     vsHoldReturnPct: 0,
+    totalReturnPct: 1,
     profitFactor: 1,
     roundTrips: 10,
     maxDrawdownPct: 5,
@@ -227,12 +235,32 @@ describe("parseTuneArgs", () => {
     assert.equal(flags.seed, 1);
     assert.equal(flags.minTrades, 8);
     assert.equal(flags.maxDrawdownPct, 40);
+    assert.equal(flags.minReturnPct, 0);
+    assert.equal(flags.minProfitFactor, 1.1);
+    assert.equal(flags.jobs, os.availableParallelism());
     assert.equal(flags.days, undefined);
     assert.equal(flags.fromTime, undefined);
   });
 
   it("rejects combining --days with --from", () => {
     assert.throws(() => parseTuneArgs(["--days", "30", "--from", "2026-01-01"]), /not both/);
+  });
+
+  it("rejects a non-positive --jobs", () => {
+    assert.throws(() => parseTuneArgs(["--jobs", "0"]), /--jobs/);
+  });
+});
+
+describe("placeByIndex", () => {
+  it("restores sample order when results finish out of order", () => {
+    assert.deepEqual(
+      placeByIndex(3, [
+        { index: 2, value: "c" },
+        { index: 0, value: "a" },
+        { index: 1, value: "b" },
+      ]),
+      ["a", "b", "c"],
+    );
   });
 });
 
@@ -251,6 +279,7 @@ describe("runTune", () => {
       seed: 1,
       minTrades: 0,
       maxDrawdownPct: 40,
+      jobs: 1,
       space,
       candles: flatCandles(40),
     });
@@ -268,5 +297,150 @@ describe("runTune", () => {
     assert.deepEqual(result.nextParams, { period: 20 });
     assert.equal(fold.oosMetrics.tradeCount, 0);
     assert.equal(fold.baselineMetrics.endingEquity, 1000);
+  });
+
+  it("matches the serial replay when two workers finish out of order", async () => {
+    await useTestDb();
+    const space: SearchSpace = {
+      strategyId: "bollinger",
+      axes: [{ key: "period", levels: [14, 20] }],
+    };
+    const shared = {
+      config: makeConfig(),
+      strategyId: "bollinger" as const,
+      folds: 2,
+      maxTrials: 2,
+      seed: 1,
+      minTrades: 0,
+      maxDrawdownPct: 40,
+      space,
+      candles: flatCandles(40),
+    };
+    const [serial] = await runTune({ ...shared, jobs: 1 });
+    const [parallel] = await runTune({ ...shared, jobs: 2 });
+    assert.ok(serial);
+    assert.ok(parallel);
+    assert.deepEqual(parallel.nextParams, serial.nextParams);
+    assert.equal(parallel.folds[0]?.trials, serial.folds[0]?.trials);
+    assert.equal(
+      parallel.folds[0]?.oosMetrics.endingEquity,
+      serial.folds[0]?.oosMetrics.endingEquity,
+    );
+    assert.equal(
+      parallel.folds[0]?.baselineMetrics.sharpeRatio,
+      serial.folds[0]?.baselineMetrics.sharpeRatio,
+    );
+    assert.equal(parallel.keepDefaults, serial.keepDefaults);
+  });
+});
+
+describe("passesGates", () => {
+  const base = { roundTrips: 20, maxDrawdownPct: 8, totalReturnPct: 3, profitFactor: 1.4 };
+  const gates = { minTrades: 10, maxDrawdownPct: 15, minReturnPct: 0, minProfitFactor: 1.1 };
+
+  it("accepts a profitable trial inside every limit", () => {
+    assert.equal(passesGates(base, gates), true);
+  });
+
+  it("rejects a losing trial even with a good profit factor", () => {
+    assert.equal(passesGates({ ...base, totalReturnPct: -0.5 }, gates), false);
+    assert.equal(passesGates({ ...base, totalReturnPct: 0 }, gates), false);
+  });
+
+  it("rejects low profit factor, few trades, and deep drawdown", () => {
+    assert.equal(passesGates({ ...base, profitFactor: 1.05 }, gates), false);
+    assert.equal(passesGates({ ...base, roundTrips: 9 }, gates), false);
+    assert.equal(passesGates({ ...base, maxDrawdownPct: 16 }, gates), false);
+  });
+
+  it("accepts an all-winners trial (infinite profit factor)", () => {
+    assert.equal(passesGates({ ...base, profitFactor: Infinity }, gates), true);
+  });
+
+  it("skips the return and profit factor gates when they are absent", () => {
+    const off = { minTrades: 10, maxDrawdownPct: 15 };
+    assert.equal(passesGates({ ...base, totalReturnPct: -5, profitFactor: 0.2 }, off), true);
+  });
+});
+
+describe("verdict", () => {
+  const fold = (oosReturn: number, oosSharpe: number, baseSharpe: number) => ({
+    oosMetrics: { totalReturnPct: oosReturn, sharpeRatio: oosSharpe },
+    baselineMetrics: { sharpeRatio: baseSharpe },
+  });
+
+  it("uses the search when it beats defaults, compounds positive, and 2/3 folds win", () => {
+    const result = verdict([fold(2, 1, 0), fold(1, 1, 0), fold(-0.5, 0.5, 0)], 2.5);
+    assert.equal(result.keepDefaults, false);
+    assert.equal(result.positiveFolds, 2);
+    assert.deepEqual(result.keepReasons, []);
+  });
+
+  it("keeps defaults when the search only loses less than they do", () => {
+    const result = verdict([fold(-1, -0.5, -2), fold(-2, -1, -3), fold(-1, -0.5, -1)], -3.9);
+    assert.equal(result.keepDefaults, true);
+    assert.equal(result.positiveFolds, 0);
+    assert.equal(result.keepReasons.length, 2);
+  });
+
+  it("keeps defaults when only one of three folds is positive", () => {
+    const result = verdict([fold(20, 2, 0), fold(-1, 0.5, 0), fold(-1, 0.5, 0)], 17.6);
+    assert.equal(result.keepDefaults, true);
+    assert.match(result.keepReasons.join(" "), /1\/3 test folds/);
+  });
+});
+
+describe("timeframe axis", () => {
+  const quarter = (index: number): Candle =>
+    createCandle({
+      time: 3600 * 10 + index * 900,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1,
+      timeframe: "15m",
+    });
+  const hour = (index: number): Candle =>
+    createCandle({
+      time: 3600 * 10 + index * 3600,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1,
+      timeframe: "1h",
+    });
+  const primary = Array.from({ length: 16 }, (_, i) => quarter(i));
+  const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
+
+  it("defaults the search to the 15m signal timeframe", () => {
+    assert.equal(defaultLevels(BOLLINGER_SEARCH_SPACE)["timeframe"], 15);
+  });
+
+  it("slices the primary series by index when no timeframe is patched", () => {
+    const rows = replayCandles(primary, { "1h": hourly }, { start: 2, end: 6 });
+    assert.equal(rows.length, 4);
+    assert.equal(rows[0], primary[2]);
+  });
+
+  it("replays the same time span on the 1h series when the patch names it", () => {
+    const rows = replayCandles(
+      primary,
+      { "1h": hourly },
+      { start: 4, end: 12, patch: { bollinger: { timeframe: "1h" } } },
+    );
+    assert.deepEqual(
+      rows.map((row) => row.time),
+      [hourly[1]!.time, hourly[2]!.time],
+    );
+  });
+
+  it("throws when the patched timeframe was not loaded", () => {
+    assert.throws(
+      () =>
+        replayCandles(primary, {}, { start: 0, end: 4, patch: { bollinger: { timeframe: "1h" } } }),
+      /No 1h candles/,
+    );
   });
 });

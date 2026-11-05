@@ -151,11 +151,14 @@ export function emulateFillPrice(input: EmulateFillPriceInput): EmulatedFill {
   };
 }
 
-/** Map known pair symbols to liquidity tier (v1: SOL/USDC is liquid). */
+/**
+ * Pairs priced at the `liquid` tier. JUP/USDC joins SOL/USDC: Jupiter quotes for
+ * $100 and $1,000 of USDC → JUP route through deep pools with ~0 price impact
+ * (checked against lite-api.jup.ag/swap/v1/quote on 2026-11-03).
+ */
+const LIQUID_PAIRS: ReadonlySet<string> = new Set(["SOL/USDC", "JUP/USDC"]);
+
+/** Map known pair symbols to liquidity tier (everything else is `meme`). */
 export function liquidityTierForPair(symbol: string): LiquidityTier {
-  const normalized = symbol.trim().toUpperCase();
-  if (normalized === "SOL/USDC") {
-    return "liquid";
-  }
-  return "meme";
+  return LIQUID_PAIRS.has(symbol.trim().toUpperCase()) ? "liquid" : "meme";
 }

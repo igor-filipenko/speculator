@@ -70,7 +70,11 @@ function band(label: string, lower?: number, mid?: number, upper?: number): stri
   return ` ${label} ${parts.join(" ")}`;
 }
 
-export function logPerpsFees(pair: string, fees: PerpsFees): void {
+export function logPerpsFees(pair: string, fees: PerpsFees | undefined): void {
+  if (fees === undefined) {
+    console.log(`[${pair}] no Jupiter Perps market: long-only`);
+    return;
+  }
   console.log(
     `[${pair}] perps fees open=${pct(fees.openFeePct)} close=${pct(fees.closeFeePct)} ` +
       `borrow=${pct(fees.borrowFeePctPerHour)}/h`,

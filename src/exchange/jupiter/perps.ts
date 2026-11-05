@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { ExchangeError } from "../error.js";
 import { fromAtomic } from "./amounts.js";
-import { JUPITER_PERPS_FEES } from "./perps-fees.js";
 import type { OpenPosition, PairConfig, PerpsFees } from "../../types.js";
 
 /** Jupiter Perps markets. https://perps-api.jup.ag/v1 */
@@ -151,9 +150,10 @@ export class JupiterPerpsClient {
    * Close uses the same base rate as open. Markets Jupiter does not list
    * keep the offline snapshot and do not hit the network.
    */
-  async fetchFeeSchedule(pair: PairConfig): Promise<PerpsFees> {
+  /** Pool-info rates, or `undefined` when Jupiter Perps lists no market for the base mint. */
+  async fetchFeeSchedule(pair: PairConfig): Promise<PerpsFees | undefined> {
     if (assetFromMint(pair.baseMint) === undefined) {
-      return JUPITER_PERPS_FEES;
+      return undefined;
     }
     const url = new URL(`${this.baseUrl}/pool-info`);
     url.searchParams.set("mint", pair.baseMint);

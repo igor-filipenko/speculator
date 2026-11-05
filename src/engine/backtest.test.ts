@@ -118,7 +118,7 @@ function scriptedStrategy(opts: {
   return {
     getDisplayName: () => "scripted",
     getId: () => "bollinger",
-    getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+    getRequiredCandles: () => ({ timeframe: "15m", count: 1000 }),
     evaluateSignal: (pair, candles, _market, price, at) => {
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
@@ -432,6 +432,80 @@ describe("runBacktest", () => {
     assert.ok(result.metrics.roundTripMinMs > 0);
     assert.equal(result.metrics.roundTripMinMs, result.metrics.roundTripMaxMs);
     assert.equal(result.metrics.roundTripAvgMs, result.metrics.roundTripMinMs);
+  });
+
+  it("hands the strategy at most getRequiredCandles().count candles per tick", async () => {
+    await useTestDb();
+    const count = 5;
+    const lengths: number[] = [];
+    const strategy: Strategy = {
+      getDisplayName: () => "window-probe",
+      getId: () => "bollinger",
+      getRequiredCandles: () => ({ timeframe: "15m", count }),
+      evaluateSignal: (pair, window, _market, price, at) => {
+        lengths.push(window.length);
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "probe",
+          price,
+          at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
+        };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    };
+    await runBacktest({
+      config: makeConfig(500),
+      strategyManager: managerFor(strategy),
+      candles: series(30, 100, 0.1),
+    });
+    assert.ok(lengths.length > 0);
+    assert.equal(Math.max(...lengths), count);
+  });
+
+  it("withholds the perps schedule for a pair Jupiter Perps does not list", async () => {
+    await useTestDb();
+    const seen = new Map<string, boolean>();
+    const probe = (): Strategy => ({
+      getDisplayName: () => "perps-probe",
+      getId: () => "bollinger",
+      getRequiredCandles: () => ({ timeframe: "15m", count: 5 }),
+      evaluateSignal: (pair, _window, _market, price, at, _portfolio, perpsFees) => {
+        seen.set(pair, perpsFees !== undefined);
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "probe",
+          price,
+          at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
+        };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    });
+    const base = makeConfig(500);
+    const sol = base.pairs[0]!;
+    const jup = {
+      ...sol,
+      symbol: "JUP/USDC",
+      baseMint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+      baseDecimals: 6,
+      poolAddress: "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL",
+    };
+    for (const pair of [sol, jup]) {
+      await runBacktest({
+        config: { ...base, pairs: [pair], watchlist: [pair.symbol] },
+        strategyManager: managerFor(probe()),
+        candles: series(12, 100, 0.1),
+      });
+    }
+    assert.equal(seen.get("SOL/USDC"), true);
+    assert.equal(seen.get("JUP/USDC"), false);
   });
 
   it("keeps flat equity when indicators never fire", async () => {

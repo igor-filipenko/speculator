@@ -71,7 +71,7 @@ const PERPS_FEE_TTL_MS = 60 * 60 * 1000;
 
 interface CachedPerpsFees {
   expiresAt: number;
-  schedule: Promise<PerpsFees>;
+  schedule: Promise<PerpsFees | undefined>;
 }
 
 /**
@@ -124,7 +124,7 @@ export class JupiterExchange implements Exchange, PositionSource {
    * Cached perps rates. The first call for a mint GETs /pool-info; later ticks reuse it
    * until the entry is an hour old.
    */
-  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees> {
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees | undefined> {
     const mint = pair.baseMint;
     const cached = this.perpsFeeCache.get(mint);
     if (cached !== undefined && cached.expiresAt > Date.now()) {

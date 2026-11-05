@@ -49,6 +49,12 @@ export interface BollingerParams {
   minRewardRisk: number;
   /** Stop distance beyond the entry-bar extreme, in ATRs. */
   stopAtr: number;
+  /**
+   * HTF trend gate for new entries. Exits ignore it.
+   * 0 = off. 1 = block a long in a bearish trend and a short in a bullish one.
+   * 2 = trade only when the trend is flat. An unknown trend never blocks.
+   */
+  trendFilter: number;
 }
 
 /**
@@ -165,6 +171,7 @@ export function bollingerParamsFor(): BollingerParams {
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
     stopAtr: 2.5,
+    trendFilter: 0,
   };
 }
 
@@ -370,6 +377,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = breakoutHold;
     } else if (diBlocksEntry("long", plusDi, minusDi, strategy.diRatio)) {
       reason = diBlockReason("long", plusDi, minusDi, strategy.diRatio);
+    } else if (trendBlocksEntry("long", input.trend, strategy.trendFilter)) {
+      reason = trendBlockReason("long", input.trend, strategy.trendFilter);
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
@@ -407,6 +416,8 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         reason = breakoutHold;
       } else if (diBlocksEntry("short", plusDi, minusDi, strategy.diRatio)) {
         reason = diBlockReason("short", plusDi, minusDi, strategy.diRatio);
+      } else if (trendBlocksEntry("short", input.trend, strategy.trendFilter)) {
+        reason = trendBlockReason("short", input.trend, strategy.trendFilter);
       } else {
         side = "SELL";
         const how = wickReject ? "wick rejection" : "close rejection";
@@ -557,6 +568,25 @@ export function diBlocksEntry(
   if (diRatio === 0) return false;
   if (side === "short") return plusDi > diRatio * minusDi;
   return minusDi > diRatio * plusDi;
+}
+
+/**
+ * HTF trend gate on a new entry. Mode 1 refuses a long in a bearish trend and a
+ * short in a bullish one. Mode 2 refuses both unless the trend is flat.
+ * Mode 0 and an unknown trend never block.
+ */
+export function trendBlocksEntry(side: "long" | "short", trend: Trend, mode: number): boolean {
+  if (mode === 0 || trend === "unknown") return false;
+  if (mode === 2) return trend !== "flat";
+  if (side === "long") return trend === "bearish";
+  return trend === "bullish";
+}
+
+function trendBlockReason(side: "long" | "short", trend: Trend, mode: number): string {
+  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  return mode === 2
+    ? `${head}: HTF trend is ${trend}, entries need flat`
+    : `${head}: HTF trend is ${trend}, against a ${side}`;
 }
 
 function diBlockReason(

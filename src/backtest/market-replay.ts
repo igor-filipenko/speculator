@@ -97,8 +97,12 @@ export async function syncMarketIndicators(
     return { htfEnd, mtfEnd, lastMarket: args.lastMarket, evaluated: false };
   }
 
-  const htfWindow = args.htfCandles.slice(0, htfEnd);
-  const mtfWindow = args.mtfCandles.slice(0, mtfEnd);
+  // Live loads `count` bars per timeframe. Match that window so labels and
+  // percentiles see the same history and the replay stays linear in bar count.
+  const htfCount = args.strategyManager.getRequiredHtfCandles().count;
+  const mtfCount = args.strategyManager.getRequiredMtfCandles().count;
+  const htfWindow = args.htfCandles.slice(Math.max(0, htfEnd - htfCount), htfEnd);
+  const mtfWindow = args.mtfCandles.slice(Math.max(0, mtfEnd - mtfCount), mtfEnd);
   const lastBar = htfWindow[htfWindow.length - 1] ?? mtfWindow[mtfWindow.length - 1];
   if (lastBar === undefined) {
     return { htfEnd, mtfEnd, lastMarket: args.lastMarket, evaluated: false };

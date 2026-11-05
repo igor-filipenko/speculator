@@ -259,6 +259,7 @@ describe("JupiterExchange.execute", () => {
     const second = await exchange.perpsFeeSchedule(PAIR);
     assert.equal(poolInfoCalls, 1);
     assert.equal(first, second);
+    assert.ok(first);
     assert.equal(first.openFeePct, Number("0.06") / 100);
     assert.equal(first.closeFeePct, first.openFeePct);
     assert.equal(first.borrowFeePctPerHour, Number("0.0012") / 100);
@@ -299,7 +300,7 @@ describe("JupiterExchange.execute", () => {
     }
   });
 
-  it("does not request pool-info for a market jupiter perps does not list", async () => {
+  it("reports no schedule and skips pool-info for a market jupiter perps does not list", async () => {
     let called = false;
     const exchange = new JupiterExchange({
       fetchImpl: () => {
@@ -309,8 +310,7 @@ describe("JupiterExchange.execute", () => {
     });
     const fees = await exchange.perpsFeeSchedule(TOKEN_PAIR);
     assert.equal(called, false);
-    assert.equal(fees.openFeePct, 0.0006);
-    assert.equal(fees.borrowFeePctPerHour, 0.000007);
+    assert.equal(fees, undefined);
   });
 
   it("opens a short through jupiter perps", async () => {

@@ -211,7 +211,7 @@ Short opens and covers skip the spot pool fee. They pay a perps schedule instead
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, long/short round-trip counts, win rate, max drawdown, and cost totals. Pass `--verbose` to also list each simulated trade and draw the console chart. Backtest never writes paper portfolio state.
 
-Offline **tune** searches the active strategy's numeric knobs by anchored walk-forward. Candles load once. Each train window is a full factorial when it fits in `--max-trials`, otherwise a seeded Latin hypercube. The chosen set is the center of a stable neighborhood (median Sharpe of the set and its adjacent levels), then that single set is replayed on the next fold. The report compares the stitched out-of-sample track to today's defaults and does not rewrite them.
+Offline **tune** searches the active strategy's numeric knobs by anchored walk-forward. Candles load once. Each train window is a full factorial when it fits in `--max-trials`, otherwise a seeded Latin hypercube. The chosen set is the center of a stable neighborhood (median Sharpe of the set and its adjacent levels), then that single set is replayed on the next fold. The report compares the stitched out-of-sample track to today's defaults and does not rewrite them. The report says **Keep defaults** unless the search beats them on mean OOS Sharpe, compounds a positive OOS return, and is positive in at least two thirds of the test folds. Candles are read through a spike filter that clamps vendor wicks far beyond the candle body. See [TUNE.md](./TUNE.md) for methodology and how to judge a result.
 
 ```bash
 pnpm tune
@@ -219,18 +219,21 @@ pnpm tune -- --days 180
 pnpm tune -- --from 01-01-2026 --to 01-10-2026 --strategy bollinger --max-trials 48
 ```
 
-| Flag                | Meaning                                                                 |
-| ------------------- | ----------------------------------------------------------------------- |
-| `--days <n>`        | Lookback from now (default **365**; not with `--from`)                  |
-| `--from` / `--to`   | Same UTC dates as backtest                                              |
-| `--strategy <name>` | `bollinger` or `donchian` (default: env `STRATEGY`)                     |
-| `--folds <n>`       | Sequential folds, first is train-only (default **4**, minimum 2)        |
-| `--max-trials <n>`  | Trials per train window before neighbor fill (default **96**)           |
-| `--seed <n>`        | Latin-hypercube seed (default **1**)                                    |
-| `--min-trades <n>`  | Reject a trial with fewer completed round-trips (default **8**)         |
-| `--max-dd <pct>`    | Reject a trial whose max drawdown exceeds this percent (default **40**) |
+| Flag                 | Meaning                                                                   |
+| -------------------- | ------------------------------------------------------------------------- |
+| `--days <n>`         | Lookback from now (default **365**; not with `--from`)                    |
+| `--from` / `--to`    | Same UTC dates as backtest                                                |
+| `--strategy <name>`  | `bollinger` or `donchian` (default: env `STRATEGY`)                       |
+| `--folds <n>`        | Sequential folds, first is train-only (default **4**, minimum 2)          |
+| `--max-trials <n>`   | Trials per train window before neighbor fill (default **96**)             |
+| `--seed <n>`         | Latin-hypercube seed (default **1**)                                      |
+| `--min-trades <n>`   | Reject a trial with fewer completed round-trips (default **8**)           |
+| `--max-dd <pct>`     | Reject a trial whose max drawdown exceeds this percent (default **40**)   |
+| `--min-return <pct>` | Reject a trial that returns at most this percent on train (default **0**) |
+| `--min-pf <x>`       | Reject a trial below this profit factor on train (default **1.1**)        |
+| `--jobs <n>`         | Replay workers (default: one per CPU; **1** runs on this thread)          |
 
-Bollinger searches `period`, `stdDev`, `diRatio`, `minReclaimDepth`, `maxBreakAtr`, `minRewardRisk`, and `stopAtr`. Donchian searches `entryPeriod`, `exitPeriod` (exit must be shorter than entry), `atrStopMult`, `givebackAtrMult`, and `timeStopBars`. Regime volume and break tables stay on `donchianParamsFor`. `timeframe` is not searched. The replay uses the synthetic OHLC path.
+Bollinger searches `timeframe` (15m or 1h), `period`, `stdDev`, `diRatio`, `minReclaimDepth`, `maxBreakAtr`, `minRewardRisk`, `stopAtr`, and `trendFilter` (HTF trend gate: 0 off, 1 block counter-trend entries, 2 flat only). Donchian searches `entryPeriod`, `exitPeriod` (exit must be shorter than entry), `atrStopMult`, `givebackAtrMult`, and `timeStopBars`. Regime volume and break tables stay on `donchianParamsFor`. The replay uses the synthetic OHLC path.
 
 Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
 

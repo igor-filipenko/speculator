@@ -47,7 +47,7 @@ function usage(): never {
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
   tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
-  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>]
+  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]]
 
 Options:
@@ -66,6 +66,7 @@ Options:
   --seed <n>        Latin-hypercube seed (tune only; default 1)
   --min-trades <n>  Drop a trial with fewer round-trips (tune only; default 8)
   --max-dd <pct>    Drop a trial whose max drawdown exceeds this (tune only; default 40)
+  --jobs <n>        Parallel replay workers (tune only; default: CPU count; 1 stays serial)
 `);
   process.exit(1);
 }
@@ -334,6 +335,9 @@ async function runTuneCommand(argv: string[]): Promise<void> {
     seed: flags.seed,
     minTrades: flags.minTrades,
     maxDrawdownPct: flags.maxDrawdownPct,
+    minReturnPct: flags.minReturnPct,
+    minProfitFactor: flags.minProfitFactor,
+    jobs: flags.jobs,
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
     ...(flags.days !== undefined ? { days: flags.days } : {}),

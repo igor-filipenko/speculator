@@ -419,9 +419,11 @@ export interface Exchange {
   execute(command: Command, pair: PairConfig): Promise<Order | Error>;
   /**
    * Open, close, and hourly short-borrow rates for this pair.
+   * Resolves `undefined` when Jupiter Perps lists no market for the pair, so it
+   * cannot be shorted and strategies stay long-only.
    * Implementations cache the result; callers may invoke this every tick.
    */
-  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees>;
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees | undefined>;
 }
 
 export interface ProgramState {

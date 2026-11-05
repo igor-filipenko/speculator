@@ -558,6 +558,7 @@ async function replayPair(args: {
     strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
   );
 
+  // Undefined for a pair without a Jupiter Perps market: the strategy stays long-only.
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
@@ -568,7 +569,10 @@ async function replayPair(args: {
 
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
-    const closed = candles.slice(0, i);
+    // Live loads `count` candles including the forming one. Match that window so
+    // indicators see the same history and the replay stays linear in bar count.
+    const windowCount = strategyManager.getActiveStrategy().getRequiredCandles().count;
+    const closed = candles.slice(Math.max(0, i - (windowCount - 1)), i);
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks =
       args.minuteCandles !== undefined

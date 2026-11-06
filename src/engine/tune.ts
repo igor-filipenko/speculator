@@ -1022,6 +1022,7 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   const minRewardRisk = values["minRewardRisk"];
   const stopAtr = values["stopAtr"];
   const trendFilter = values["trendFilter"];
+  const decayBars = values["decayBars"];
   if (timeframe !== undefined) {
     const label = TIMEFRAME_BY_MINUTES[timeframe];
     if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
@@ -1038,6 +1039,7 @@ function bollingerPatch(values: Readonly<Record<string, number>>): Partial<Bolli
   if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
   if (stopAtr !== undefined) patch.stopAtr = stopAtr;
   if (trendFilter !== undefined) patch.trendFilter = trendFilter;
+  if (decayBars !== undefined) patch.decayBars = decayBars;
   return patch;
 }
 

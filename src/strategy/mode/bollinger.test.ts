@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 import { createCandle } from "../../market/candle.js";
 import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
 import { TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
+import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import {
   adxBlocksEntry,
   evaluateBollinger,
   BollingerStrategy,
+  bollingerDecayTarget,
   bollingerNetReward,
   bollingerParamsFor,
   bollingerStopPrice,
@@ -697,6 +699,307 @@ describe("diBlocksEntry", () => {
   });
 });
 
+describe("bollingerDecayTarget", () => {
+  const at = new Date("2026-01-01T12:00:00Z");
+  const hour = 60 * 60 * 1000;
+
+  it("stays on the strict price when decay is off or the fill time is missing", () => {
+    const off = bollingerDecayTarget({
+      strict: 100,
+      floor: 90,
+      decayBars: 0,
+      openedAt: new Date(at.getTime() - 10 * hour),
+      at,
+      timeframe: "1h",
+    });
+    assert.equal(off.target, 100);
+    assert.equal(off.barsHeld, 0);
+    assert.equal(off.flatten, false);
+
+    const missing = bollingerDecayTarget({
+      strict: 100,
+      floor: 90,
+      decayBars: 4,
+      at,
+      timeframe: "1h",
+    });
+    assert.equal(missing.target, 100);
+    assert.equal(missing.flatten, false);
+  });
+
+  it("slides halfway and flattens once decayBars have elapsed", () => {
+    const down = bollingerDecayTarget({
+      strict: 100,
+      floor: 90,
+      decayBars: 4,
+      openedAt: new Date(at.getTime() - 2 * hour),
+      at,
+      timeframe: "1h",
+    });
+    assert.equal(down.barsHeld, 2);
+    assert.equal(down.target, 95);
+    assert.equal(down.flatten, false);
+
+    const up = bollingerDecayTarget({
+      strict: 90,
+      floor: 100,
+      decayBars: 4,
+      openedAt: new Date(at.getTime() - 2 * hour),
+      at,
+      timeframe: "1h",
+    });
+    assert.equal(up.target, 95);
+
+    const done = bollingerDecayTarget({
+      strict: 100,
+      floor: 90,
+      decayBars: 4,
+      openedAt: new Date(at.getTime() - 5 * hour),
+      at,
+      timeframe: "1h",
+    });
+    assert.equal(done.barsHeld, 5);
+    assert.equal(done.target, 90);
+    assert.equal(done.flatten, true);
+  });
+});
+
+describe("decayBars", () => {
+  const at = new Date("2026-01-01T12:00:00Z");
+  const hour = 60 * 60 * 1000;
+  const perpsFees = { openFeePct: 0.01, closeFeePct: 0.01, borrowFeePctPerHour: 0.001 };
+
+  function longBook() {
+    const candles = reclaimLowerBand();
+    const strategy = looseFilters({ decayBars: 4, timeframe: "1h" });
+    const probe = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: candles[candles.length - 1]!.close,
+      at,
+    });
+    const mid = probe.meta?.bbMid;
+    assert.ok(mid != null && mid > 0);
+    const entry = mid * 0.97;
+    const spotFee = TIER_COSTS.liquid.slippage + TIER_COSTS.liquid.poolFee;
+    const floor = entry / (1 - spotFee);
+    assert.ok(floor < mid);
+    return { candles, strategy, entry, mid, floor };
+  }
+
+  function shortBook() {
+    const candles = reboundToMid();
+    const strategy = looseFilters({ decayBars: 4, timeframe: "1h" });
+    const probe = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: candles[candles.length - 1]!.close,
+      at,
+      perpsFees,
+    });
+    const mid = probe.meta?.bbMid;
+    assert.ok(mid != null && mid > 0);
+    const entry = mid * 1.03;
+    const slip = TIER_COSTS.liquid.slippage;
+    const heldFee = shortPositionFeePct({ ...perpsFees, heldMs: 2 * hour });
+    const openFee = shortPositionFeePct({ ...perpsFees, heldMs: 0 });
+    const minExit = (entry * (1 - heldFee)) / (1 + slip);
+    const floor = (entry * (1 - openFee)) / (1 + slip);
+    const strict = Math.min(mid, minExit);
+    assert.equal(strict, mid);
+    assert.ok(floor > mid);
+    const halfway = bollingerDecayTarget({
+      strict,
+      floor,
+      decayBars: 4,
+      openedAt: new Date(at.getTime() - 2 * hour),
+      at,
+      timeframe: "1h",
+    });
+    assert.ok(halfway.target > mid && halfway.target < floor);
+    return { candles, strategy, entry, mid, floor, halfway };
+  }
+
+  it("sells a long once the decayed target slides through the quote", () => {
+    const { candles, strategy, entry, mid, floor } = longBook();
+    const halfway = bollingerDecayTarget({
+      strict: mid,
+      floor,
+      decayBars: 4,
+      openedAt: new Date(at.getTime() - 2 * hour),
+      at,
+      timeframe: "1h",
+    });
+    const price = (halfway.target + mid) / 2;
+    assert.ok(price > halfway.target && price < mid);
+
+    const slid = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price,
+      entryPrice: entry,
+      openedAt: new Date(at.getTime() - 2 * hour),
+      at,
+    });
+    assert.equal(slid.side, "SELL", slid.reason);
+    assert.match(slid.reason, /profitable price/);
+
+    const fresh = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price,
+      entryPrice: entry,
+      openedAt: at,
+      at,
+    });
+    assert.equal(fresh.side, "HOLD", fresh.reason);
+    assert.match(fresh.reason, new RegExp(`Waiting for profitable price at ${mid.toFixed(4)}`));
+  });
+
+  it("holds a long still below the slid target and names that target", () => {
+    const { candles, strategy, entry, mid, floor } = longBook();
+    const openedAt = new Date(at.getTime() - 2 * hour);
+    const halfway = bollingerDecayTarget({
+      strict: mid,
+      floor,
+      decayBars: 4,
+      openedAt,
+      at,
+      timeframe: "1h",
+    });
+    const price = (floor + halfway.target) / 2;
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price,
+      entryPrice: entry,
+      openedAt,
+      at,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, new RegExp(`at ${halfway.target.toFixed(4)}`));
+  });
+
+  it("flattens a long at the horizon even below breakeven", () => {
+    const { candles, strategy, entry, floor } = longBook();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: floor * 0.99,
+      entryPrice: entry,
+      openedAt: new Date(at.getTime() - 4 * hour),
+      at,
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.match(signal.reason, /Time decay: 4 bars/);
+    assert.match(signal.reason, new RegExp(`floor ${floor.toFixed(4)}`));
+  });
+
+  it("does not flatten a long without openedAt", () => {
+    const { candles, strategy, entry, mid } = longBook();
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: mid * 0.99,
+      entryPrice: entry,
+      at,
+    });
+    assert.equal(signal.side, "HOLD", signal.reason);
+    assert.match(signal.reason, new RegExp(`Waiting for profitable price at ${mid.toFixed(4)}`));
+    assert.doesNotMatch(signal.reason, /Time decay/);
+  });
+
+  it("covers a short once the decayed target rises through the quote", () => {
+    const { candles, strategy, entry, mid, halfway } = shortBook();
+    const price = (mid + halfway.target) / 2;
+    const openedAt = new Date(at.getTime() - 2 * hour);
+
+    const slid = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price,
+      entryPrice: entry,
+      positionSide: "short",
+      openedAt,
+      at,
+      perpsFees,
+    });
+    assert.equal(slid.side, "BUY", slid.reason);
+    assert.match(slid.reason, /profitable price/);
+
+    const fresh = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price,
+      entryPrice: entry,
+      positionSide: "short",
+      openedAt: at,
+      at,
+      perpsFees,
+    });
+    assert.equal(fresh.side, "HOLD", fresh.reason);
+    assert.match(fresh.reason, new RegExp(`Waiting for profitable price at ${mid.toFixed(4)}`));
+  });
+
+  it("flattens a short at the horizon above the no-borrow floor", () => {
+    const { candles, strategy, entry, floor } = shortBook();
+    assert.ok(entry > floor);
+    const signal = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: entry,
+      entryPrice: entry,
+      positionSide: "short",
+      openedAt: new Date(at.getTime() - 4 * hour),
+      at,
+      perpsFees,
+    });
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.match(signal.reason, /Time decay: 4 bars/);
+    assert.match(signal.reason, new RegExp(`floor ${floor.toFixed(4)}`));
+  });
+
+  it("does not flatten a short without openedAt or a perps fee schedule", () => {
+    const { candles, strategy, entry, mid } = shortBook();
+    const above = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: entry,
+      entryPrice: entry,
+      positionSide: "short",
+      at,
+      perpsFees,
+    });
+    assert.equal(above.side, "HOLD", above.reason);
+    assert.match(above.reason, new RegExp(`Waiting for profitable price at ${mid.toFixed(4)}`));
+    assert.doesNotMatch(above.reason, /Time decay/);
+
+    const missingFees = evalBb({
+      pair: "SOL/USDC",
+      candles,
+      strategy,
+      price: entry * 0.5,
+      entryPrice: entry,
+      positionSide: "short",
+      openedAt: new Date(at.getTime() - 4 * hour),
+      at,
+    });
+    assert.equal(missingFees.side, "HOLD", missingFees.reason);
+    assert.match(missingFees.reason, /perps fee schedule missing/);
+  });
+});
+
 describe("BollingerStrategy", () => {
   it("does not gate entries on 1h volatility", () => {
     const candles = reclaimLowerBand();
@@ -727,7 +1030,11 @@ describe("BollingerStrategy", () => {
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB20/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /DI1 ADX<20/);
-    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop/);
+    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop|decay/);
+    assert.match(
+      new BollingerStrategy("flat", "low", baseParams({ decayBars: 12 })).getDisplayName(),
+      /decay12/,
+    );
     assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), /bollinger/);
     assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), /bollinger/);
   });

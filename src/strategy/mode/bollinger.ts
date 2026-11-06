@@ -62,6 +62,13 @@ export interface BollingerParams {
    * 2 = trade only when the trend is flat. An unknown trend never blocks.
    */
   trendFilter: number;
+  /**
+   * Bars of `timeframe` over which an open fade's exit slides from the
+   * profitable price to the fee breakeven. At that horizon the position closes
+   * at the quote. 0 disables. A short's breakeven ignores borrow accrued after
+   * the fill. Missing `openedAt` leaves the current gate and does not flatten.
+   */
+  decayBars: number;
 }
 
 /**
@@ -83,6 +90,46 @@ export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: 
   if (!(price > 0) || !(bbMid > 0)) return [];
   const beyond = side === "long" ? bbMid > price : bbMid < price;
   return beyond ? [bbMid] : [];
+}
+
+/** Exit price after sliding from the profitable price toward fee breakeven. */
+export interface BollingerDecayTarget {
+  /** `strict` at t = 0, `floor` once `decayBars` have elapsed. */
+  target: number;
+  floor: number;
+  barsHeld: number;
+  /** True once `barsHeld` has reached `decayBars`. */
+  flatten: boolean;
+}
+
+/**
+ * Linear slide from today's profitable price (`strict`) to the fee-breakeven
+ * `floor`. `decayBars` ≤ 0 or a missing `openedAt` leaves `target` at `strict`
+ * and does not flatten. Bars match Donchian: whole strategy-timeframe bars
+ * since the fill.
+ */
+export function bollingerDecayTarget(input: {
+  strict: number;
+  floor: number;
+  decayBars: number;
+  openedAt?: Date;
+  at: Date;
+  timeframe: Timeframe;
+}): BollingerDecayTarget {
+  const { strict, floor } = input;
+  const idle: BollingerDecayTarget = { target: strict, floor, barsHeld: 0, flatten: false };
+  if (!(input.decayBars > 0) || input.openedAt == null) return idle;
+  const intervalSec = candleIntervalSeconds(input.timeframe);
+  if (!(intervalSec > 0)) return idle;
+  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
+  const barsHeld = Math.floor(elapsedSec / intervalSec);
+  const t = Math.min(1, barsHeld / input.decayBars);
+  return {
+    target: strict + (floor - strict) * t,
+    floor,
+    barsHeld,
+    flatten: barsHeld >= input.decayBars,
+  };
 }
 
 /**
@@ -180,6 +227,7 @@ export function bollingerParamsFor(): BollingerParams {
     minRewardRisk: 0.3,
     stopAtr: 2.5,
     trendFilter: 0,
+    decayBars: 0,
   };
 }
 
@@ -197,6 +245,7 @@ export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
     { key: "minRewardRisk", levels: [0.1, 0.2, 0.3, 0.4, 0.5] },
     { key: "stopAtr", levels: [1, 1.5, 2, 2.5, 3, 3.5, 4, 5] },
     { key: "trendFilter", levels: [0, 1, 2] },
+    { key: "decayBars", levels: [0, 3, 6, 9, 12] },
   ],
 };
 
@@ -241,6 +290,10 @@ export interface BollingerInput {
  * `openedAt`, and cover slippage. Missing fees keep the short on HOLD.
  * An upper-band short — wick or close — is not opened without that schedule.
  * Regime and DI do not block a mid exit.
+ * When `decayBars` > 0 that profitable price slides linearly to the fee
+ * breakeven over that many bars, then the position closes at the quote.
+ * A short's breakeven ignores borrow accrued after the fill. Missing
+ * `openedAt`, or a missing perps schedule on a short, does not flatten.
  * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
  * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
  */
@@ -324,18 +377,32 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (long) {
     const exitFee = legFeePct(pair, "spot");
     const minExit = exitFee < 1 ? entry / (1 - exitFee) : entry;
-    const profitablePrice = Math.max(bbMid, minExit);
-    if (price >= profitablePrice) {
+    const decay = bollingerDecayTarget({
+      strict: Math.max(bbMid, minExit),
+      floor: minExit,
+      decayBars: strategy.decayBars,
+      at,
+      timeframe: strategy.timeframe,
+      ...(input.openedAt !== undefined ? { openedAt: input.openedAt } : {}),
+    });
+    if (price >= decay.target) {
       return {
         ...base,
         side: "SELL",
-        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+        reason: `Price ${fmt(price)} > profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+      };
+    }
+    if (decay.flatten) {
+      return {
+        ...base,
+        side: "SELL",
+        reason: timeDecayReason(decay, entry, bbMid),
       };
     }
     return {
       ...base,
       side: "HOLD",
-      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)}`,
+      reason: `Waiting for profitable price at ${fmt(decay.target)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)}`,
     };
   }
 
@@ -350,19 +417,39 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         heldMs,
       });
       const slip = legFeePct(pair, "perps");
-      const minExit = slip > -1 ? (entry * (1 - feePct)) / (1 + slip) : entry * (1 - feePct);
-      const profitablePrice = Math.min(bbMid, minExit);
-      if (price <= profitablePrice) {
+      const minExit = shortCoverPrice(entry, feePct, slip);
+      const floorFeePct = shortPositionFeePct({
+        openFeePct: fees.openFeePct,
+        closeFeePct: fees.closeFeePct,
+        borrowFeePctPerHour: fees.borrowFeePctPerHour,
+        heldMs: 0,
+      });
+      const decay = bollingerDecayTarget({
+        strict: Math.min(bbMid, minExit),
+        floor: shortCoverPrice(entry, floorFeePct, slip),
+        decayBars: strategy.decayBars,
+        at,
+        timeframe: strategy.timeframe,
+        ...(input.openedAt !== undefined ? { openedAt: input.openedAt } : {}),
+      });
+      if (price <= decay.target) {
         return {
           ...base,
           side: "BUY",
-          reason: `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+          reason: `Price ${fmt(price)} < profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+        };
+      }
+      if (decay.flatten) {
+        return {
+          ...base,
+          side: "BUY",
+          reason: timeDecayReason(decay, entry, bbMid),
         };
       }
       return {
         ...base,
         side: "HOLD",
-        reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
+        reason: `Waiting for profitable price at ${fmt(decay.target)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
       };
     }
     return {
@@ -498,7 +585,7 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 1h mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts and fades while ADX ≥ adxMax; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. */
+/** 1h mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts and fades while ADX ≥ adxMax; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. `decayBars` slides that target to fee breakeven, then closes at the quote. */
 export class BollingerStrategy implements Strategy {
   readonly axes = BOLLINGER_SEARCH_SPACE.axes;
   private readonly params: BollingerParams;
@@ -512,9 +599,10 @@ export class BollingerStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, diRatio, adxMax } = this.params;
+    const { timeframe, period, stdDev, diRatio, adxMax, decayBars } = this.params;
     const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
-    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${adx})`;
+    const decay = decayBars > 0 ? ` decay${decayBars}` : "";
+    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${adx}${decay})`;
   }
 
   getId(): string {
@@ -566,6 +654,18 @@ export class BollingerStrategy implements Strategy {
   buildChartSvg(pair: string, candles: Candle[]): string {
     return buildBollingerSvg({ pair, candles, strategy: this.params });
   }
+}
+
+/** Cover quote after `feePct` of entry notional and perps slippage. */
+function shortCoverPrice(entry: number, feePct: number, slip: number): number {
+  return slip > -1 ? (entry * (1 - feePct)) / (1 + slip) : entry * (1 - feePct);
+}
+
+function timeDecayReason(decay: BollingerDecayTarget, entry: number, mid: number): string {
+  return (
+    `Time decay: ${decay.barsHeld} bars, target ${fmt(decay.target)}, floor ${fmt(decay.floor)} ` +
+    `(entry=${fmt(entry)}, mid=${fmt(mid)})`
+  );
 }
 
 function breakoutRangeHold(

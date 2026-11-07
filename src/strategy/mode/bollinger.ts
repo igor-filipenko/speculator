@@ -227,24 +227,28 @@ export function bollingerParamsFor(): BollingerParams {
     minRewardRisk: 0.3,
     stopAtr: 2.5,
     trendFilter: 0,
-    decayBars: 0,
+    decayBars: 12,
   };
 }
 
-/** Decision knobs for `pnpm tune`. `atrPeriod` stays on {@link bollingerParamsFor}. */
+/**
+ * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h and `trendFilter`
+ * stays at 0: the last three SOL seeds never kept 15m, and the HTF gate did not
+ * cluster. Wide bands, a 30-bar lookback, and the tightest stops only won on
+ * those 15m folds. `atrPeriod` is its own axis, not tied to `period`.
+ */
 export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
   axes: [
-    { key: "timeframe", levels: [15, 60] },
-    { key: "period", levels: [14, 20, 30] },
-    { key: "adxPeriod", levels: [14, 20, 28] },
+    { key: "period", levels: [14, 20] },
+    { key: "atrPeriod", levels: [14, 20, 28] },
+    { key: "adxPeriod", levels: [20, 28] },
     { key: "adxMax", levels: [0, 20, 25] },
-    { key: "stdDev", levels: [1.2, 1.3, 1.5, 2, 2.2, 2.5] },
-    { key: "diRatio", levels: [1, 1.2, 1.5, 2] },
-    { key: "minReclaimDepth", levels: [0.05, 0.1, 0.2] },
-    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 3, 3.5, 4] },
-    { key: "minRewardRisk", levels: [0.1, 0.2, 0.3, 0.4, 0.5] },
-    { key: "stopAtr", levels: [1, 1.5, 2, 2.5, 3, 3.5, 4, 5] },
-    { key: "trendFilter", levels: [0, 1, 2] },
+    { key: "stdDev", levels: [1.2, 1.3, 1.5] },
+    { key: "diRatio", levels: [1, 1.5, 2] },
+    { key: "minReclaimDepth", levels: [0.1, 0.2] },
+    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 4] },
+    { key: "minRewardRisk", levels: [0.2, 0.3, 0.4] },
+    { key: "stopAtr", levels: [2, 2.5, 3, 4] },
     { key: "decayBars", levels: [0, 3, 6, 9, 12] },
   ],
 };

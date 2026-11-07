@@ -407,19 +407,27 @@ describe("timeframe axis", () => {
   const primary = Array.from({ length: 16 }, (_, i) => quarter(i));
   const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
 
-  it("defaults the search to the signal timeframe and a separate ADX period", () => {
+  it("keeps 1h and splits the ATR period from the band and ADX periods", () => {
     const strategy = new BollingerStrategy();
     const defaults = defaultLevels(strategy, strategy.getSearchDefaults());
-    assert.equal(defaults["timeframe"], 60);
+    assert.equal(defaults["timeframe"], undefined);
+    assert.equal(defaults["trendFilter"], undefined);
     assert.equal(defaults["period"], 20);
+    assert.equal(defaults["atrPeriod"], 20);
     assert.equal(defaults["adxPeriod"], 28);
     assert.equal(defaults["adxMax"], 20);
+    assert.equal(strategy.getRequiredCandles().timeframe, "1h");
     const period = strategy.axes.find((axis) => axis.key === "period");
+    const atrPeriod = strategy.axes.find((axis) => axis.key === "atrPeriod");
     const adxPeriod = strategy.axes.find((axis) => axis.key === "adxPeriod");
-    const adxMax = strategy.axes.find((axis) => axis.key === "adxMax");
     assert.ok(period);
+    assert.ok(atrPeriod);
     assert.ok(adxPeriod);
-    assert.ok(adxMax);
+    assert.equal(
+      strategy.axes.some((axis) => axis.key === "timeframe" || axis.key === "trendFilter"),
+      false,
+    );
+    assert.notDeepEqual(period.levels, atrPeriod.levels);
     assert.notDeepEqual(period.levels, adxPeriod.levels);
   });
 

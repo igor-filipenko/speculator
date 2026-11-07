@@ -127,7 +127,7 @@ To test one knob, do not read it off tuned winners. Fix every other parameter, t
 
 ## Limits to remember
 
-- Backtest replays synthetic ticks inside each candle, so intrabar order of stop and target is an approximation.
+- The default replay walks synthetic ticks inside each candle, so the order of a stop and a target inside one bar is an approximation. `pnpm tune -- --quotes 1m` steps each signal bar on real minute closes, the same path as `pnpm backtest -- --quotes 1m`.
 - Costs use fixed tiers (`SOL/USDC` is liquid) and a perps fee snapshot. Large size or thin pairs will fill worse.
 - Only pairs with a Jupiter Perps market (SOL, ETH, BTC) can short. Other pairs are long-only in backtest and live.
 - One position per pair, no leverage. Results do not transfer to other sizing rules.

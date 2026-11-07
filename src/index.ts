@@ -47,7 +47,7 @@ function usage(): never {
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
   tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
-  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>]
+  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]]
 
 Options:
@@ -58,7 +58,7 @@ Options:
   --to <date>       Replay range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
-  --quotes 1m       Replay quotes on 1m closes (backtest only; default: synthetic OHLC path; excludes --monte-carlo)
+  --quotes 1m       Replay quotes on 1m closes (backtest and tune; default: synthetic OHLC path; excludes --monte-carlo)
   --monte-carlo <n> Run N Monte Carlo intra-bar path samples (backtest only; ≥ 1)
   --walk-forward <n> Walk-forward N-fold temporal validation (backtest only; ≥ 2; excludes --monte-carlo)
   --folds <n>       Anchored walk-forward folds (tune only; ≥ 2; default 4)
@@ -338,6 +338,7 @@ async function runTuneCommand(argv: string[]): Promise<void> {
     minReturnPct: flags.minReturnPct,
     minProfitFactor: flags.minProfitFactor,
     jobs: flags.jobs,
+    ...(flags.quotes !== undefined ? { quotes: flags.quotes } : {}),
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
     ...(flags.days !== undefined ? { days: flags.days } : {}),

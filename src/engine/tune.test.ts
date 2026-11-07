@@ -235,6 +235,14 @@ describe("parseTuneArgs", () => {
     assert.equal(flags.jobs, os.availableParallelism());
     assert.equal(flags.days, undefined);
     assert.equal(flags.fromTime, undefined);
+    assert.equal(flags.quotes, undefined);
+  });
+
+  it("accepts --quotes 1m and rejects other quote series", () => {
+    assert.equal(parseTuneArgs(["--quotes", "1m"]).quotes, "1m");
+    assert.equal(parseTuneArgs(["--quotes=1m"]).quotes, "1m");
+    assert.throws(() => parseTuneArgs(["--quotes", "5m"]), /only accepts 1m/);
+    assert.throws(() => parseTuneArgs(["--quotes"]), /requires a value/);
   });
 
   it("rejects combining --days with --from", () => {

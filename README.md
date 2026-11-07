@@ -232,8 +232,9 @@ pnpm tune -- --from 01-01-2026 --to 01-10-2026 --max-trials 48
 | `--min-return <pct>` | Reject a trial that returns at most this percent on train (default **0**) |
 | `--min-pf <x>`       | Reject a trial below this profit factor on train (default **1.1**)        |
 | `--jobs <n>`         | Replay workers (default: one per CPU; **1** runs on this thread)          |
+| `--quotes 1m`        | Step each signal bar on real 1m closes (default: synthetic OHLC path)     |
 
-Tune searches the numeric axes exported by the active strategy. The replay uses the synthetic OHLC path.
+Tune searches the numeric axes exported by the active strategy. The default replay uses the synthetic OHLC path. `--quotes 1m` uses the same minute-close fills as backtest.
 
 Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
 

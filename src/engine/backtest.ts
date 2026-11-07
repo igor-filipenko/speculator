@@ -525,6 +525,24 @@ async function loadMinuteQuotes(args: {
   });
 }
 
+/**
+ * Minutes whose open falls inside `bar`. `minutes` is sorted by open time, and
+ * `cursor` is the first minute that might still belong to this bar or a later one.
+ */
+function minutesForBar(
+  minutes: readonly Candle[],
+  cursor: { index: number },
+  bar: Candle,
+): Candle[] {
+  const end = bar.time + bar.intervalSeconds;
+  let index = cursor.index;
+  while (index < minutes.length && minutes[index]!.time < bar.time) index += 1;
+  const start = index;
+  while (index < minutes.length && minutes[index]!.time < end) index += 1;
+  cursor.index = index;
+  return minutes.slice(start, index);
+}
+
 async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
@@ -566,6 +584,8 @@ async function replayPair(args: {
   let htfEnd = 0;
   let mtfEnd = 0;
   let lastMarket: MarketIndicators | undefined;
+  // `minuteCandles` is time-sorted. The cursor walks it once per replay.
+  const minuteCursor = { index: 0 };
 
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
@@ -576,7 +596,7 @@ async function replayPair(args: {
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks =
       args.minuteCandles !== undefined
-        ? minuteQuoteTicks(candle, args.minuteCandles)
+        ? minuteQuoteTicks(candle, minutesForBar(args.minuteCandles, minuteCursor, candle))
         : intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
 
     // Volume-weighted slippage. Every source stores base-token volume.

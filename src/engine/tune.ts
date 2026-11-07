@@ -73,6 +73,8 @@ export interface TuneCliOptions {
   minProfitFactor: number;
   /** Worker count. `1` replays on this thread. */
   jobs: number;
+  /** When `1m`, each signal bar is stepped on real minute closes. */
+  quotes?: "1m";
 }
 
 export interface WalkForwardWindow {
@@ -137,6 +139,10 @@ export interface RunTuneOptions {
    * The CLI defaults this to `os.availableParallelism()`.
    */
   jobs?: number;
+  /** When `1m`, replays step each signal bar on real minute closes. */
+  quotes?: "1m";
+  /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
+  minuteCandles?: Candle[];
   fromTime?: number;
   toTime?: number;
   days?: number;
@@ -268,6 +274,7 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
   let minReturnPct = TUNE_DEFAULT_MIN_RETURN_PCT;
   let minProfitFactor = TUNE_DEFAULT_MIN_PROFIT_FACTOR;
   let jobs = os.availableParallelism();
+  let quotes: "1m" | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -326,6 +333,15 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
         throw new Error(`Invalid --min-trades value: ${value}`);
       }
       minTrades = parsed;
+      i = nextIndex;
+      continue;
+    }
+    if (arg === "--quotes" || arg?.startsWith("--quotes=")) {
+      const { value, nextIndex } = readFlagValue(argv, i, "--quotes");
+      if (value !== "1m") {
+        throw new Error("--quotes only accepts 1m");
+      }
+      quotes = "1m";
       i = nextIndex;
       continue;
     }
@@ -394,13 +410,14 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
   if (toTime !== undefined) result.toTime = toTime;
   if (days !== undefined) result.days = days;
   if (strategy !== undefined) result.strategy = strategy;
+  if (quotes !== undefined) result.quotes = quotes;
   return result;
 }
 
 /**
  * Pick parameters on each anchored train window and score that single set on
- * the next fold. Candles load once per pair. The synthetic OHLC path is the
- * same one a default backtest uses.
+ * the next fold. Candles load once per pair. The default path is the synthetic
+ * OHLC walk. `quotes: "1m"` steps each signal bar on real minute closes.
  */
 export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
   const window = replayWindow(options);
@@ -468,6 +485,14 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
           `${new Date(window.fromTime * 1000).toISOString()} → ${new Date(window.toTime * 1000).toISOString()}`,
       );
     }
+    const minuteCandles = await loadTuneMinutes({
+      quotes: options.quotes,
+      injected: options.minuteCandles,
+      skipNetwork,
+      market,
+      pair,
+      candles,
+    });
     results.push(
       await tunePair({
         pair,
@@ -480,6 +505,7 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
         altCandles,
         htfCandles,
         mtfCandles,
+        ...(minuteCandles !== undefined ? { minuteCandles } : {}),
         folds: options.folds,
         maxTrials: options.maxTrials,
         seed: options.seed,
@@ -585,6 +611,8 @@ interface ReplayContext {
   altCandles: Record<string, Candle[]>;
   htfCandles: Candle[];
   mtfCandles: Candle[];
+  /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
+  minuteCandles?: Candle[];
   pool?: ReplayPool;
 }
 
@@ -653,6 +681,8 @@ async function tunePair(args: {
   maxDrawdownPct: number;
   gates: TrialGates;
   jobs: number;
+  /** Time-sorted 1m candles covering the signal series. */
+  minuteCandles?: Candle[];
 }): Promise<TuneResult> {
   const bounds = foldBounds(args.candles, args.folds);
   const sample = sampleSearchSpace(args.space, args.maxTrials, args.seed, args.defaults);
@@ -667,6 +697,7 @@ async function tunePair(args: {
           altCandles: args.altCandles,
           htfCandles: args.htfCandles,
           mtfCandles: args.mtfCandles,
+          ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
         })
       : undefined;
   try {
@@ -686,6 +717,7 @@ async function tunePair(args: {
       altCandles: args.altCandles,
       htfCandles: args.htfCandles,
       mtfCandles: args.mtfCandles,
+      ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
       ...(pool !== undefined ? { pool } : {}),
     };
     const first = await runRequests(
@@ -955,7 +987,32 @@ async function replaySlice(ctx: ReplayContext, request: ReplayRequest): Promise<
     candles: replayCandles(ctx.candles, ctx.altCandles, request),
     htfCandles: ctx.htfCandles,
     mtfCandles: ctx.mtfCandles,
+    ...(ctx.minuteCandles !== undefined ? { minuteCandles: ctx.minuteCandles } : {}),
     ...(request.patch !== undefined ? { patch: request.patch } : {}),
+  });
+}
+
+async function loadTuneMinutes(args: {
+  quotes: "1m" | undefined;
+  injected: Candle[] | undefined;
+  skipNetwork: boolean;
+  market: ReturnType<typeof createMarket>;
+  pair: PairConfig;
+  candles: Candle[];
+}): Promise<Candle[] | undefined> {
+  if (args.quotes !== "1m") return undefined;
+  if (args.injected !== undefined) return args.injected;
+  if (args.skipNetwork) {
+    throw new Error("quotes 1m requires minute candles when signal candles are injected");
+  }
+  const first = args.candles[0];
+  const last = args.candles[args.candles.length - 1];
+  if (first === undefined || last === undefined) return [];
+  return args.market.fetchCandles({
+    pair: args.pair,
+    timeframe: "1m",
+    fromTime: first.time,
+    toTime: last.time + last.intervalSeconds,
   });
 }
 
@@ -965,6 +1022,7 @@ async function replayMetrics(args: {
   candles: Candle[];
   htfCandles: Candle[];
   mtfCandles: Candle[];
+  minuteCandles?: Candle[];
   patch?: StrategyParamPatch;
 }): Promise<BacktestMetrics> {
   const strategyManager = await SimpleStrategyManager.create({
@@ -978,6 +1036,9 @@ async function replayMetrics(args: {
     candles: args.candles,
     htfCandles: args.htfCandles,
     mtfCandles: args.mtfCandles,
+    ...(args.minuteCandles !== undefined
+      ? { quotes: "1m" as const, minuteCandles: args.minuteCandles }
+      : {}),
   });
   if (result === undefined) {
     throw new Error("Backtest returned no results");
@@ -1351,6 +1412,8 @@ interface PoolInit {
   altCandles: Record<string, Candle[]>;
   htfCandles: Candle[];
   mtfCandles: Candle[];
+  /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
+  minuteCandles?: Candle[];
 }
 
 interface WorkerInitMessage {
@@ -1361,6 +1424,7 @@ interface WorkerInitMessage {
   altCandles: Record<string, CandlePayload[]>;
   htfCandles: CandlePayload[];
   mtfCandles: CandlePayload[];
+  minuteCandles?: CandlePayload[];
 }
 
 interface WorkerJobMessage {
@@ -1445,6 +1509,9 @@ class ReplayPool {
       ),
       htfCandles: candlePayload(init.htfCandles),
       mtfCandles: candlePayload(init.mtfCandles),
+      ...(init.minuteCandles !== undefined
+        ? { minuteCandles: candlePayload(init.minuteCandles) }
+        : {}),
     };
     return new Promise((resolve, reject) => {
       const onError = (error: Error): void => {
@@ -1597,6 +1664,9 @@ function startReplayWorker(): void {
         ),
         htfCandles: message.htfCandles.map((row) => createCandle(row)),
         mtfCandles: message.mtfCandles.map((row) => createCandle(row)),
+        ...(message.minuteCandles !== undefined
+          ? { minuteCandles: message.minuteCandles.map((row) => createCandle(row)) }
+          : {}),
       };
       port.postMessage({ kind: "ready" } satisfies WorkerOutbound);
       return;
@@ -1620,6 +1690,7 @@ function startReplayWorker(): void {
       }),
       htfCandles: current.htfCandles,
       mtfCandles: current.mtfCandles,
+      ...(current.minuteCandles !== undefined ? { minuteCandles: current.minuteCandles } : {}),
       ...(message.patch !== undefined ? { patch: message.patch } : {}),
     }).then(
       (metrics) => {

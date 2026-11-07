@@ -131,12 +131,123 @@ describe("evaluateBollingerRsi", () => {
       price: 101,
       entryPrice: 95,
       positionSide: "long",
+      slPrice: 90,
     });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.equal(signal.strategyId, "bollinger-rsi");
+    assert.equal(signal.closeFraction, 0.5);
+    assert.ok(signal.slPrice != null && signal.slPrice > 95);
     assert.ok(signal.meta?.rsi != null);
   });
+
+  it("sells the remainder at the upper band and scratches it at breakeven", () => {
+    const candles = wave();
+    const half = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: 108,
+      entryPrice: 100,
+      positionSide: "long",
+      slPrice: 90,
+    });
+    assert.equal(half.side, "SELL", half.reason);
+    assert.equal(half.closeFraction, 0.5);
+    const upper = half.meta?.bbUpper ?? 0;
+    const breakeven = half.slPrice ?? 0;
+    assert.ok(upper > 108, half.reason);
+    assert.ok(breakeven > 100 && breakeven < 108);
+
+    const hold = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: 108,
+      entryPrice: 100,
+      positionSide: "long",
+      slPrice: breakeven,
+    });
+    assert.equal(hold.side, "HOLD", hold.reason);
+    assert.equal(hold.meta?.barLow, 108);
+    assert.equal(hold.closeFraction, undefined);
+
+    const runner = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: upper,
+      entryPrice: 100,
+      positionSide: "long",
+      slPrice: breakeven,
+    });
+    assert.equal(runner.side, "SELL", runner.reason);
+    assert.equal(runner.closeFraction, undefined);
+    assert.match(runner.reason, /upper band/);
+
+    const scratch = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: breakeven,
+      entryPrice: 100,
+      positionSide: "long",
+      slPrice: breakeven,
+    });
+    assert.equal(scratch.side, "SELL", scratch.reason);
+    assert.match(scratch.reason, /breakeven/);
+  });
+
+  it("covers half of a short at the mid and the rest at the lower band", () => {
+    const candles = wave();
+    const half = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: 102,
+      entryPrice: 110,
+      positionSide: "short",
+      slPrice: 120,
+      perpsFees: PERPS,
+    });
+    assert.equal(half.side, "BUY", half.reason);
+    assert.equal(half.closeFraction, 0.5);
+    const lower = half.meta?.bbLower ?? 0;
+    const breakeven = half.slPrice ?? 0;
+    assert.ok(lower < 102, half.reason);
+    assert.ok(breakeven < 110 && breakeven > 102);
+
+    const hold = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: 102,
+      entryPrice: 110,
+      positionSide: "short",
+      slPrice: breakeven,
+      perpsFees: PERPS,
+    });
+    assert.equal(hold.side, "HOLD", hold.reason);
+
+    const runner = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: lower,
+      entryPrice: 110,
+      positionSide: "short",
+      slPrice: breakeven,
+      perpsFees: PERPS,
+    });
+    assert.equal(runner.side, "BUY", runner.reason);
+    assert.equal(runner.closeFraction, undefined);
+    assert.match(runner.reason, /lower band/);
+  });
+
+  it("flattens the whole position when the decay horizon is reached", () => {
+    const candles = wave();
+    const last = candles[candles.length - 1]!;
+    const openedAt = new Date(last.time * 1000);
+    const at = new Date((last.time + 20 * 3600) * 1000);
+    const signal = evalRsi(candles, loose({ decayBars: 12 }), {
+      price: 100,
+      entryPrice: 90,
+      positionSide: "long",
+      slPrice: 80,
+      openedAt,
+      at,
+    });
+    assert.equal(signal.side, "SELL", signal.reason);
+    assert.equal(signal.closeFraction, undefined);
+    assert.match(signal.reason, /Time decay/);
+  });
 });
+
+/** Alternating closes so the mid sits near 105 and the bands stay wide. */
+function wave(): Candle[] {
+  const start = 1_700_000_000;
+  const candles: Candle[] = [];
+  for (let i = 0; i < 40; i++) candles.push(bar(start + i * 3600, i % 2 === 0 ? 100 : 110, 0.5));
+  return candles;
+}
 
 describe("BollingerRsiStrategy", () => {
   it("uses registry id bollinger-rsi and names the RSI gates", () => {

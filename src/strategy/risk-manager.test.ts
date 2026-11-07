@@ -81,6 +81,80 @@ describe("evaluateProtectiveExit", () => {
     assert.equal(cmd.intent, "close-long");
     assert.match(cmd.reason, /hard stop hit \(98/);
   });
+
+  it("closes the full size on a stop even when the signal asks for a fraction", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 100,
+      size: 2,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 98,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "SELL",
+      reason: "half",
+      price: 110,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      tpPrices: [],
+      minRewardRisk: 0.1,
+      closeFraction: 0.5,
+      slPrice: 101,
+      meta: { barLow: 97, barHigh: 110 },
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(110), []);
+    assert.equal(result.kind, "protective-command");
+    if (result.kind === "protective-command") {
+      assert.equal(result.command.baseSize, 2);
+    }
+  });
+});
+
+describe("scale-out close", () => {
+  it("closes the requested fraction and copies the remainder stop", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    portfolio.applyOrderSync({
+      pair: "SOL/USDC",
+      type: "market",
+      intent: "open-long",
+      reason: "entry",
+      price: 100,
+      size: 2,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger-rsi",
+      slPrice: 90,
+    });
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger-rsi",
+      side: "SELL",
+      reason: "half",
+      price: 110,
+      at: new Date("2026-01-01T01:00:00.000Z"),
+      tpPrices: [],
+      minRewardRisk: 0.1,
+      closeFraction: 0.5,
+      slPrice: 101,
+      meta: { barLow: 109, barHigh: 111 },
+    };
+    const result = new GenericRiskManager().check(signal, portfolio.getSnapshot(110), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      assert.equal(result.command.intent, "close-long");
+      assert.equal(result.command.baseSize, 1);
+      assert.equal(result.command.slPrice, 101);
+    }
+  });
 });
 
 describe("opening command", () => {

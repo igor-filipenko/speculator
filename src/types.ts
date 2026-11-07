@@ -154,6 +154,11 @@ export interface Signal {
    * the same floor to the gross target. Unused when `tpPrices` is empty (Donchian sets 0).
    */
   minRewardRisk: number;
+  /**
+   * Share of the open position this exit closes. Omitted means the whole position.
+   * A protective stop ignores it and closes the full size.
+   */
+  closeFraction?: number;
   meta?: {
     emaFast?: number;
     emaSlow?: number;

@@ -124,6 +124,11 @@ export interface BollingerRsiInput {
   /** When the open position was filled. Borrow and decay count from here. */
   openedAt?: Date;
   /**
+   * Stored hard stop. A stop on the profitable side of the entry means the
+   * first half is already closed and this evaluation manages the remainder.
+   */
+  slPrice?: number;
+  /**
    * Perps open/close/borrow rates. Missing rates block a new short and keep
    * an open short on HOLD.
    */
@@ -141,10 +146,13 @@ const REWARD_RISK_EPSILON = 1e-9;
  * needs a perps fee schedule.
  * A candle wider than `maxBreakAtr` × ATR is ignored. ADX ≥ `adxMax` waits
  * for a range (`adxMax` 0 leaves that gate off). Neither gate blocks an exit.
- * An open long sells at the profitable price (mid, after the exit-leg fee).
- * An open short covers at the mirror price, including borrow since the fill.
- * `decayBars` slides that target to fee breakeven, then closes at the quote.
- * A short's breakeven ignores borrow accrued after the fill.
+ * An open long sells half at the profitable price (mid, after the exit-leg fee)
+ * and moves the remainder's stop to fee breakeven. The remainder sells at the
+ * upper band, at that stop, or at the quote once `decayBars` elapses.
+ * An open short covers half at the mirror price, then the rest at the lower
+ * band. `decayBars` still slides the first target toward breakeven and flattens
+ * whatever size is left at the horizon. A short's breakeven ignores borrow
+ * accrued after the fill.
  */
 export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
   const at = input.at ?? new Date();
@@ -209,7 +217,18 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
   const entry = input.entryPrice;
   const openSide = input.positionSide;
   if (entry != null && entry > 0 && openSide !== "short") {
-    return longExit(base, pair, price, entry, bbMid, strategy, at, input.openedAt);
+    return longExit(
+      base,
+      pair,
+      price,
+      entry,
+      bbMid,
+      bbUpper,
+      strategy,
+      at,
+      input.openedAt,
+      input.slPrice,
+    );
   }
   if (openSide === "short" && entry != null && entry > 0) {
     return shortExit(
@@ -218,10 +237,12 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
       price,
       entry,
       bbMid,
+      bbLower,
       strategy,
       at,
       input.openedAt,
       input.perpsFees,
+      input.slPrice,
     );
   }
 
@@ -363,6 +384,7 @@ export class BollingerRsiStrategy implements Strategy {
         ? {
             entryPrice: positioned.entryPrice,
             positionSide: positioned.side,
+            slPrice: positioned.slPrice,
             ...(positioned.openedAt != null ? { openedAt: positioned.openedAt } : {}),
           }
         : {}),
@@ -384,35 +406,82 @@ interface SignalBase {
   minRewardRisk: number;
 }
 
+const SCALE_OUT_FRACTION = 0.5;
+
 function longExit(
   base: SignalBase,
   pair: string,
   price: number,
   entry: number,
   bbMid: number,
+  bbUpper: number,
   strategy: BollingerRsiParams,
   at: Date,
   openedAt: Date | undefined,
+  slPrice: number | undefined,
 ): Signal {
   const exitFee = legFeePct(pair, "spot");
   const minExit = exitFee < 1 ? entry / (1 - exitFee) : entry;
-  const decay = decayTarget({
-    strict: Math.max(bbMid, minExit),
-    floor: minExit,
+  const clock = {
     decayBars: strategy.decayBars,
     at,
     timeframe: strategy.timeframe,
     ...(openedAt !== undefined ? { openedAt } : {}),
+  };
+  if (stopIsRunner("long", entry, slPrice)) {
+    // The forming bar still contains the wick from before the half exit.
+    // Quote marks keep that wick from stopping the remainder at breakeven.
+    base.meta.barLow = price;
+    base.meta.barHigh = price;
+    const decay = decayTarget({ strict: minExit, floor: minExit, ...clock });
+    if (decay.flatten) {
+      return { ...base, side: "SELL", reason: timeDecayReason(decay, entry, bbMid) };
+    }
+    if (price <= minExit) {
+      return {
+        ...base,
+        side: "SELL",
+        reason: `Price ${fmt(price)} ≤ breakeven ${fmt(minExit)}; closing remainder (entry=${fmt(entry)})`,
+      };
+    }
+    if (price >= bbUpper && bbUpper > minExit) {
+      return {
+        ...base,
+        side: "SELL",
+        reason: `Price ${fmt(price)} ≥ upper band ${fmt(bbUpper)}; closing remainder (entry=${fmt(entry)})`,
+      };
+    }
+    return {
+      ...base,
+      side: "HOLD",
+      reason: `Waiting for upper band ${fmt(bbUpper)} or breakeven ${fmt(minExit)} (entry=${fmt(entry)})`,
+    };
+  }
+  const decay = decayTarget({
+    strict: Math.max(bbMid, minExit),
+    floor: minExit,
+    ...clock,
   });
+  if (decay.flatten) {
+    return { ...base, side: "SELL", reason: timeDecayReason(decay, entry, bbMid) };
+  }
   if (price >= decay.target) {
+    if (!(decay.target > minExit)) {
+      return {
+        ...base,
+        side: "SELL",
+        reason: `Price ${fmt(price)} > profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+      };
+    }
     return {
       ...base,
       side: "SELL",
-      reason: `Price ${fmt(price)} > profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+      closeFraction: SCALE_OUT_FRACTION,
+      slPrice: minExit,
+      reason:
+        `Price ${fmt(price)} > profitable price ${fmt(decay.target)}; closing half, ` +
+        `stop remainder at ${fmt(minExit)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, spotFee=${pct(exitFee)})`,
     };
-  }
-  if (decay.flatten) {
-    return { ...base, side: "SELL", reason: timeDecayReason(decay, entry, bbMid) };
   }
   return {
     ...base,
@@ -427,10 +496,12 @@ function shortExit(
   price: number,
   entry: number,
   bbMid: number,
+  bbLower: number,
   strategy: BollingerRsiParams,
   at: Date,
   openedAt: Date | undefined,
   perpsFees: PerpsFees | undefined,
+  slPrice: number | undefined,
 ): Signal {
   if (perpsFees == null) {
     return { ...base, side: "HOLD", reason: "Short cover held: perps fee schedule missing" };
@@ -440,29 +511,77 @@ function shortExit(
   const slip = legFeePct(pair, "perps");
   const minExit = shortCoverPrice(entry, feePct, slip);
   const floorFeePct = shortPositionFeePct({ ...perpsFees, heldMs: 0 });
-  const decay = decayTarget({
-    strict: Math.min(bbMid, minExit),
-    floor: shortCoverPrice(entry, floorFeePct, slip),
+  const floor = shortCoverPrice(entry, floorFeePct, slip);
+  const clock = {
     decayBars: strategy.decayBars,
     at,
     timeframe: strategy.timeframe,
     ...(openedAt !== undefined ? { openedAt } : {}),
+  };
+  if (stopIsRunner("short", entry, slPrice)) {
+    base.meta.barLow = price;
+    base.meta.barHigh = price;
+    const decay = decayTarget({ strict: floor, floor, ...clock });
+    if (decay.flatten) {
+      return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
+    }
+    if (price >= floor) {
+      return {
+        ...base,
+        side: "BUY",
+        reason: `Price ${fmt(price)} ≥ breakeven ${fmt(floor)}; closing remainder (entry=${fmt(entry)})`,
+      };
+    }
+    if (price <= bbLower && bbLower < floor) {
+      return {
+        ...base,
+        side: "BUY",
+        reason: `Price ${fmt(price)} ≤ lower band ${fmt(bbLower)}; closing remainder (entry=${fmt(entry)})`,
+      };
+    }
+    return {
+      ...base,
+      side: "HOLD",
+      reason: `Waiting for lower band ${fmt(bbLower)} or breakeven ${fmt(floor)} (entry=${fmt(entry)})`,
+    };
+  }
+  const decay = decayTarget({
+    strict: Math.min(bbMid, minExit),
+    floor,
+    ...clock,
   });
+  if (decay.flatten) {
+    return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
+  }
   if (price <= decay.target) {
+    if (!(decay.target < floor)) {
+      return {
+        ...base,
+        side: "BUY",
+        reason: `Price ${fmt(price)} < profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+      };
+    }
     return {
       ...base,
       side: "BUY",
-      reason: `Price ${fmt(price)} < profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+      closeFraction: SCALE_OUT_FRACTION,
+      slPrice: floor,
+      reason:
+        `Price ${fmt(price)} < profitable price ${fmt(decay.target)}; closing half, ` +
+        `stop remainder at ${fmt(floor)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, perpsFee=${pct(feePct)})`,
     };
-  }
-  if (decay.flatten) {
-    return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
   }
   return {
     ...base,
     side: "HOLD",
     reason: `Waiting for profitable price at ${fmt(decay.target)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
   };
+}
+
+/** True once the stored stop has been moved to the profitable side of the entry. */
+function stopIsRunner(side: "long" | "short", entry: number, slPrice: number | undefined): boolean {
+  if (slPrice == null || !(slPrice > 0) || !(entry > 0)) return false;
+  return side === "long" ? slPrice >= entry : slPrice <= entry;
 }
 
 function stopPrice(

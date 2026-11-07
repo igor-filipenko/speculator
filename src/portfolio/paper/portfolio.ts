@@ -243,9 +243,10 @@ export class PaperPortfolio implements Portfolio {
       return null;
     }
 
-    const size = order.size;
+    const size = takenBaseSize(this.position.size, order.size);
+    if (!(size > 0)) return null;
     const priorityFeeUsdc = order.priorityFeeUsdc;
-    const paidFee = this.position.paidFee ?? 0;
+    const paidFee = feeForClose(this.position.paidFee ?? 0, size, this.position.size);
     const proceeds = size * order.price - priorityFeeUsdc;
     const cost = size * this.position.entryPrice;
     const pnl = proceeds - cost - paidFee;
@@ -263,14 +264,7 @@ export class PaperPortfolio implements Portfolio {
 
     this.cashUsdc = Math.max(0, this.cashUsdc + proceeds);
     this.realizedPnl += pnl;
-    this.position = {
-      pair: order.pair,
-      side: "flat",
-      size: 0,
-      entryPrice: 0,
-      strategyId: "",
-      slPrice: 0,
-    };
+    this.position = reduceOrFlat(this.position, size, order.slPrice);
     this.trades.push(trade);
     return trade;
   }
@@ -305,13 +299,14 @@ export class PaperPortfolio implements Portfolio {
       return null;
     }
 
-    const size = order.size;
+    const size = takenBaseSize(this.position.size, order.size);
+    if (!(size > 0)) return null;
     const notional = size * this.position.entryPrice;
     const heldMs =
       this.position.openedAt != null ? order.at.getTime() - this.position.openedAt.getTime() : 0;
     const perps = order.fillCosts?.perps;
     const perpsFeeUsdc = perps != null ? notional * shortCloseFeePct({ ...perps, heldMs }) : 0;
-    const paidFee = this.position.paidFee ?? 0;
+    const paidFee = feeForClose(this.position.paidFee ?? 0, size, this.position.size);
     const pnl =
       size * (this.position.entryPrice - order.price) -
       order.priorityFeeUsdc -
@@ -331,17 +326,48 @@ export class PaperPortfolio implements Portfolio {
 
     this.cashUsdc = Math.max(0, this.cashUsdc + pnl);
     this.realizedPnl += pnl;
-    this.position = {
-      pair: order.pair,
+    this.position = reduceOrFlat(this.position, size, order.slPrice);
+    this.trades.push(trade);
+    return trade;
+  }
+}
+
+/** Base size this close actually takes. Never more than the open size. */
+function takenBaseSize(positionSize: number, orderSize: number): number {
+  if (!(orderSize > 0) || !(positionSize > 0)) return 0;
+  return Math.min(orderSize, positionSize);
+}
+
+/** Open fee attributed to this close, in proportion to the size taken. */
+function feeForClose(paidFee: number, taken: number, positionSize: number): number {
+  if (!(paidFee > 0) || !(positionSize > 0) || !(taken > 0)) return 0;
+  return paidFee * (taken / positionSize);
+}
+
+/**
+ * Leave the unsold size open, or go flat when the close takes the position.
+ * A tighter stop on the order replaces the stored stop for the remainder.
+ */
+function reduceOrFlat(position: Position, taken: number, slPrice: number | undefined): Position {
+  const remain = position.size - taken;
+  if (!(remain > position.size * 1e-9) || !(remain > 1e-12)) {
+    return {
+      pair: position.pair,
       side: "flat",
       size: 0,
       entryPrice: 0,
       strategyId: "",
       slPrice: 0,
     };
-    this.trades.push(trade);
-    return trade;
   }
+  const paid = position.paidFee ?? 0;
+  const next: Position = { ...position, size: remain };
+  if (paid > 0) {
+    const left = paid * (1 - taken / position.size);
+    if (left > 0) next.paidFee = left;
+  }
+  if (slPrice != null && slPrice > 0) next.slPrice = slPrice;
+  return next;
 }
 
 function openedPosition(pair: string, side: "long" | "short", order: Order): Position {

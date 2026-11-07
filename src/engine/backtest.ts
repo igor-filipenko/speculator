@@ -676,7 +676,7 @@ async function replayPair(args: {
   const snap = portfolio.getSnapshot(lastClose);
   const { longs, shorts } = countRoundTripsBySide(snap.trades);
   const roundTrips = longs + shorts;
-  const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const wins = roundTripPnls(snap.trades).filter((pnl) => pnl > 0).length;
   const holdMs = roundTripHoldMs(snap.trades);
   const holdStats = summarizeHoldMs(holdMs);
   const totalReturnPct =
@@ -757,17 +757,53 @@ export function computeBuyHoldEquity(
 export function roundTripHoldMs(trades: readonly Trade[]): number[] {
   const holds: number[] = [];
   let openedAt: Date | undefined;
+  let closedAt: Date | undefined;
+  const flush = (): void => {
+    if (openedAt !== undefined && closedAt !== undefined) {
+      holds.push(closedAt.getTime() - openedAt.getTime());
+    }
+    openedAt = undefined;
+    closedAt = undefined;
+  };
   for (const trade of trades) {
     if (trade.realizedPnl === undefined) {
+      flush();
       openedAt = trade.at;
       continue;
     }
-    if (openedAt !== undefined) {
-      holds.push(trade.at.getTime() - openedAt.getTime());
-      openedAt = undefined;
-    }
+    if (openedAt !== undefined) closedAt = trade.at;
   }
+  flush();
   return holds;
+}
+
+/**
+ * Net realized P&L of each round-trip. Partial closes add into the same trip
+ * until the next open.
+ */
+export function roundTripPnls(trades: readonly Trade[]): number[] {
+  const pnls: number[] = [];
+  let opened = false;
+  let sum = 0;
+  let closes = 0;
+  const flush = (): void => {
+    if (opened && closes > 0) pnls.push(sum);
+    opened = false;
+    sum = 0;
+    closes = 0;
+  };
+  for (const trade of trades) {
+    if (trade.realizedPnl === undefined) {
+      flush();
+      opened = true;
+      continue;
+    }
+    if (!opened) continue;
+    sum += trade.realizedPnl;
+    closes += 1;
+  }
+  flush();
+  return pnls;
 }
 
 /**

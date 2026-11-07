@@ -32,6 +32,7 @@ import {
   splitCandlesIntoFolds,
   computeBuyHoldEquity,
   roundTripHoldMs,
+  roundTripPnls,
 } from "./backtest.js";
 import { intraBarPrices } from "../backtest/intra-bar.js";
 
@@ -278,6 +279,30 @@ describe("roundTripHoldMs", () => {
 
   it("ignores an open that never closes", () => {
     assert.deepEqual(roundTripHoldMs([tradeFill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+  });
+
+  it("keeps a partial close on the same hold until the remainder exits", () => {
+    assert.deepEqual(
+      roundTripHoldMs([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:00:00.000Z", 1),
+        tradeFill("SELL", "2026-01-01T02:00:00.000Z", 0.5),
+      ]),
+      [2 * 60 * 60 * 1000],
+    );
+  });
+});
+
+describe("roundTripPnls", () => {
+  it("sums partial closes into one trip", () => {
+    assert.deepEqual(
+      roundTripPnls([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:00:00.000Z", 1),
+        tradeFill("SELL", "2026-01-01T02:00:00.000Z", -0.25),
+      ]),
+      [0.75],
+    );
   });
 });
 

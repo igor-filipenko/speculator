@@ -50,6 +50,37 @@ describe("PaperPortfolio long", () => {
     assert.equal(portfolio.getSnapshot(110).realizedPnl, closed.realizedPnl);
     assert.equal(portfolio.getSnapshot(110).position.paidFee, undefined);
   });
+
+  it("sells half, moves the stop, and charges the open fee in proportion", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const opened = portfolio.applyOrderSync({
+      ...order("open-long", 100, 2),
+      priorityFeeUsdc: 1,
+      slPrice: 90,
+      strategyId: "bollinger-rsi",
+    });
+    assert.ok(opened);
+
+    const half = portfolio.applyOrderSync({
+      ...order("close-long", 110, 1),
+      slPrice: 101,
+    });
+    assert.ok(half);
+    assert.equal(half.realizedPnl, 110 - 100 - 0.5);
+    const position = portfolio.getSnapshot(110).position;
+    assert.equal(position.side, "long");
+    assert.equal(position.size, 1);
+    assert.equal(position.entryPrice, 100);
+    assert.equal(position.slPrice, 101);
+    assert.equal(position.paidFee, 0.5);
+    assert.equal(portfolio.getSnapshot(110).cashUsdc, 1000 - 201 + 110);
+
+    const rest = portfolio.applyOrderSync(order("close-long", 110, 1));
+    assert.ok(rest);
+    assert.equal(rest.realizedPnl, 110 - 100 - 0.5);
+    assert.equal(portfolio.getSnapshot(110).position.side, "flat");
+    assert.equal(portfolio.getSnapshot(110).realizedPnl, half.realizedPnl + rest.realizedPnl);
+  });
 });
 
 describe("PaperPortfolio short", () => {

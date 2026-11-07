@@ -1,6 +1,6 @@
 import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { candleIntervalSeconds } from "../../market/candle.js";
+import { candleIntervalSeconds, timeframeFromMinutes } from "../../market/candle.js";
 import type {
   Candle,
   MarketIndicators,
@@ -11,6 +11,7 @@ import type {
   Signal,
   SignalSide,
   Strategy,
+  StrategyParamPatch,
   Timeframe,
   Trend,
   Volatility,
@@ -602,6 +603,17 @@ export class BollingerStrategy implements Strategy {
     return searchDefaults(this.params);
   }
 
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch {
+    const params = paramsFromSearch(values);
+    const knobs: Record<string, number | string | boolean> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (key === "timeframe" || value === undefined) continue;
+      knobs[key] = value;
+    }
+    if (params.timeframe === undefined) return { values: knobs };
+    return { timeframe: params.timeframe, values: knobs };
+  }
+
   getDisplayName(): string {
     const { timeframe, period, stdDev, diRatio, adxMax, decayBars } = this.params;
     const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
@@ -771,6 +783,42 @@ function diPassNote(
     return `+DI ${fmt(plusDi)} <= ${diRatio}× -DI ${fmt(minusDi)}`;
   }
   return `-DI ${fmt(minusDi)} <= ${diRatio}× +DI ${fmt(plusDi)}`;
+}
+
+/** Search minutes become a candle label. Other axis keys copy onto the params. */
+function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<BollingerParams> {
+  const patch: Partial<BollingerParams> = {};
+  const timeframe = values["timeframe"];
+  const period = values["period"];
+  const stdDev = values["stdDev"];
+  const atrPeriod = values["atrPeriod"];
+  const adxPeriod = values["adxPeriod"];
+  const adxMax = values["adxMax"];
+  const diRatio = values["diRatio"];
+  const minReclaimDepth = values["minReclaimDepth"];
+  const maxBreakAtr = values["maxBreakAtr"];
+  const minRewardRisk = values["minRewardRisk"];
+  const stopAtr = values["stopAtr"];
+  const trendFilter = values["trendFilter"];
+  const decayBars = values["decayBars"];
+  if (timeframe !== undefined) {
+    const label = timeframeFromMinutes(timeframe);
+    if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
+    patch.timeframe = label;
+  }
+  if (period !== undefined) patch.period = period;
+  if (stdDev !== undefined) patch.stdDev = stdDev;
+  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
+  if (adxPeriod !== undefined) patch.adxPeriod = adxPeriod;
+  if (adxMax !== undefined) patch.adxMax = adxMax;
+  if (diRatio !== undefined) patch.diRatio = diRatio;
+  if (minReclaimDepth !== undefined) patch.minReclaimDepth = minReclaimDepth;
+  if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;
+  if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
+  if (stopAtr !== undefined) patch.stopAtr = stopAtr;
+  if (trendFilter !== undefined) patch.trendFilter = trendFilter;
+  if (decayBars !== undefined) patch.decayBars = decayBars;
+  return patch;
 }
 
 function searchDefaults(params: BollingerParams): Record<string, number> {

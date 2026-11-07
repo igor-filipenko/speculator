@@ -198,7 +198,7 @@ describe("applyMarketIndicators", () => {
     const manager = await SimpleStrategyManager.create({
       strategyId: "bollinger",
       htf: "4h",
-      paramPatch: { bollinger: { period: 14, stdDev: 1.5 } },
+      paramPatch: { values: { period: 14, stdDev: 1.5 } },
     });
     assert.match(manager.getActiveStrategy().getDisplayName(), /BB14×1\.5/);
     const high = evaluateMarketIndicators({
@@ -216,7 +216,7 @@ describe("applyMarketIndicators", () => {
     const manager = await SimpleStrategyManager.create({
       strategyId: "donchian",
       htf: "4h",
-      paramPatch: { donchian: { entryPeriod: 55 } },
+      paramPatch: { values: { entryPeriod: 55 } },
     });
     const first = evaluateMarketIndicators({
       pair: "SOL/USDC",

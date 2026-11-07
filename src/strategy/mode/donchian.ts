@@ -9,6 +9,7 @@ import type {
   Signal,
   SignalSide,
   Strategy,
+  StrategyParamPatch,
   Timeframe,
   Trend,
   Volatility,
@@ -488,6 +489,14 @@ export class DonchianStrategy implements Strategy {
     return searchDefaults(this.params);
   }
 
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch {
+    const knobs: Record<string, number | string | boolean> = {};
+    for (const [key, value] of Object.entries(paramsFromSearch(values))) {
+      if (value !== undefined) knobs[key] = value;
+    }
+    return { values: knobs };
+  }
+
   getDisplayName(): string {
     const {
       timeframe,
@@ -696,6 +705,42 @@ function gaveBackFromExtreme(input: {
       ? input.close <= level || input.price <= level
       : input.close >= level || input.price >= level;
   return hit ? { extreme, level } : null;
+}
+
+/** Axis keys copy onto the params. A `timeframe` in minutes is not a Donchian search knob. */
+function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<DonchianParams> {
+  const patch: Partial<DonchianParams> = {};
+  const entryPeriod = values["entryPeriod"];
+  const exitPeriod = values["exitPeriod"];
+  const volumeSmaPeriod = values["volumeSmaPeriod"];
+  const volumeSmaMult = values["volumeSmaMult"];
+  const trendEmaPeriod = values["trendEmaPeriod"];
+  const atrPeriod = values["atrPeriod"];
+  const minBreakAtrMult = values["minBreakAtrMult"];
+  const shortMaxExtendAtrMult = values["shortMaxExtendAtrMult"];
+  const shortVolumeSmaScale = values["shortVolumeSmaScale"];
+  const shortMinBreakScale = values["shortMinBreakScale"];
+  const givebackAtrMult = values["givebackAtrMult"];
+  const givebackArmAtrMult = values["givebackArmAtrMult"];
+  const maxEntryAgeBars = values["maxEntryAgeBars"];
+  const timeStopBars = values["timeStopBars"];
+  const atrStopMult = values["atrStopMult"];
+  if (entryPeriod !== undefined) patch.entryPeriod = entryPeriod;
+  if (exitPeriod !== undefined) patch.exitPeriod = exitPeriod;
+  if (volumeSmaPeriod !== undefined) patch.volumeSmaPeriod = volumeSmaPeriod;
+  if (volumeSmaMult !== undefined) patch.volumeSmaMult = volumeSmaMult;
+  if (trendEmaPeriod !== undefined) patch.trendEmaPeriod = trendEmaPeriod;
+  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
+  if (minBreakAtrMult !== undefined) patch.minBreakAtrMult = minBreakAtrMult;
+  if (shortMaxExtendAtrMult !== undefined) patch.shortMaxExtendAtrMult = shortMaxExtendAtrMult;
+  if (shortVolumeSmaScale !== undefined) patch.shortVolumeSmaScale = shortVolumeSmaScale;
+  if (shortMinBreakScale !== undefined) patch.shortMinBreakScale = shortMinBreakScale;
+  if (givebackAtrMult !== undefined) patch.givebackAtrMult = givebackAtrMult;
+  if (givebackArmAtrMult !== undefined) patch.givebackArmAtrMult = givebackArmAtrMult;
+  if (maxEntryAgeBars !== undefined) patch.maxEntryAgeBars = maxEntryAgeBars;
+  if (timeStopBars !== undefined) patch.timeStopBars = timeStopBars;
+  if (atrStopMult !== undefined) patch.atrStopMult = atrStopMult;
+  return patch;
 }
 
 function searchDefaults(params: DonchianParams): Record<string, number> {

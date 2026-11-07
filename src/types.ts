@@ -350,6 +350,19 @@ export interface SearchSpace {
   accept?: (values: Readonly<Record<string, number>>) => boolean;
 }
 
+/**
+ * Overrides merged onto a strategy's regime defaults.
+ * A tune sample stores `timeframe` in minutes; {@link Strategy.paramPatch} writes
+ * the candle label here. `values` are that strategy's own knobs. Tune reads only
+ * `timeframe`.
+ */
+export interface StrategyParamPatch {
+  /** Signal series to replay when the sample names a timeframe. */
+  timeframe?: Timeframe;
+  /** Knob overrides. Keys belong to the strategy that built the patch. */
+  values?: Readonly<Record<string, number | string | boolean>>;
+}
+
 export interface Strategy extends SearchSpace {
   getDisplayName(): string;
   /** `strategy.registry.id` (for example `bollinger`). */
@@ -360,6 +373,11 @@ export interface Strategy extends SearchSpace {
    * Tune reads this for the default point on {@link SearchSpace.axes}.
    */
   getSearchDefaults(): Readonly<Record<string, number>>;
+  /**
+   * Tune sample → overrides for this strategy. `timeframe` in `values` is minutes.
+   * Other keys match {@link SearchSpace} axes.
+   */
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch;
   evaluateSignal(
     pair: string,
     candles: Candle[],

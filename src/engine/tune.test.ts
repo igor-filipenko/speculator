@@ -441,7 +441,7 @@ describe("timeframe axis", () => {
     const rows = replayCandles(
       primary,
       { "1h": hourly },
-      { start: 4, end: 12, patch: { bollinger: { timeframe: "1h" } } },
+      { start: 4, end: 12, patch: { timeframe: "1h" } },
     );
     assert.deepEqual(
       rows.map((row) => row.time),
@@ -451,8 +451,7 @@ describe("timeframe axis", () => {
 
   it("throws when the patched timeframe was not loaded", () => {
     assert.throws(
-      () =>
-        replayCandles(primary, {}, { start: 0, end: 4, patch: { bollinger: { timeframe: "1h" } } }),
+      () => replayCandles(primary, {}, { start: 0, end: 4, patch: { timeframe: "1h" } }),
       /No 1h candles/,
     );
   });

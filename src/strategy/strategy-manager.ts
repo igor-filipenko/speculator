@@ -15,12 +15,14 @@ import type {
   RiskManager,
   Strategy,
   StrategyManager,
+  StrategyParamPatch,
   Trend,
   Volatility,
 } from "../types.js";
-import { BollingerStrategy, bollingerParamsFor, type BollingerParams } from "./mode/bollinger.js";
-import { DonchianStrategy, donchianParamsFor, type DonchianParams } from "./mode/donchian.js";
+import { BollingerStrategy, bollingerParamsFor } from "./mode/bollinger.js";
+import { DonchianStrategy, donchianParamsFor } from "./mode/donchian.js";
 
+export type { StrategyParamPatch };
 export {
   classifyHighLow,
   confirmLabel,
@@ -31,12 +33,6 @@ export {
   type HtfParams,
   type MtfParams,
 } from "../market/htf.js";
-
-/** Numeric overrides merged onto `*ParamsFor(trend, volatility)` on every reload. */
-export interface StrategyParamPatch {
-  bollinger?: Partial<BollingerParams>;
-  donchian?: Partial<DonchianParams>;
-}
 
 export interface SimpleStrategyManagerOptions {
   /** `strategy.registry.id`. */
@@ -144,7 +140,7 @@ const strategyFactories = new Map<string, StrategyFactory>([
   [
     "bollinger",
     (trend, volatility, patch) =>
-      new BollingerStrategy(trend, volatility, mergeParams(bollingerParamsFor(), patch?.bollinger)),
+      new BollingerStrategy(trend, volatility, applySearchPatch(bollingerParamsFor(), patch)),
   ],
   [
     "donchian",
@@ -152,7 +148,7 @@ const strategyFactories = new Map<string, StrategyFactory>([
       new DonchianStrategy(
         trend,
         volatility,
-        mergeParams(donchianParamsFor(trend, volatility), patch?.donchian),
+        applySearchPatch(donchianParamsFor(trend, volatility), patch),
       ),
   ],
 ]);
@@ -182,16 +178,16 @@ export async function loadStrategy(
   return create(trend, volatility, patch);
 }
 
-function mergeParams<T extends object>(base: T, patch: Partial<T> | undefined): T {
-  if (patch === undefined) {
-    return base;
-  }
+/** Copy a tune patch onto regime defaults. Unknown keys are ignored. */
+function applySearchPatch<T extends object>(base: T, patch: StrategyParamPatch | undefined): T {
+  if (patch === undefined) return base;
   const merged = { ...base };
-  for (const key of Object.keys(patch) as (keyof T)[]) {
-    const value = patch[key];
-    if (value !== undefined) {
-      merged[key] = value;
-    }
+  const record = merged as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch.values ?? {})) {
+    if (key in record) record[key] = value;
+  }
+  if (patch.timeframe !== undefined && "timeframe" in record) {
+    record["timeframe"] = patch.timeframe;
   }
   return merged;
 }

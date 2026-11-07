@@ -772,6 +772,12 @@ describe("stricter entries", () => {
 });
 
 describe("DonchianStrategy", () => {
+  it("copies search knobs into a strategy-agnostic patch", () => {
+    const patch = new DonchianStrategy().paramPatch({ entryPeriod: 55, timeStopBars: 0 });
+    assert.equal(patch.timeframe, undefined);
+    assert.deepEqual(patch.values, { entryPeriod: 55, timeStopBars: 0 });
+  });
+
   it("exposes a 3×ATR hard stop and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");
     assert.equal(strategy.getId(), "donchian");

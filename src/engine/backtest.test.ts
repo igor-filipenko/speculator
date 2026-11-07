@@ -109,8 +109,8 @@ function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): 
 }
 
 /** Search-space members for strategies that are not tuned in these tests. */
-function untuned(): Pick<Strategy, "axes" | "getSearchDefaults"> {
-  return { axes: [], getSearchDefaults: () => ({}) };
+function untuned(): Pick<Strategy, "axes" | "getSearchDefaults" | "paramPatch"> {
+  return { axes: [], getSearchDefaults: () => ({}), paramPatch: () => ({}) };
 }
 
 function scriptedStrategy(opts: {

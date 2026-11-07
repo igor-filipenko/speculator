@@ -2,11 +2,9 @@ import os from "node:os";
 import { isMainThread, parentPort, Worker } from "node:worker_threads";
 import type { AppConfig } from "../config.js";
 import { createMarket } from "../market/manager.js";
-import { createCandle } from "../market/candle.js";
+import { createCandle, timeframeFromMinutes } from "../market/candle.js";
 import { loadHtfCandles, loadMtfCandles } from "../backtest/market-replay.js";
 import { readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
-import type { BollingerParams } from "../strategy/mode/bollinger.js";
-import type { DonchianParams } from "../strategy/mode/donchian.js";
 import { SimpleStrategyManager, type StrategyParamPatch } from "../strategy/strategy-manager.js";
 import type {
   Candle,
@@ -149,16 +147,6 @@ export interface RunTuneOptions {
   htfCandles?: Candle[];
   mtfCandles?: Candle[];
 }
-
-/**
- * Signal timeframes a numeric `timeframe` axis may name, keyed by minutes.
- * The axis is numeric so it fits the same grid as every other knob.
- */
-const TIMEFRAME_BY_MINUTES: Readonly<Record<number, Timeframe>> = {
-  5: "5m",
-  15: "15m",
-  60: "1h",
-};
 
 /** Axis values taken from `source`. Each axis key must be present. */
 export function defaultLevels(
@@ -430,7 +418,7 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
   const altTimeframes: Timeframe[] = skipNetwork
     ? []
     : (space.axes.find((axis) => axis.key === "timeframe")?.levels ?? [])
-        .map((minutes) => TIMEFRAME_BY_MINUTES[minutes])
+        .map((minutes) => timeframeFromMinutes(minutes))
         .filter((label): label is Timeframe => label !== undefined && label !== timeframe);
 
   const results: TuneResult[] = [];
@@ -484,6 +472,7 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
       await tunePair({
         pair,
         config: { ...options.config, pairs: [pair] },
+        strategy,
         strategyId: options.strategyId,
         space,
         defaults,
@@ -649,6 +638,7 @@ function foldBounds(candles: Candle[], nFolds: number): FoldBound[] {
 async function tunePair(args: {
   pair: PairConfig;
   config: AppConfig;
+  strategy: Strategy;
   strategyId: string;
   space: SearchSpace;
   defaults: Readonly<Record<string, number>>;
@@ -666,7 +656,7 @@ async function tunePair(args: {
 }): Promise<TuneResult> {
   const bounds = foldBounds(args.candles, args.folds);
   const sample = sampleSearchSpace(args.space, args.maxTrials, args.seed, args.defaults);
-  const wave1 = wave1Requests(bounds, sample, args.strategyId);
+  const wave1 = wave1Requests(bounds, sample, args.strategy);
   const workerCount = Math.min(Math.max(1, args.jobs), wave1.length);
   const pool =
     workerCount > 1
@@ -754,7 +744,7 @@ async function tunePair(args: {
             foldIndex,
             variant,
             request: {
-              patch: patchFromValues(args.strategyId, variant.values),
+              patch: args.strategy.paramPatch(variant.values),
               start: bound.trainStart,
               end: bound.trainEnd,
             },
@@ -787,7 +777,7 @@ async function tunePair(args: {
       oosWave.push({
         foldIndex,
         request: {
-          patch: patchFromValues(args.strategyId, winner.variant.values),
+          patch: args.strategy.paramPatch(winner.variant.values),
           start: bound.testStart,
           end: bound.testEnd,
         },
@@ -893,7 +883,7 @@ export function verdict(
 function wave1Requests(
   bounds: readonly FoldBound[],
   sample: SearchSample,
-  strategyId: string,
+  strategy: Strategy,
 ): Wave1Item[] {
   const items: Wave1Item[] = [];
   for (let foldIndex = 0; foldIndex < bounds.length; foldIndex++) {
@@ -905,7 +895,7 @@ function wave1Requests(
         foldIndex,
         variantIndex,
         request: {
-          patch: patchFromValues(strategyId, variant.values),
+          patch: strategy.paramPatch(variant.values),
           start: bound.trainStart,
           end: bound.trainEnd,
         },
@@ -944,7 +934,7 @@ export function replayCandles(
   alt: Readonly<Record<string, readonly Candle[]>>,
   request: { patch?: StrategyParamPatch; start: number; end: number },
 ): Candle[] {
-  const timeframe = request.patch?.bollinger?.timeframe;
+  const timeframe = request.patch?.timeframe;
   if (timeframe === undefined || timeframe === primary[0]?.timeframe) {
     return primary.slice(request.start, request.end);
   }
@@ -993,89 +983,6 @@ async function replayMetrics(args: {
     throw new Error("Backtest returned no results");
   }
   return result.metrics;
-}
-
-function patchFromValues(
-  strategyId: string,
-  values: Readonly<Record<string, number>>,
-): StrategyParamPatch {
-  if (strategyId === "bollinger") {
-    return { bollinger: bollingerPatch(values) };
-  }
-  if (strategyId === "donchian") {
-    return { donchian: donchianPatch(values) };
-  }
-  throw new Error(`No parameter search space for strategy "${strategyId}"`);
-}
-
-function bollingerPatch(values: Readonly<Record<string, number>>): Partial<BollingerParams> {
-  const patch: Partial<BollingerParams> = {};
-  const timeframe = values["timeframe"];
-  const period = values["period"];
-  const stdDev = values["stdDev"];
-  const atrPeriod = values["atrPeriod"];
-  const adxPeriod = values["adxPeriod"];
-  const adxMax = values["adxMax"];
-  const diRatio = values["diRatio"];
-  const minReclaimDepth = values["minReclaimDepth"];
-  const maxBreakAtr = values["maxBreakAtr"];
-  const minRewardRisk = values["minRewardRisk"];
-  const stopAtr = values["stopAtr"];
-  const trendFilter = values["trendFilter"];
-  const decayBars = values["decayBars"];
-  if (timeframe !== undefined) {
-    const label = TIMEFRAME_BY_MINUTES[timeframe];
-    if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
-    patch.timeframe = label;
-  }
-  if (period !== undefined) patch.period = period;
-  if (stdDev !== undefined) patch.stdDev = stdDev;
-  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
-  if (adxPeriod !== undefined) patch.adxPeriod = adxPeriod;
-  if (adxMax !== undefined) patch.adxMax = adxMax;
-  if (diRatio !== undefined) patch.diRatio = diRatio;
-  if (minReclaimDepth !== undefined) patch.minReclaimDepth = minReclaimDepth;
-  if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;
-  if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
-  if (stopAtr !== undefined) patch.stopAtr = stopAtr;
-  if (trendFilter !== undefined) patch.trendFilter = trendFilter;
-  if (decayBars !== undefined) patch.decayBars = decayBars;
-  return patch;
-}
-
-function donchianPatch(values: Readonly<Record<string, number>>): Partial<DonchianParams> {
-  const patch: Partial<DonchianParams> = {};
-  const entryPeriod = values["entryPeriod"];
-  const exitPeriod = values["exitPeriod"];
-  const volumeSmaPeriod = values["volumeSmaPeriod"];
-  const volumeSmaMult = values["volumeSmaMult"];
-  const trendEmaPeriod = values["trendEmaPeriod"];
-  const atrPeriod = values["atrPeriod"];
-  const minBreakAtrMult = values["minBreakAtrMult"];
-  const shortMaxExtendAtrMult = values["shortMaxExtendAtrMult"];
-  const shortVolumeSmaScale = values["shortVolumeSmaScale"];
-  const shortMinBreakScale = values["shortMinBreakScale"];
-  const givebackAtrMult = values["givebackAtrMult"];
-  const givebackArmAtrMult = values["givebackArmAtrMult"];
-  const maxEntryAgeBars = values["maxEntryAgeBars"];
-  const timeStopBars = values["timeStopBars"];
-  const atrStopMult = values["atrStopMult"];
-  if (entryPeriod !== undefined) patch.entryPeriod = entryPeriod;
-  if (exitPeriod !== undefined) patch.exitPeriod = exitPeriod;
-  if (volumeSmaPeriod !== undefined) patch.volumeSmaPeriod = volumeSmaPeriod;
-  if (volumeSmaMult !== undefined) patch.volumeSmaMult = volumeSmaMult;
-  if (trendEmaPeriod !== undefined) patch.trendEmaPeriod = trendEmaPeriod;
-  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
-  if (minBreakAtrMult !== undefined) patch.minBreakAtrMult = minBreakAtrMult;
-  if (shortMaxExtendAtrMult !== undefined) patch.shortMaxExtendAtrMult = shortMaxExtendAtrMult;
-  if (shortVolumeSmaScale !== undefined) patch.shortVolumeSmaScale = shortVolumeSmaScale;
-  if (shortMinBreakScale !== undefined) patch.shortMinBreakScale = shortMinBreakScale;
-  if (givebackAtrMult !== undefined) patch.givebackAtrMult = givebackAtrMult;
-  if (givebackArmAtrMult !== undefined) patch.givebackArmAtrMult = givebackArmAtrMult;
-  if (maxEntryAgeBars !== undefined) patch.maxEntryAgeBars = maxEntryAgeBars;
-  if (timeStopBars !== undefined) patch.timeStopBars = timeStopBars;
-  if (atrStopMult !== undefined) patch.atrStopMult = atrStopMult;
-  return patch;
 }
 
 /** Eligibility gates for a train trial. Absent return/PF gates are off. */
@@ -1411,7 +1318,7 @@ function fmtValues(values: Readonly<Record<string, number>>): string {
   return Object.entries(values)
     .map(([key, value]) =>
       key === "timeframe"
-        ? `timeframe=${TIMEFRAME_BY_MINUTES[value] ?? `${String(value)}m`}`
+        ? `timeframe=${timeframeFromMinutes(value) ?? `${String(value)}m`}`
         : `${key}=${String(value)}`,
     )
     .join(" ");
@@ -1660,6 +1567,7 @@ function fromPortable(metrics: PortableMetrics): BacktestMetrics {
   const strategy: Strategy = {
     axes: [],
     getSearchDefaults: () => ({}),
+    paramPatch: () => ({}),
     getDisplayName: () => strategyName,
     getId: () => strategyId,
     getRequiredCandles: () => ({ timeframe: "15m", count: 1 }),

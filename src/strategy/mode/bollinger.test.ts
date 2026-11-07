@@ -1026,15 +1026,26 @@ describe("BollingerStrategy", () => {
     assert.doesNotMatch(high.reason, /volatility high/);
   });
 
+  it("turns search minutes into a candle label on the tune patch", () => {
+    const patch = new BollingerStrategy("flat", "low").paramPatch({
+      period: 14,
+      timeframe: 60,
+      decayBars: 6,
+    });
+    assert.equal(patch.timeframe, "1h");
+    assert.deepEqual(patch.values, { period: 14, decayBars: 6 });
+    assert.throws(
+      () => new BollingerStrategy().paramPatch({ timeframe: 7 }),
+      /No timeframe for 7 minutes/,
+    );
+  });
+
   it("names BB params in the display name", () => {
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB20/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /DI1 ADX<20/);
-    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop|decay/);
-    assert.match(
-      new BollingerStrategy("flat", "low", baseParams({ decayBars: 12 })).getDisplayName(),
-      /decay12/,
-    );
+    assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /decay12/);
+    assert.doesNotMatch(new BollingerStrategy("flat", "low").getDisplayName(), /tStop/);
     assert.match(new BollingerStrategy("bearish", "low").getDisplayName(), /bollinger/);
     assert.match(new BollingerStrategy("bullish", "high").getDisplayName(), /bollinger/);
   });

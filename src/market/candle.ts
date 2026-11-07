@@ -1,6 +1,8 @@
 import type { Candle, CandleSource, Timeframe } from "../types.js";
 
 /** Seconds per candle for the timeframe. */
+const TIMEFRAME_LABELS: readonly Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+
 export function candleIntervalSeconds(timeframe: Timeframe): number {
   switch (timeframe) {
     case "1d":
@@ -16,6 +18,11 @@ export function candleIntervalSeconds(timeframe: Timeframe): number {
     case "1m":
       return 60;
   }
+}
+
+/** Candle label for a search-axis `timeframe` stored in minutes. */
+export function timeframeFromMinutes(minutes: number): Timeframe | undefined {
+  return TIMEFRAME_LABELS.find((label) => candleIntervalSeconds(label) === minutes * 60);
 }
 
 /**

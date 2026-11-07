@@ -83,7 +83,7 @@ export function bollingerRsiParamsFor(): BollingerRsiParams {
     rsiPeriod: 14,
     rsiOversold: 30,
     rsiOverbought: 70,
-    rsiMid: 50,
+    rsiMid: 40,
   };
 }
 
@@ -143,6 +143,9 @@ export interface BollingerRsiInput {
 
 const REWARD_RISK_EPSILON = 1e-9;
 
+/** How long a just-closed signal bar may still open a position. */
+const ENTRY_WINDOW_SECONDS = 60;
+
 /**
  * Mean-reversion on a Bollinger band exit confirmed by an RSI extreme.
  * BUY when a closed bar trades at or through the lower band, the close and
@@ -152,6 +155,9 @@ const REWARD_RISK_EPSILON = 1e-9;
  * needs a perps fee schedule.
  * A candle wider than `maxBreakAtr` × ATR is ignored. ADX ≥ `adxMax` waits
  * for a range (`adxMax` 0 leaves that gate off). Neither gate blocks an exit.
+ * A new entry is taken only in the first minute after that closed bar. The
+ * same bar stays true for the rest of the hour, and a stop would otherwise
+ * reopen it on every later quote.
  * An open long sells half at the profitable price (mid, after the exit-leg fee)
  * only while RSI is still below `rsiMid`, and the whole position once RSI has
  * reached it. The half that remains has its stop at fee breakeven and sells at
@@ -298,6 +304,10 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
     }
   }
 
+  if (side === "BUY" || side === "SELL") {
+    const stale = staleSignalBar(lastBar, at);
+    if (stale != null) return { ...base, side: "HOLD", reason: stale };
+  }
   if ((side !== "BUY" && side !== "SELL") || atrNow == null || !(atrNow > 0)) {
     return { ...base, side, reason };
   }
@@ -576,7 +586,7 @@ function shortExit(
     return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
   }
   if (price <= decay.target) {
-    if (decay.target < floor && rsiNow > strategy.rsiMid) {
+    if (decay.target < floor && rsiNow > (100 - strategy.rsiMid)) {
       return {
         ...base,
         side: "BUY",
@@ -688,6 +698,17 @@ function timeDecayReason(decay: DecayTarget, entry: number, mid: number): string
     `Time decay: ${decay.barsHeld} bars, target ${fmt(decay.target)}, floor ${fmt(decay.floor)} ` +
     `(entry=${fmt(entry)}, mid=${fmt(mid)})`
   );
+}
+
+/**
+ * A closed bar stays a valid break for the whole next hour. Allow the entry
+ * only while that close is still in its first minute, so a stop cannot reopen
+ * the same bar on the next quote.
+ */
+function staleSignalBar(bar: Candle, at: Date): string | null {
+  const age = at.getTime() / 1000 - (bar.time + bar.intervalSeconds);
+  if (age >= 0 && age < ENTRY_WINDOW_SECONDS) return null;
+  return `Signal bar is ${Math.floor(age)}s old; one entry per closed bar`;
 }
 
 function closedSignalCandles(candles: Candle[], at: Date): Candle[] {

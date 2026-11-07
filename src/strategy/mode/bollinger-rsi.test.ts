@@ -73,6 +73,7 @@ function evalRsi(
     candles,
     strategy,
     price: last.close,
+    at: new Date((last.time + last.intervalSeconds) * 1000),
     ...extra,
   });
 }
@@ -86,6 +87,17 @@ describe("evaluateBollingerRsi", () => {
     assert.ok((signal.meta?.rsi ?? 100) <= 30, signal.reason);
     assert.ok(signal.slPrice != null && signal.slPrice < signal.price);
     assert.ok((signal.tpPrices[0] ?? 0) > signal.price);
+  });
+
+  it("does not buy the same closed bar again after its first minute", () => {
+    const candles = crashThroughLower();
+    const last = candles[candles.length - 1]!;
+    const closedAt = (last.time + last.intervalSeconds) * 1000;
+    const fresh = evalRsi(candles, loose(), { at: new Date(closedAt + 30_000) });
+    assert.equal(fresh.side, "BUY", fresh.reason);
+    const stale = evalRsi(candles, loose(), { at: new Date(closedAt + 90_000) });
+    assert.equal(stale.side, "HOLD", stale.reason);
+    assert.match(stale.reason, /one entry per closed bar/);
   });
 
   it("holds a lower-band exit when RSI is not oversold", () => {

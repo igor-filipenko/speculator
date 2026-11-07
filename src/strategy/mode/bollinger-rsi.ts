@@ -60,6 +60,11 @@ export interface BollingerRsiParams {
   rsiOversold: number;
   /** Short only when RSI is at or above this. */
   rsiOverbought: number;
+  /**
+   * At the mid exit, sell half only while RSI is still on the entry side of
+   * this level. A long at or above it, and a short at or below it, closes in full.
+   */
+  rsiMid: number;
 }
 
 /** 1h mean-reversion: a closed bar through a Bollinger band while RSI is extreme. */
@@ -78,6 +83,7 @@ export function bollingerRsiParamsFor(): BollingerRsiParams {
     rsiPeriod: 14,
     rsiOversold: 30,
     rsiOverbought: 70,
+    rsiMid: 50,
   };
 }
 
@@ -147,12 +153,13 @@ const REWARD_RISK_EPSILON = 1e-9;
  * A candle wider than `maxBreakAtr` × ATR is ignored. ADX ≥ `adxMax` waits
  * for a range (`adxMax` 0 leaves that gate off). Neither gate blocks an exit.
  * An open long sells half at the profitable price (mid, after the exit-leg fee)
- * and moves the remainder's stop to fee breakeven. The remainder sells at the
- * upper band, at that stop, or at the quote once `decayBars` elapses.
- * An open short covers half at the mirror price, then the rest at the lower
- * band. `decayBars` still slides the first target toward breakeven and flattens
- * whatever size is left at the horizon. A short's breakeven ignores borrow
- * accrued after the fill.
+ * only while RSI is still below `rsiMid`, and the whole position once RSI has
+ * reached it. The half that remains has its stop at fee breakeven and sells at
+ * the upper band, at that stop, or at the quote once `decayBars` elapses.
+ * An open short covers half at the mirror price only while RSI is still above
+ * `rsiMid`. `decayBars` still slides the first target toward breakeven and
+ * flattens whatever size is left at the horizon. A short's breakeven ignores
+ * borrow accrued after the fill.
  */
 export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
   const at = input.at ?? new Date();
@@ -228,6 +235,7 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
       at,
       input.openedAt,
       input.slPrice,
+      rsiNow,
     );
   }
   if (openSide === "short" && entry != null && entry > 0) {
@@ -243,6 +251,7 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
       input.openedAt,
       input.perpsFees,
       input.slPrice,
+      rsiNow,
     );
   }
 
@@ -342,11 +351,20 @@ export class BollingerRsiStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, rsiPeriod, rsiOversold, rsiOverbought, adxMax, decayBars } =
-      this.params;
+    const {
+      timeframe,
+      period,
+      stdDev,
+      rsiPeriod,
+      rsiOversold,
+      rsiOverbought,
+      rsiMid,
+      adxMax,
+      decayBars,
+    } = this.params;
     const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
     const decay = decayBars > 0 ? ` decay${decayBars}` : "";
-    return `bollinger-rsi (${timeframe} BB${period}×${stdDev} RSI${rsiPeriod} ≤${rsiOversold}/≥${rsiOverbought}${adx}${decay})`;
+    return `bollinger-rsi (${timeframe} BB${period}×${stdDev} RSI${rsiPeriod} ≤${rsiOversold}/≥${rsiOverbought}↔${rsiMid}${adx}${decay})`;
   }
 
   getId(): string {
@@ -419,6 +437,7 @@ function longExit(
   at: Date,
   openedAt: Date | undefined,
   slPrice: number | undefined,
+  rsiNow: number,
 ): Signal {
   const exitFee = legFeePct(pair, "spot");
   const minExit = exitFee < 1 ? entry / (1 - exitFee) : entry;
@@ -466,21 +485,23 @@ function longExit(
     return { ...base, side: "SELL", reason: timeDecayReason(decay, entry, bbMid) };
   }
   if (price >= decay.target) {
-    if (!(decay.target > minExit)) {
+    if (decay.target > minExit && rsiNow < strategy.rsiMid) {
       return {
         ...base,
         side: "SELL",
-        reason: `Price ${fmt(price)} > profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+        closeFraction: SCALE_OUT_FRACTION,
+        slPrice: minExit,
+        reason:
+          `Price ${fmt(price)} > profitable price ${fmt(decay.target)}; closing half, ` +
+          `stop remainder at ${fmt(minExit)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, RSI=${fmt(rsiNow)}, spotFee=${pct(exitFee)})`,
       };
     }
     return {
       ...base,
       side: "SELL",
-      closeFraction: SCALE_OUT_FRACTION,
-      slPrice: minExit,
       reason:
-        `Price ${fmt(price)} > profitable price ${fmt(decay.target)}; closing half, ` +
-        `stop remainder at ${fmt(minExit)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, spotFee=${pct(exitFee)})`,
+        `Price ${fmt(price)} > profitable price ${fmt(decay.target)}; closing the position ` +
+        `(entry=${fmt(entry)}, minExit=${fmt(minExit)}, RSI=${fmt(rsiNow)}, spotFee=${pct(exitFee)})`,
     };
   }
   return {
@@ -502,6 +523,7 @@ function shortExit(
   openedAt: Date | undefined,
   perpsFees: PerpsFees | undefined,
   slPrice: number | undefined,
+  rsiNow: number,
 ): Signal {
   if (perpsFees == null) {
     return { ...base, side: "HOLD", reason: "Short cover held: perps fee schedule missing" };
@@ -554,21 +576,23 @@ function shortExit(
     return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
   }
   if (price <= decay.target) {
-    if (!(decay.target < floor)) {
+    if (decay.target < floor && rsiNow > strategy.rsiMid) {
       return {
         ...base,
         side: "BUY",
-        reason: `Price ${fmt(price)} < profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+        closeFraction: SCALE_OUT_FRACTION,
+        slPrice: floor,
+        reason:
+          `Price ${fmt(price)} < profitable price ${fmt(decay.target)}; closing half, ` +
+          `stop remainder at ${fmt(floor)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, RSI=${fmt(rsiNow)}, perpsFee=${pct(feePct)})`,
       };
     }
     return {
       ...base,
       side: "BUY",
-      closeFraction: SCALE_OUT_FRACTION,
-      slPrice: floor,
       reason:
-        `Price ${fmt(price)} < profitable price ${fmt(decay.target)}; closing half, ` +
-        `stop remainder at ${fmt(floor)} (entry=${fmt(entry)}, mid=${fmt(bbMid)}, perpsFee=${pct(feePct)})`,
+        `Price ${fmt(price)} < profitable price ${fmt(decay.target)}; closing the position ` +
+        `(entry=${fmt(entry)}, minExit=${fmt(minExit)}, RSI=${fmt(rsiNow)}, perpsFee=${pct(feePct)})`,
     };
   }
   return {
@@ -750,6 +774,7 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   const rsiPeriod = values["rsiPeriod"];
   const rsiOversold = values["rsiOversold"];
   const rsiOverbought = values["rsiOverbought"];
+  const rsiMid = values["rsiMid"];
   if (timeframe !== undefined) {
     const label = timeframeFromMinutes(timeframe);
     if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
@@ -767,6 +792,7 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   if (rsiPeriod !== undefined) patch.rsiPeriod = rsiPeriod;
   if (rsiOversold !== undefined) patch.rsiOversold = rsiOversold;
   if (rsiOverbought !== undefined) patch.rsiOverbought = rsiOverbought;
+  if (rsiMid !== undefined) patch.rsiMid = rsiMid;
   return patch;
 }
 

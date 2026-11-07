@@ -125,7 +125,7 @@ describe("evaluateBollingerRsi", () => {
     assert.match(signal.reason, /RSI .* < 101/);
   });
 
-  it("exits an open long through the Bollinger mid and keeps its own id", () => {
+  it("closes the whole long at the mid once RSI has reached 50", () => {
     const candles = crashThroughLower().slice(0, 40);
     const signal = evalRsi(candles, loose(), {
       price: 101,
@@ -135,13 +135,27 @@ describe("evaluateBollingerRsi", () => {
     });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.equal(signal.strategyId, "bollinger-rsi");
+    assert.equal(signal.closeFraction, undefined);
+    assert.ok((signal.meta?.rsi ?? 0) >= 50);
+    assert.match(signal.reason, /closing the position/);
+  });
+
+  it("sells half at the mid while RSI is still below 50", () => {
+    const candles = wave("down");
+    const signal = evalRsi(candles, loose({ decayBars: 0 }), {
+      price: 108,
+      entryPrice: 100,
+      positionSide: "long",
+      slPrice: 90,
+    });
+    assert.ok((signal.meta?.rsi ?? 100) < 50, signal.reason);
+    assert.equal(signal.side, "SELL", signal.reason);
     assert.equal(signal.closeFraction, 0.5);
-    assert.ok(signal.slPrice != null && signal.slPrice > 95);
-    assert.ok(signal.meta?.rsi != null);
+    assert.ok(signal.slPrice != null && signal.slPrice > 100);
   });
 
   it("sells the remainder at the upper band and scratches it at breakeven", () => {
-    const candles = wave();
+    const candles = wave("down");
     const half = evalRsi(candles, loose({ decayBars: 0 }), {
       price: 108,
       entryPrice: 100,
@@ -186,7 +200,7 @@ describe("evaluateBollingerRsi", () => {
   });
 
   it("covers half of a short at the mid and the rest at the lower band", () => {
-    const candles = wave();
+    const candles = wave("up");
     const half = evalRsi(candles, loose({ decayBars: 0 }), {
       price: 102,
       entryPrice: 110,
@@ -194,6 +208,7 @@ describe("evaluateBollingerRsi", () => {
       slPrice: 120,
       perpsFees: PERPS,
     });
+    assert.ok((half.meta?.rsi ?? 0) > 50, half.reason);
     assert.equal(half.side, "BUY", half.reason);
     assert.equal(half.closeFraction, 0.5);
     const lower = half.meta?.bbLower ?? 0;
@@ -222,8 +237,22 @@ describe("evaluateBollingerRsi", () => {
     assert.match(runner.reason, /lower band/);
   });
 
+  it("covers the whole short at the mid once RSI has fallen to 50", () => {
+    const signal = evalRsi(wave("down"), loose({ decayBars: 0 }), {
+      price: 102,
+      entryPrice: 110,
+      positionSide: "short",
+      slPrice: 120,
+      perpsFees: PERPS,
+    });
+    assert.ok((signal.meta?.rsi ?? 100) <= 50, signal.reason);
+    assert.equal(signal.side, "BUY", signal.reason);
+    assert.equal(signal.closeFraction, undefined);
+    assert.match(signal.reason, /closing the position/);
+  });
+
   it("flattens the whole position when the decay horizon is reached", () => {
-    const candles = wave();
+    const candles = wave("down");
     const last = candles[candles.length - 1]!;
     const openedAt = new Date(last.time * 1000);
     const at = new Date((last.time + 20 * 3600) * 1000);
@@ -241,11 +270,15 @@ describe("evaluateBollingerRsi", () => {
   });
 });
 
-/** Alternating closes so the mid sits near 105 and the bands stay wide. */
-function wave(): Candle[] {
+/**
+ * Alternating closes so the mid sits near 105 and the bands stay wide.
+ * `down` ends on the lower close, which leaves RSI below 50.
+ */
+function wave(end: "up" | "down"): Candle[] {
   const start = 1_700_000_000;
+  const count = end === "up" ? 40 : 41;
   const candles: Candle[] = [];
-  for (let i = 0; i < 40; i++) candles.push(bar(start + i * 3600, i % 2 === 0 ? 100 : 110, 0.5));
+  for (let i = 0; i < count; i++) candles.push(bar(start + i * 3600, i % 2 === 0 ? 100 : 110, 0.5));
   return candles;
 }
 

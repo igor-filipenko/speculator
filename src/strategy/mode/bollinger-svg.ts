@@ -1,11 +1,20 @@
-import type { Candle } from "../../types.js";
+import type { Candle, Timeframe } from "../../types.js";
 import { bollinger, dmi } from "../indicators.js";
-import type { BollingerParams } from "./bollinger.js";
+
+/** Fields the band chart reads. Strategies pass their own params. */
+export interface BollingerChartParams {
+  timeframe: Timeframe;
+  period: number;
+  stdDev: number;
+  adxPeriod: number;
+  /** Included in the title when the strategy gates on DI. */
+  diRatio?: number;
+}
 
 export interface BollingerChartInput {
   pair: string;
   candles: Candle[];
-  strategy: BollingerParams;
+  strategy: BollingerChartParams;
   width?: number;
   height?: number;
 }
@@ -102,7 +111,11 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   const plusPath = linePath(di.plusDi, yDi);
   const minusPath = linePath(di.minusDi, yDi);
 
-  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev}) · DI${strategy.adxPeriod}×${strategy.diRatio}`;
+  const diLabel =
+    strategy.diRatio !== undefined
+      ? `DI${strategy.adxPeriod}×${strategy.diRatio}`
+      : `ADX${strategy.adxPeriod}`;
+  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev}) · ${diLabel}`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
 

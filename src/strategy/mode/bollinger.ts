@@ -1,6 +1,7 @@
 import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
 import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
 import { candleIntervalSeconds, timeframeFromMinutes } from "../../market/candle.js";
+import { applySearchPatch } from "../../types.js";
 import type {
   Candle,
   MarketIndicators,
@@ -11,6 +12,7 @@ import type {
   Signal,
   SignalSide,
   Strategy,
+  StrategyModule,
   StrategyParamPatch,
   Timeframe,
   Trend,
@@ -837,3 +839,10 @@ function fmt(n: number): string {
 function pct(n: number): string {
   return `${(n * 100).toFixed(2)}%`;
 }
+
+export const strategyModule: StrategyModule = {
+  id: "bollinger",
+  create(trend, volatility, patch) {
+    return new BollingerStrategy(trend, volatility, applySearchPatch(bollingerParamsFor(), patch));
+  },
+};

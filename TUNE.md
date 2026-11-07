@@ -95,7 +95,7 @@ Passing the verdict is the minimum, not proof. Treat a strategy as working only 
 6. **Stable parameters.** The selected sets should cluster. If `timeframe` flips between folds, or `stopAtr` jumps from 1.5 to 4, the response surface is flat or noisy and any single set is arbitrary. Note that late folds share most of their training data, so agreement there is weak evidence.
 7. **Enough trades.** OOS folds with 10 to 20 trades are anecdotes. Sum trades across folds before trusting a mean.
 8. **Reasonable risk.** OOS drawdown stays within what you would actually tolerate, and is not close to `--max-dd`.
-9. **A mechanism.** You can say why the edge should exist (for Bollinger: mean reversion in ranges, with a trend gate to avoid fading strong moves). An edge with no story is usually overfit.
+9. **A mechanism.** You can say why the edge should exist (mean reversion in ranges, with a gate to avoid fading strong moves). An edge with no story is usually overfit.
 10. **Survives a final holdout.** Reserve the most recent weeks or months, never use them in `tune`, then run one plain `pnpm backtest` with the chosen params. Look once. If you tweak and look again, it is no longer a holdout.
 
 If the answer to 1 to 5 is no, change the strategy instead of adding more knobs. More axes raise the number of lucky combinations, not the odds of a real edge.
@@ -114,13 +114,13 @@ If the answer to 1 to 5 is no, change the strategy instead of adding more knobs.
 
 ## Ablation: does a knob help?
 
-To test one filter (for example Bollinger `trendFilter`), do not read it off tuned winners. Fix every other parameter, then backtest the full span once per level (0, 1, 2) and compare return, drawdown, and trade count. A filter that only helps when the search also moves the other knobs is not carrying weight.
+To test one knob, do not read it off tuned winners. Fix every other parameter, then backtest the full span once per level and compare return, drawdown, trade count, and win rate. A knob that only helps when the search also moves the others is not carrying weight.
 
 ## After a good result
 
 1. Confirm with the holdout (point 10 above).
 2. Run `pnpm paper` for a few weeks with the new params. Paper fills are simulated Jupiter quotes, so it checks live data paths and signal timing, not slippage on a real fill.
-3. Only then change `bollingerParamsFor` or `donchianParamsFor`. Update `.env.example` and README in the same change.
+3. Only then change that strategy's `*ParamsFor` in its mode file.
 4. Go live with small size. Compare live fills to the backtest cost model. A persistent gap means the model is optimistic.
 
 `tune` does not change defaults for you. Applying a result is always a manual edit.

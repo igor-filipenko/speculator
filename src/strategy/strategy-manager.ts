@@ -1,3 +1,5 @@
+import { readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { getStrategy, listStrategies, type RegisteredStrategy } from "../db/strategies.js";
 import {
   evaluateMarketIndicators,
@@ -15,12 +17,11 @@ import type {
   RiskManager,
   Strategy,
   StrategyManager,
+  StrategyModule,
   StrategyParamPatch,
   Trend,
   Volatility,
 } from "../types.js";
-import { BollingerStrategy, bollingerParamsFor } from "./mode/bollinger.js";
-import { DonchianStrategy, donchianParamsFor } from "./mode/donchian.js";
 
 export type { StrategyParamPatch };
 export {
@@ -44,7 +45,7 @@ export interface SimpleStrategyManagerOptions {
 
 /**
  * Active strategy id comes from env/CLI and must exist in `strategy.registry`.
- * Bollinger and Donchian params follow HTF trend × 1h volatility.
+ * The matching `strategyModule` builds params for HTF trend × 1h volatility.
  * The risk manager is the same in every regime: hard stop and max deposit.
  */
 export class SimpleStrategyManager implements StrategyManager {
@@ -129,38 +130,78 @@ export function createRiskManager(_trend: Trend, _strategy: Strategy): RiskManag
   return new GenericRiskManager();
 }
 
-type StrategyFactory = (
-  trend: Trend,
-  volatility: Volatility,
-  patch?: StrategyParamPatch,
-) => Strategy;
+/** Implementations keyed by `strategy.registry.id`, filled from `mode/*.ts`. */
+const strategyFactories = new Map<string, StrategyModule["create"]>();
 
-/** Implementations keyed by `strategy.registry.id`. */
-const strategyFactories = new Map<string, StrategyFactory>([
-  [
-    "bollinger",
-    (trend, volatility, patch) =>
-      new BollingerStrategy(trend, volatility, applySearchPatch(bollingerParamsFor(), patch)),
-  ],
-  [
-    "donchian",
-    (trend, volatility, patch) =>
-      new DonchianStrategy(
-        trend,
-        volatility,
-        applySearchPatch(donchianParamsFor(trend, volatility), patch),
-      ),
-  ],
-]);
+let modulesReady: Promise<void> | undefined;
+
+function moduleExtension(): ".ts" | ".js" {
+  return import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+}
+
+function isStrategyModuleFile(name: string, ext: ".ts" | ".js"): boolean {
+  if (!name.endsWith(ext)) return false;
+  if (name.endsWith(`.d${ext}`)) return false;
+  if (name.endsWith(`.test${ext}`)) return false;
+  if (name.endsWith(`-svg${ext}`)) return false;
+  return true;
+}
+
+async function importSpecifier(specifier: string): Promise<unknown> {
+  return (await import(specifier)) as unknown;
+}
+
+function readStrategyModule(value: unknown): StrategyModule | undefined {
+  if (typeof value !== "object" || value === null || !("strategyModule" in value)) return undefined;
+  const mod: unknown = value.strategyModule;
+  if (typeof mod !== "object" || mod === null) return undefined;
+  if (!("id" in mod) || !("create" in mod)) return undefined;
+  const id: unknown = mod.id;
+  const create: unknown = mod.create;
+  if (typeof id !== "string" || id.trim() === "" || typeof create !== "function") return undefined;
+  return { id, create: create as StrategyModule["create"] };
+}
+
+/**
+ * Import every strategy file under `mode/`. A strategy file exports
+ * `strategyModule`. Tests and `*-svg` charts are not strategies.
+ */
+function ensureStrategyModules(): Promise<void> {
+  modulesReady ??= loadStrategyModules().catch((error: unknown) => {
+    modulesReady = undefined;
+    throw error;
+  });
+  return modulesReady;
+}
+
+async function loadStrategyModules(): Promise<void> {
+  const ext = moduleExtension();
+  const dir = fileURLToPath(new URL("./mode/", import.meta.url));
+  const names = (await readdir(dir)).filter((name) => isStrategyModuleFile(name, ext)).sort();
+  const loaded = await Promise.all(names.map((name) => importSpecifier(`./mode/${name}`)));
+  for (const imported of loaded) {
+    const mod = readStrategyModule(imported);
+    if (mod === undefined) continue;
+    if (strategyFactories.has(mod.id)) {
+      throw new Error(`strategy id "${mod.id}" is exported by more than one file`);
+    }
+    strategyFactories.set(mod.id, (trend, volatility, patch) =>
+      mod.create(trend, volatility, patch),
+    );
+  }
+}
+
+/** Registry ids that have a `strategyModule` in this process. */
+export async function listImplementedStrategyIds(): Promise<string[]> {
+  await ensureStrategyModules();
+  return [...strategyFactories.keys()].sort();
+}
 
 const registeredById = new Map<string, RegisteredStrategy>();
 
 /**
- * Load `id` from `strategy.registry` and build the implementation tuned for HTF
+ * Load `id` from `strategy.registry` and build the `strategyModule` for HTF
  * `trend` and 1h `volatility`. The registry row is cached for the process.
- * Bollinger entries are a closed-bar band touch. A long is blocked when −DI
- * leads +DI, and a short when +DI leads −DI. Donchian volume SMA multiplier
- * scales with both.
  */
 export async function loadStrategy(
   id: string,
@@ -169,27 +210,18 @@ export async function loadStrategy(
   patch?: StrategyParamPatch,
 ): Promise<Strategy> {
   const registered = await registeredStrategy(id);
+  await ensureStrategyModules();
   const create = strategyFactories.get(registered.id);
   if (create === undefined) {
     throw new Error(
       `Strategy "${registered.id}" (${registered.name}) is registered but has no implementation`,
     );
   }
-  return create(trend, volatility, patch);
-}
-
-/** Copy a tune patch onto regime defaults. Unknown keys are ignored. */
-function applySearchPatch<T extends object>(base: T, patch: StrategyParamPatch | undefined): T {
-  if (patch === undefined) return base;
-  const merged = { ...base };
-  const record = merged as Record<string, unknown>;
-  for (const [key, value] of Object.entries(patch.values ?? {})) {
-    if (key in record) record[key] = value;
+  const strategy = create(trend, volatility, patch);
+  if (strategy.getId() !== registered.id) {
+    throw new Error(`Strategy file for "${registered.id}" built id "${strategy.getId()}"`);
   }
-  if (patch.timeframe !== undefined && "timeframe" in record) {
-    record["timeframe"] = patch.timeframe;
-  }
-  return merged;
+  return strategy;
 }
 
 async function registeredStrategy(id: string): Promise<RegisteredStrategy> {

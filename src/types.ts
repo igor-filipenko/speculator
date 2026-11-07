@@ -363,9 +363,26 @@ export interface StrategyParamPatch {
   values?: Readonly<Record<string, number | string | boolean>>;
 }
 
+/** Copy a tune patch onto regime defaults. Unknown keys are ignored. */
+export function applySearchPatch<T extends object>(
+  base: T,
+  patch: StrategyParamPatch | undefined,
+): T {
+  if (patch === undefined) return base;
+  const merged = { ...base };
+  const record = merged as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch.values ?? {})) {
+    if (key in record) record[key] = value;
+  }
+  if (patch.timeframe !== undefined && "timeframe" in record) {
+    record["timeframe"] = patch.timeframe;
+  }
+  return merged;
+}
+
 export interface Strategy extends SearchSpace {
   getDisplayName(): string;
-  /** `strategy.registry.id` (for example `bollinger`). */
+  /** `strategy.registry.id`. */
   getId(): string;
   getRequiredCandles(): RequiredCandles;
   /**
@@ -390,6 +407,15 @@ export interface Strategy extends SearchSpace {
   ): Signal;
   /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
+}
+
+/**
+ * One file under `src/strategy/mode/` (not a test, not a `*-svg` chart).
+ * `id` is the `strategy.registry` primary key and must equal {@link Strategy.getId}.
+ */
+export interface StrategyModule {
+  id: string;
+  create(trend: Trend, volatility: Volatility, patch?: StrategyParamPatch): Strategy;
 }
 
 export interface Risk {

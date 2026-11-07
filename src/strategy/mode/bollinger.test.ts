@@ -8,6 +8,7 @@ import {
   adxBlocksEntry,
   evaluateBollinger,
   BollingerStrategy,
+  strategyModule,
   bollingerDecayTarget,
   bollingerNetReward,
   bollingerParamsFor,
@@ -1041,6 +1042,7 @@ describe("BollingerStrategy", () => {
   });
 
   it("names BB params in the display name", () => {
+    assert.equal(strategyModule.id, new BollingerStrategy().getId());
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /^bollinger \(/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /BB20/);
     assert.match(new BollingerStrategy("flat", "low").getDisplayName(), /DI1 ADX<20/);

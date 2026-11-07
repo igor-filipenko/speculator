@@ -1,4 +1,5 @@
 import { candleIntervalSeconds } from "../../market/candle.js";
+import { applySearchPatch } from "../../types.js";
 import type {
   Candle,
   MarketIndicators,
@@ -9,6 +10,7 @@ import type {
   Signal,
   SignalSide,
   Strategy,
+  StrategyModule,
   StrategyParamPatch,
   Timeframe,
   Trend,
@@ -755,3 +757,14 @@ function searchDefaults(params: DonchianParams): Record<string, number> {
 function fmt(n: number): string {
   return n.toFixed(4);
 }
+
+export const strategyModule: StrategyModule = {
+  id: "donchian",
+  create(trend, volatility, patch) {
+    return new DonchianStrategy(
+      trend,
+      volatility,
+      applySearchPatch(donchianParamsFor(trend, volatility), patch),
+    );
+  },
+};

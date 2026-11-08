@@ -1,8 +1,8 @@
 import type { CandleSource, Market } from "../types.js";
-import { BinanceMarket } from "./binance/market.js";
-import { BirdeyeMarket } from "./birdeye/market.js";
-import { CachedMarket } from "./cached/market.js";
-import { GeckoTerminalMarket } from "./gecko/market.js";
+import { BinanceMarket } from "./binance/index.js";
+import { BirdeyeMarket } from "./birdeye/index.js";
+import { CachedMarket } from "./cached/index.js";
+import { GeckoTerminalMarket } from "./gecko/index.js";
 
 /** Build the cached market for a vendor this process can fetch. */
 export function createMarket(source: CandleSource, birdeyeApiKey = ""): Market {

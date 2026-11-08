@@ -1,20 +1,11 @@
-import type { Candle, Timeframe } from "../../types.js";
-import { bollinger, dmi } from "../indicators.js";
+import type { Candle } from "../../../types.js";
+import { donchian, sma } from "../../indicators.js";
+import type { DonchianParams } from "./donchian.js";
 
-/** Fields the band chart reads. Strategies pass their own params. */
-export interface BollingerChartParams {
-  timeframe: Timeframe;
-  period: number;
-  stdDev: number;
-  adxPeriod: number;
-  /** Included in the title when the strategy gates on DI. */
-  diRatio?: number;
-}
-
-export interface BollingerChartInput {
+export interface DonchianChartInput {
   pair: string;
   candles: Candle[];
-  strategy: BollingerChartParams;
+  strategy: DonchianParams;
   width?: number;
   height?: number;
 }
@@ -24,9 +15,9 @@ const GAP = 16;
 const PRICE_RATIO = 0.68;
 
 /**
- * Build an SVG string: price candles + Bollinger mid/upper/lower + +DI/−DI subplot.
+ * Build an SVG string: price candles + Donchian mid/upper/lower + volume SMA subplot.
  */
-export function buildBollingerSvg(input: BollingerChartInput): string {
+export function buildDonchianSvg(input: DonchianChartInput): string {
   const width = input.width ?? 900;
   const height = input.height ?? 520;
   const { pair, candles, strategy } = input;
@@ -35,16 +26,16 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
     throw new Error("Cannot chart empty candle series");
   }
 
-  const closes = candles.map((c) => c.close);
-  const bands = bollinger(closes, strategy.period, strategy.stdDev);
-  const di = dmi(candles, strategy.adxPeriod);
+  const bands = donchian(candles, strategy.entryPeriod);
+  const volumes = candles.map((c) => c.volume);
+  const volumeSma = sma(volumes, strategy.volumeSmaPeriod);
 
   const plotW = width - PAD.left - PAD.right;
   const plotH = height - PAD.top - PAD.bottom - GAP;
   const priceH = plotH * PRICE_RATIO;
-  const diH = plotH - priceH;
+  const volH = plotH - priceH;
   const priceTop = PAD.top;
-  const diTop = PAD.top + priceH + GAP;
+  const volTop = PAD.top + priceH + GAP;
 
   let minP = Infinity;
   let maxP = -Infinity;
@@ -60,6 +51,7 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
       }
     }
   }
+  const closes = candles.map((c) => c.close);
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
     minP = closes[0]! * 0.99;
     maxP = closes[0]! * 1.01;
@@ -68,15 +60,28 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   minP -= padP;
   maxP += padP;
 
+  let maxVol = 0;
+  for (let i = 0; i < volumes.length; i++) {
+    maxVol = Math.max(maxVol, volumes[i]!);
+    const smaNow = volumeSma[i];
+    if (smaNow != null) {
+      maxVol = Math.max(maxVol, smaNow);
+    }
+  }
+  if (!(maxVol > 0)) {
+    maxVol = 1;
+  }
+
   const n = candles.length;
   const step = plotW / Math.max(n, 1);
   const bodyW = Math.max(1, step * 0.6);
 
   const xAt = (i: number): number => PAD.left + step * (i + 0.5);
   const yPrice = (p: number): number => priceTop + ((maxP - p) / (maxP - minP)) * priceH;
-  const yDi = (v: number): number => diTop + ((100 - v) / 100) * diH;
+  const yVol = (v: number): number => volTop + volH - (v / maxVol) * volH;
 
   const candleParts: string[] = [];
+  const volumeParts: string[] = [];
   for (let i = 0; i < n; i++) {
     const c = candles[i]!;
     const x = xAt(i);
@@ -91,6 +96,12 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
     candleParts.push(
       `<line x1="${x}" y1="${yHigh}" x2="${x}" y2="${yLow}" stroke="${color}" stroke-width="1"/>`,
       `<rect x="${x - bodyW / 2}" y="${yTop}" width="${bodyW}" height="${bodyH}" fill="${color}"/>`,
+    );
+
+    const volY = yVol(c.volume);
+    const volBarH = Math.max(1, volTop + volH - volY);
+    volumeParts.push(
+      `<rect x="${x - bodyW / 2}" y="${volY}" width="${bodyW}" height="${volBarH}" fill="${color}" opacity="0.55"/>`,
     );
   }
 
@@ -108,14 +119,9 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   const midPath = linePath(bands.mid, yPrice);
   const upperPath = linePath(bands.upper, yPrice);
   const lowerPath = linePath(bands.lower, yPrice);
-  const plusPath = linePath(di.plusDi, yDi);
-  const minusPath = linePath(di.minusDi, yDi);
+  const volSmaPath = linePath(volumeSma, yVol);
 
-  const diLabel =
-    strategy.diRatio !== undefined
-      ? `DI${strategy.adxPeriod}×${strategy.diRatio}`
-      : `ADX${strategy.adxPeriod}`;
-  const title = `${escapeXml(pair)} · ${strategy.timeframe} · BB(${strategy.period}, ${strategy.stdDev}) · ${diLabel}`;
+  const title = `${escapeXml(pair)} · ${strategy.timeframe} · DC(${strategy.entryPeriod}/${strategy.exitPeriod}) · volSMA${strategy.volumeSmaPeriod}×${strategy.volumeSmaMult.toFixed(1)}`;
   const priceLabelHi = formatPrice(maxP);
   const priceLabelLo = formatPrice(minP);
 
@@ -130,13 +136,12 @@ export function buildBollingerSvg(input: BollingerChartInput): string {
   ${upperPath ? `<path d="${upperPath}" fill="none" stroke="#38bdf8" stroke-width="1.25" stroke-dasharray="4 3"/>` : ""}
   ${midPath ? `<path d="${midPath}" fill="none" stroke="#fbbf24" stroke-width="1.5"/>` : ""}
   ${lowerPath ? `<path d="${lowerPath}" fill="none" stroke="#38bdf8" stroke-width="1.25" stroke-dasharray="4 3"/>` : ""}
-  <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">BB mid</text>
-  <text x="${PAD.left + 64}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">±${strategy.stdDev}σ</text>
-  <rect x="${PAD.left}" y="${diTop}" width="${plotW}" height="${diH}" fill="none" stroke="#1e293b"/>
-  ${plusPath ? `<path d="${plusPath}" fill="none" stroke="#34d399" stroke-width="1.5"/>` : ""}
-  ${minusPath ? `<path d="${minusPath}" fill="none" stroke="#f472b6" stroke-width="1.5"/>` : ""}
-  <text x="${PAD.left}" y="${diTop + 14}" fill="#34d399" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">+DI</text>
-  <text x="${PAD.left + 36}" y="${diTop + 14}" fill="#f472b6" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">-DI</text>
+  <text x="${PAD.left}" y="${priceTop + 14}" fill="#fbbf24" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">Donchian mid</text>
+  <text x="${PAD.left + 92}" y="${priceTop + 14}" fill="#38bdf8" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">DC${strategy.entryPeriod}</text>
+  <rect x="${PAD.left}" y="${volTop}" width="${plotW}" height="${volH}" fill="none" stroke="#1e293b"/>
+  ${volumeParts.join("\n  ")}
+  ${volSmaPath ? `<path d="${volSmaPath}" fill="none" stroke="#a78bfa" stroke-width="1.5"/>` : ""}
+  <text x="${PAD.left}" y="${volTop + 14}" fill="#a78bfa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11">volume SMA${strategy.volumeSmaPeriod}</text>
 </svg>`;
 }
 

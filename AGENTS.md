@@ -44,7 +44,7 @@ src/ highlights:
   db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
   market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache, HTF/1h indicators
   exchange/             # emulated, or jupiter (spot long + perps short)
-  strategy/             # indicators, one mode file per strategy, optional *-svg charts
+  strategy/             # indicators, one package per strategy under mode/<id>/, optional svg charts
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
@@ -59,7 +59,7 @@ src/ highlights:
 - Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
-- A new strategy is `src/strategy/mode/<id>.ts` exporting `strategyModule`, a test beside it, and `INSERT INTO strategy.registry (id, name, type)` run directly against the database. Do not add a migration whose only change is that row, and do not list the id in shared code or docs.
+- A new strategy is `src/strategy/mode/<id>/` whose `index.ts` exports `strategyModule`, a test in that folder, and `INSERT INTO strategy.registry (id, name, type)` run directly against the database. The directory name is the id. Do not add a migration whose only change is that row, and do not list the id in shared code or docs. A market implementation's public entry is `src/market/<impl>/index.ts`.
 - When changing a strategy's defaults, edit `*ParamsFor` in its file. Do not copy those defaults into README or `.env.example`.
 - When changing SQL under `migrations/`, update [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) in the same change (schemas, tables, sequences, types, and default privileges for role `speculator`).
 - After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0` + `web` check).

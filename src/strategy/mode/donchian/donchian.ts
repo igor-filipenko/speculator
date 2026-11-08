@@ -1,5 +1,5 @@
-import { candleIntervalSeconds } from "../../market/candle.js";
-import { applySearchPatch } from "../../types.js";
+import { candleIntervalSeconds } from "../../../market/candle.js";
+import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
   MarketIndicators,
@@ -15,9 +15,9 @@ import type {
   Timeframe,
   Trend,
   Volatility,
-} from "../../types.js";
-import { atr, donchian, ema, sma } from "../indicators.js";
-import { buildDonchianSvg } from "./donchian-svg.js";
+} from "../../../types.js";
+import { atr, donchian, ema, sma } from "../../indicators.js";
+import { buildDonchianSvg } from "./svg.js";
 
 export interface DonchianParams {
   timeframe: Timeframe;

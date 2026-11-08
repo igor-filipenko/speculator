@@ -33,7 +33,7 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `strategy.registry` id. Implementation is `src/strategy/mode/<id>.ts`                 |
+| `STRATEGY`                            | `strategy.registry` id. Implementation is `src/strategy/mode/<id>/index.ts`           |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default), `binance`, or `birdeye`                     |
 | `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool               |
@@ -348,7 +348,7 @@ Useful controls: `sudo systemctl stop bot` · `sudo systemctl restart miniapp` �
 
 One position per pair: `long`, `short`, or `flat`.
 
-The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>.ts`, which exports `strategyModule`. Adding a strategy is that file, a test beside it, and `INSERT INTO strategy.registry (id, name, type)`. No other file lists strategy ids.
+The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
 `SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The risk manager is `GenericRiskManager` in every regime (hard stop and max deposit). Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file. A Telegram message is sent when the trend or volatility changes.
 
@@ -371,10 +371,10 @@ src/
   config.ts                # zod + env
   types.ts
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
-  market/gecko/            # GeckoTerminalMarket
-  market/binance/          # BinanceMarket spot klines
-  market/birdeye/          # BirdeyeMarket pair OHLCV
-  market/cached/           # CachedMarket (Timescale gap fill)
+  market/gecko/            # GeckoTerminalMarket; public entry index.ts
+  market/binance/          # BinanceMarket spot klines; public entry index.ts
+  market/birdeye/          # BirdeyeMarket pair OHLCV; public entry index.ts
+  market/cached/           # CachedMarket (Timescale gap fill); public entry index.ts
   market/manager.ts        # createMarket(CandleSource)
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
@@ -383,8 +383,8 @@ src/
   exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
-  strategy/mode/           # one <id>.ts per strategy (exports strategyModule); optional *-svg.ts charts
-  strategy/strategy-manager.ts # discovers mode/*.ts; HTF trend / 1h vol; getActiveStrategy/RiskManager
+  strategy/mode/           # one <id>/ package per strategy (index.ts exports strategyModule)
+  strategy/strategy-manager.ts # discovers mode/<id>/index; HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   portfolio/paper/         # simulated cash book + Timescale mode=paper

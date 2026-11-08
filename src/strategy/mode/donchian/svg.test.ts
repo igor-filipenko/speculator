@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createCandle } from "../../market/candle.js";
-import type { Candle } from "../../types.js";
+import { createCandle } from "../../../market/candle.js";
+import type { Candle } from "../../../types.js";
 import { donchianParamsFor } from "./donchian.js";
-import { buildDonchianSvg } from "./donchian-svg.js";
+import { buildDonchianSvg } from "./svg.js";
 
 const strategy = donchianParamsFor();
 

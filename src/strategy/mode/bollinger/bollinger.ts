@@ -1,7 +1,7 @@
-import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
-import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { candleIntervalSeconds, timeframeFromMinutes } from "../../market/candle.js";
-import { applySearchPatch } from "../../types.js";
+import { liquidityTierForPair, TIER_COSTS } from "../../../exchange/emulated/emulated-quote.js";
+import { shortPositionFeePct } from "../../../exchange/jupiter/perps-fees.js";
+import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/candle.js";
+import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
   MarketIndicators,
@@ -17,9 +17,9 @@ import type {
   Timeframe,
   Trend,
   Volatility,
-} from "../../types.js";
-import { atr, bollinger, dmi } from "../indicators.js";
-import { buildBollingerSvg } from "./bollinger-svg.js";
+} from "../../../types.js";
+import { atr, bollinger, dmi } from "../../indicators.js";
+import { buildBollingerSvg } from "./svg.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;

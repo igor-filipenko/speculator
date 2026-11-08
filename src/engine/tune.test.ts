@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { AppConfig } from "../config.js";
 import { useTestDb } from "../db/test-db.js";
 import { createCandle } from "../market/candle.js";
-import { BollingerStrategy } from "../strategy/mode/bollinger.js";
+import { strategyModule as bollingerStrategy } from "../strategy/mode/bollinger/index.js";
 import type { Candle, SearchSpace } from "../types.js";
 import {
   parseTuneArgs,
@@ -416,7 +416,7 @@ describe("timeframe axis", () => {
   const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
 
   it("keeps 1h and splits the ATR period from the band and ADX periods", () => {
-    const strategy = new BollingerStrategy();
+    const strategy = bollingerStrategy.create("flat", "low");
     const defaults = defaultLevels(strategy, strategy.getSearchDefaults());
     assert.equal(defaults["timeframe"], undefined);
     assert.equal(defaults["trendFilter"], undefined);

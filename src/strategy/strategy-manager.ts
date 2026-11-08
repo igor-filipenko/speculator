@@ -130,21 +130,13 @@ export function createRiskManager(_trend: Trend, _strategy: Strategy): RiskManag
   return new GenericRiskManager();
 }
 
-/** Implementations keyed by `strategy.registry.id`, filled from `mode/*.ts`. */
+/** Implementations keyed by `strategy.registry.id`, filled from `mode/<id>/index`. */
 const strategyFactories = new Map<string, StrategyModule["create"]>();
 
 let modulesReady: Promise<void> | undefined;
 
 function moduleExtension(): ".ts" | ".js" {
   return import.meta.url.endsWith(".ts") ? ".ts" : ".js";
-}
-
-function isStrategyModuleFile(name: string, ext: ".ts" | ".js"): boolean {
-  if (!name.endsWith(ext)) return false;
-  if (name.endsWith(`.d${ext}`)) return false;
-  if (name.endsWith(`.test${ext}`)) return false;
-  if (name.endsWith(`-svg${ext}`)) return false;
-  return true;
 }
 
 async function importSpecifier(specifier: string): Promise<unknown> {
@@ -163,8 +155,8 @@ function readStrategyModule(value: unknown): StrategyModule | undefined {
 }
 
 /**
- * Import every strategy file under `mode/`. A strategy file exports
- * `strategyModule`. Tests and `*-svg` charts are not strategies.
+ * Import every strategy package under `mode/<id>/`. `index` exports
+ * `strategyModule`, and the directory name is that id.
  */
 function ensureStrategyModules(): Promise<void> {
   modulesReady ??= loadStrategyModules().catch((error: unknown) => {
@@ -177,13 +169,24 @@ function ensureStrategyModules(): Promise<void> {
 async function loadStrategyModules(): Promise<void> {
   const ext = moduleExtension();
   const dir = fileURLToPath(new URL("./mode/", import.meta.url));
-  const names = (await readdir(dir)).filter((name) => isStrategyModuleFile(name, ext)).sort();
-  const loaded = await Promise.all(names.map((name) => importSpecifier(`./mode/${name}`)));
-  for (const imported of loaded) {
+  const names = (await readdir(dir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const loaded = await Promise.all(
+    names.map(async (name) => ({
+      name,
+      imported: await importSpecifier(`./mode/${name}/index${ext}`),
+    })),
+  );
+  for (const { name, imported } of loaded) {
     const mod = readStrategyModule(imported);
     if (mod === undefined) continue;
+    if (mod.id !== name) {
+      throw new Error(`strategy directory "${name}" exports id "${mod.id}"`);
+    }
     if (strategyFactories.has(mod.id)) {
-      throw new Error(`strategy id "${mod.id}" is exported by more than one file`);
+      throw new Error(`strategy id "${mod.id}" is exported by more than one package`);
     }
     strategyFactories.set(mod.id, (trend, volatility, patch) =>
       mod.create(trend, volatility, patch),

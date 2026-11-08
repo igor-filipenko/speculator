@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createCandle } from "../../market/candle.js";
-import type { Candle, MarketIndicators, Trend, Volatility } from "../../types.js";
-import { TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
-import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { createCandle } from "../../../market/candle.js";
+import type { Candle, MarketIndicators, Trend, Volatility } from "../../../types.js";
+import { TIER_COSTS } from "../../../exchange/emulated/emulated-quote.js";
+import { shortPositionFeePct } from "../../../exchange/jupiter/perps-fees.js";
 import {
   adxBlocksEntry,
   evaluateBollinger,

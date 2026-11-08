@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createCandle } from "../../market/candle.js";
-import type { Candle, MarketIndicators, PerpsFees } from "../../types.js";
+import { createCandle } from "../../../market/candle.js";
+import type { Candle, MarketIndicators, PerpsFees } from "../../../types.js";
 import {
   DonchianStrategy,
   donchianParamsFor,

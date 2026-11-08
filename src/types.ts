@@ -415,8 +415,8 @@ export interface Strategy extends SearchSpace {
 }
 
 /**
- * One file under `src/strategy/mode/` (not a test, not a `*-svg` chart).
- * `id` is the `strategy.registry` primary key and must equal {@link Strategy.getId}.
+ * Public entry of `src/strategy/mode/<id>/`. `index.ts` exports this.
+ * `id` is the `strategy.registry` primary key, the directory name, and {@link Strategy.getId}.
  */
 export interface StrategyModule {
   id: string;

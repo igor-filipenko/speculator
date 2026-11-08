@@ -199,8 +199,9 @@ export function sampleSearchSpace(
 
 /**
  * Median Sharpe of a feasible set and its evaluated one-step neighbors.
- * A set with no evaluated neighbor cannot win. Ties break on vs-hold, profit
- * factor, then fewer differences from the defaults.
+ * A set with no evaluated neighbor cannot win. An equal median prefers more
+ * round trips, then vs-hold, profit factor, and fewer differences from the
+ * defaults.
  */
 export function pickNeighborhoodWinner(
   scored: readonly ScoredVariant[],
@@ -549,11 +550,16 @@ export function printTuneReport(result: TuneResult): void {
     console.log(fmtMetrics("  OOS", fold.oosMetrics));
     console.log(fmtMetrics("  baseline OOS", fold.baselineMetrics));
   }
+  const searchTrades = result.folds.reduce((sum, fold) => sum + fold.oosMetrics.roundTrips, 0);
+  const defaultTrades = result.folds.reduce(
+    (sum, fold) => sum + fold.baselineMetrics.roundTrips,
+    0,
+  );
   console.log(
     `OOS compounded return: search ${result.oosReturnPct.toFixed(2)}% ` +
-      `(mean sharpe ${result.oosSharpe.toFixed(2)}) | ` +
+      `(mean sharpe ${result.oosSharpe.toFixed(2)}, ${searchTrades} trades) | ` +
       `defaults ${result.baselineReturnPct.toFixed(2)}% ` +
-      `(mean sharpe ${result.baselineSharpe.toFixed(2)})`,
+      `(mean sharpe ${result.baselineSharpe.toFixed(2)}, ${defaultTrades} trades)`,
   );
   console.log(
     result.nextParams === undefined
@@ -1119,6 +1125,7 @@ function missingNeighborVariants(
 
 function compareRaw(a: ScoredVariant, b: ScoredVariant): number {
   if (a.sharpeRatio !== b.sharpeRatio) return b.sharpeRatio - a.sharpeRatio;
+  if (a.roundTrips !== b.roundTrips) return b.roundTrips - a.roundTrips;
   if (a.vsHoldReturnPct !== b.vsHoldReturnPct) return b.vsHoldReturnPct - a.vsHoldReturnPct;
   const profit = cappedProfitFactor(b.profitFactor) - cappedProfitFactor(a.profitFactor);
   if (profit !== 0) return profit;
@@ -1126,6 +1133,7 @@ function compareRaw(a: ScoredVariant, b: ScoredVariant): number {
 }
 
 function preferOnTie(candidate: ScoredVariant, best: ScoredVariant): boolean {
+  if (candidate.roundTrips !== best.roundTrips) return candidate.roundTrips > best.roundTrips;
   if (candidate.vsHoldReturnPct !== best.vsHoldReturnPct) {
     return candidate.vsHoldReturnPct > best.vsHoldReturnPct;
   }
@@ -1461,6 +1469,7 @@ class ReplayPool {
   private readonly queue: PoolTask[] = [];
   private nextId = 1;
   private closed = false;
+  private stopped = false;
 
   static async open(size: number, init: PoolInit): Promise<ReplayPool> {
     const pool = new ReplayPool();
@@ -1476,9 +1485,13 @@ class ReplayPool {
 
   async run(requests: readonly ReplayRequest[]): Promise<BacktestMetrics[]> {
     const entries: { index: number; value: BacktestMetrics }[] = [];
+    let done = 0;
+    const total = requests.length;
     await Promise.all(
       requests.map(async (request, index) => {
         const value = await this.enqueue(request);
+        done += 1;
+        if (done === total || done % 32 === 0) console.log(`replay ${done}/${total}`);
         entries.push({ index, value });
       }),
     );
@@ -1486,12 +1499,11 @@ class ReplayPool {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    const already = this.closed;
     this.closed = true;
-    const closed = new Error("Replay pool closed");
-    for (const task of this.queue.splice(0)) task.reject(closed);
-    for (const task of this.inflight.values()) task.reject(closed);
-    this.inflight.clear();
+    if (!already) this.rejectPending(new Error("Replay pool closed"));
+    if (this.stopped) return;
+    this.stopped = true;
     this.idle.length = 0;
     await Promise.all(this.workers.splice(0).map((worker) => worker.terminate()));
   }
@@ -1524,6 +1536,10 @@ class ReplayPool {
         worker.off("error", onError);
         worker.on("message", (next: WorkerOutbound) => this.onMessage(worker, next));
         worker.on("error", (error: Error) => this.onCrash(worker, error));
+        worker.on("exit", (code) => {
+          if (this.closed) return;
+          this.onCrash(worker, new Error(`Replay worker exited (${code})`));
+        });
         resolve(worker);
       };
       worker.on("message", onMessage);
@@ -1580,9 +1596,21 @@ class ReplayPool {
   private onCrash(worker: Worker, error: Error): void {
     const task = this.inflight.get(worker);
     this.inflight.delete(worker);
-    task?.reject(error);
+    if (this.closed) {
+      task?.reject(error);
+      return;
+    }
     this.closed = true;
+    task?.reject(error);
+    this.rejectPending(error);
+    void this.close();
+  }
+
+  /** Reject every replay still queued or running. Callers already removed their own task. */
+  private rejectPending(error: Error): void {
     for (const queued of this.queue.splice(0)) queued.reject(error);
+    for (const pending of this.inflight.values()) pending.reject(error);
+    this.inflight.clear();
   }
 }
 

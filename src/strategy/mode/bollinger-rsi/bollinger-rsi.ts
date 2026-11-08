@@ -88,23 +88,22 @@ export function bollingerRsiParamsFor(): BollingerRsiParams {
 }
 
 /**
- * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h.
- * `adxPeriod`, `atrPeriod`, `adxMax`, `maxBreakAtr`, and `minRewardRisk` stay
- * on the defaults: prior SOL searches either pinned those gates or moved each
- * one to a different edge on every fold. A 28-bar band, 2.5σ bands, RSI
- * lengths of 20 and 28, and an RSI threshold of 20 rarely reach the trade
- * count a fold needs. A 2 ATR stop and decay of 0 or 3 bars only won on the
- * synthetic path. The short RSI gate is `100 - rsiThreshold`.
+ * Decision knobs for `pnpm tune`. `adxPeriod`, `atrPeriod`, `adxMax`,
+ * `maxBreakAtr`, `minRewardRisk`, and `decayBars` stay on the defaults.
+ * `timeframe` is 15m or 1h: the 1h tape rarely reaches the trade count a fold
+ * needs. A 28-bar band, 2.5σ bands, RSI lengths of 20 and 28, and an RSI
+ * threshold of 20 have the same problem. The short RSI gate is
+ * `100 - rsiThreshold`.
  */
 export const BOLLINGER_RSI_SEARCH_SPACE: SearchSpace = {
   axes: [
+    { key: "timeframe", levels: [15, 60] },
     { key: "period", levels: [14, 20] },
     { key: "stdDev", levels: [1.5, 2] },
     { key: "rsiPeriod", levels: [7, 14] },
     { key: "rsiThreshold", levels: [30, 35] },
     { key: "rsiMid", levels: [40, 50, 60] },
     { key: "stopAtr", levels: [2.5, 3] },
-    { key: "decayBars", levels: [6, 12] },
   ],
 };
 

@@ -193,6 +193,13 @@ describe("pickNeighborhoodWinner", () => {
     const winner = pickNeighborhoodWinner([other, defaults], twoAxisSpace);
     assert.deepEqual(winner?.variant.values, { a: 1, b: 1 });
   });
+
+  it("breaks an equal Sharpe median toward more round trips", () => {
+    const sparse = scored([1, 1], { a: 1, b: 1 }, 1, { roundTrips: 8, distanceFromDefaults: 0 });
+    const busy = scored([0, 1], { a: 0, b: 1 }, 1, { roundTrips: 40, distanceFromDefaults: 1 });
+    const winner = pickNeighborhoodWinner([sparse, busy], twoAxisSpace);
+    assert.deepEqual(winner?.variant.values, { a: 0, b: 1 });
+  });
 });
 
 describe("walkForwardWindows", () => {

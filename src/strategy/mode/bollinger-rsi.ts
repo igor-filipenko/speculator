@@ -56,10 +56,11 @@ export interface BollingerRsiParams {
   decayBars: number;
   /** Wilder RSI lookback on the signal closes. */
   rsiPeriod: number;
-  /** Long only when RSI is at or below this. */
-  rsiOversold: number;
-  /** Short only when RSI is at or above this. */
-  rsiOverbought: number;
+  /**
+   * Long only when RSI is at or below this. A short uses the mirror,
+   * `100 - rsiThreshold`.
+   */
+  rsiThreshold: number;
   /**
    * At the mid exit, sell half only while RSI is still on the entry side of
    * this level. A long at or above it, and a short at or below it, closes in full.
@@ -81,39 +82,30 @@ export function bollingerRsiParamsFor(): BollingerRsiParams {
     stopAtr: 2.5,
     decayBars: 12,
     rsiPeriod: 14,
-    rsiOversold: 30,
-    rsiOverbought: 70,
+    rsiThreshold: 30,
     rsiMid: 40,
   };
 }
 
-/** Drop a sample whose oversold level is not below the overbought level. */
-export function bollingerRsiSearchAccept(values: Readonly<Record<string, number>>): boolean {
-  const oversold = values["rsiOversold"];
-  const overbought = values["rsiOverbought"];
-  if (oversold === undefined || overbought === undefined) return true;
-  return oversold < overbought;
-}
-
 /**
  * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h.
- * `adxPeriod` stays on the default.
+ * `adxPeriod`, `atrPeriod`, `adxMax`, `maxBreakAtr`, and `minRewardRisk` stay
+ * on the defaults: prior SOL searches either pinned those gates or moved each
+ * one to a different edge on every fold. A 28-bar band, 2.5σ bands, RSI
+ * lengths of 20 and 28, and an RSI threshold of 20 rarely reach the trade
+ * count a fold needs. A 2 ATR stop and decay of 0 or 3 bars only won on the
+ * synthetic path. The short RSI gate is `100 - rsiThreshold`.
  */
 export const BOLLINGER_RSI_SEARCH_SPACE: SearchSpace = {
   axes: [
-    { key: "period", levels: [14, 20, 28] },
-    { key: "stdDev", levels: [1.5, 2, 2.5] },
-    { key: "rsiPeriod", levels: [7, 14, 20, 28] },
-    { key: "rsiOversold", levels: [20, 30, 35] },
-    { key: "rsiOverbought", levels: [65, 70, 80] },
-    { key: "atrPeriod", levels: [14, 20, 28] },
-    { key: "adxMax", levels: [0, 20, 25, 30] },
-    { key: "maxBreakAtr", levels: [2, 2.5, 4] },
-    { key: "minRewardRisk", levels: [0.5, 0.75, 1] },
-    { key: "stopAtr", levels: [2, 2.5, 3] },
-    { key: "decayBars", levels: [0, 3, 6, 12] },
+    { key: "period", levels: [14, 20] },
+    { key: "stdDev", levels: [1.5, 2] },
+    { key: "rsiPeriod", levels: [7, 14] },
+    { key: "rsiThreshold", levels: [30, 35] },
+    { key: "rsiMid", levels: [40, 50, 60] },
+    { key: "stopAtr", levels: [2.5, 3] },
+    { key: "decayBars", levels: [6, 12] },
   ],
-  accept: bollingerRsiSearchAccept,
 };
 
 export interface BollingerRsiInput {
@@ -149,9 +141,9 @@ const ENTRY_WINDOW_SECONDS = 60;
 /**
  * Mean-reversion on a Bollinger band exit confirmed by an RSI extreme.
  * BUY when a closed bar trades at or through the lower band, the close and
- * the quote are still below the mid, and RSI ≤ `rsiOversold`.
+ * the quote are still below the mid, and RSI ≤ `rsiThreshold`.
  * SELL when a closed bar trades at or through the upper band, the close and
- * the quote are still above the mid, and RSI ≥ `rsiOverbought`. A new short
+ * the quote are still above the mid, and RSI ≥ `100 - rsiThreshold`. A new short
  * needs a perps fee schedule.
  * A candle wider than `maxBreakAtr` × ATR is ignored. ADX ≥ `adxMax` waits
  * for a range (`adxMax` 0 leaves that gate off). Neither gate blocks an exit.
@@ -274,8 +266,8 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
 
   if (belowMid && beyondLower) {
     const breakoutHold = breakoutRangeHold("long", lastBar, atrNow, strategy.maxBreakAtr);
-    if (rsiNow > strategy.rsiOversold) {
-      reason = `Lower band exit ignored: RSI ${fmt(rsiNow)} > ${strategy.rsiOversold}`;
+    if (rsiNow > strategy.rsiThreshold) {
+      reason = `Lower band exit ignored: RSI ${fmt(rsiNow)} > ${strategy.rsiThreshold}`;
     } else if (breakoutHold != null) {
       reason = breakoutHold;
     } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
@@ -284,14 +276,14 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
       side = "BUY";
       reason =
         `Lower BB exit (low ${fmt(lastBar.low)} ≤ ${fmt(bbLower)}, close ${fmt(close)}); ` +
-        `RSI ${fmt(rsiNow)} ≤ ${strategy.rsiOversold}`;
+        `RSI ${fmt(rsiNow)} ≤ ${strategy.rsiThreshold}`;
     }
   } else if (aboveMid && beyondUpper) {
     const breakoutHold = breakoutRangeHold("short", lastBar, atrNow, strategy.maxBreakAtr);
     if (input.perpsFees == null) {
       reason = "Upper band exit ignored: perps fee schedule missing";
-    } else if (rsiNow < strategy.rsiOverbought) {
-      reason = `Upper band exit ignored: RSI ${fmt(rsiNow)} < ${strategy.rsiOverbought}`;
+    } else if (rsiNow < shortRsiThreshold(strategy.rsiThreshold)) {
+      reason = `Upper band exit ignored: RSI ${fmt(rsiNow)} < ${shortRsiThreshold(strategy.rsiThreshold)}`;
     } else if (breakoutHold != null) {
       reason = breakoutHold;
     } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
@@ -300,7 +292,7 @@ export function evaluateBollingerRsi(input: BollingerRsiInput): Signal {
       side = "SELL";
       reason =
         `Upper BB exit (high ${fmt(lastBar.high)} ≥ ${fmt(bbUpper)}, close ${fmt(close)}); ` +
-        `RSI ${fmt(rsiNow)} ≥ ${strategy.rsiOverbought}`;
+        `RSI ${fmt(rsiNow)} ≥ ${shortRsiThreshold(strategy.rsiThreshold)}`;
     }
   }
 
@@ -341,10 +333,6 @@ export class BollingerRsiStrategy implements Strategy {
     this.params = params ?? bollingerRsiParamsFor();
   }
 
-  accept(values: Readonly<Record<string, number>>): boolean {
-    return bollingerRsiSearchAccept(values);
-  }
-
   getSearchDefaults(): Readonly<Record<string, number>> {
     return searchDefaults(this.params);
   }
@@ -361,20 +349,12 @@ export class BollingerRsiStrategy implements Strategy {
   }
 
   getDisplayName(): string {
-    const {
-      timeframe,
-      period,
-      stdDev,
-      rsiPeriod,
-      rsiOversold,
-      rsiOverbought,
-      rsiMid,
-      adxMax,
-      decayBars,
-    } = this.params;
+    const { timeframe, period, stdDev, rsiPeriod, rsiThreshold, rsiMid, adxMax, decayBars } =
+      this.params;
     const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
     const decay = decayBars > 0 ? ` decay${decayBars}` : "";
-    return `bollinger-rsi (${timeframe} BB${period}×${stdDev} RSI${rsiPeriod} ≤${rsiOversold}/≥${rsiOverbought}↔${rsiMid}${adx}${decay})`;
+    const shortRsi = shortRsiThreshold(rsiThreshold);
+    return `bollinger-rsi (${timeframe} BB${period}×${stdDev} RSI${rsiPeriod} ≤${rsiThreshold}/≥${shortRsi}↔${rsiMid}${adx}${decay})`;
   }
 
   getId(): string {
@@ -586,7 +566,7 @@ function shortExit(
     return { ...base, side: "BUY", reason: timeDecayReason(decay, entry, bbMid) };
   }
   if (price <= decay.target) {
-    if (decay.target < floor && rsiNow > (100 - strategy.rsiMid)) {
+    if (decay.target < floor && rsiNow > 100 - strategy.rsiMid) {
       return {
         ...base,
         side: "BUY",
@@ -711,6 +691,10 @@ function staleSignalBar(bar: Candle, at: Date): string | null {
   return `Signal bar is ${Math.floor(age)}s old; one entry per closed bar`;
 }
 
+function shortRsiThreshold(threshold: number): number {
+  return 100 - threshold;
+}
+
 function closedSignalCandles(candles: Candle[], at: Date): Candle[] {
   const forming = candles[candles.length - 1];
   if (forming == null || forming.isClosed(at.getTime() / 1000)) return candles;
@@ -793,8 +777,7 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   const stopAtr = values["stopAtr"];
   const decayBars = values["decayBars"];
   const rsiPeriod = values["rsiPeriod"];
-  const rsiOversold = values["rsiOversold"];
-  const rsiOverbought = values["rsiOverbought"];
+  const rsiThreshold = values["rsiThreshold"];
   const rsiMid = values["rsiMid"];
   if (timeframe !== undefined) {
     const label = timeframeFromMinutes(timeframe);
@@ -811,8 +794,7 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   if (stopAtr !== undefined) patch.stopAtr = stopAtr;
   if (decayBars !== undefined) patch.decayBars = decayBars;
   if (rsiPeriod !== undefined) patch.rsiPeriod = rsiPeriod;
-  if (rsiOversold !== undefined) patch.rsiOversold = rsiOversold;
-  if (rsiOverbought !== undefined) patch.rsiOverbought = rsiOverbought;
+  if (rsiThreshold !== undefined) patch.rsiThreshold = rsiThreshold;
   if (rsiMid !== undefined) patch.rsiMid = rsiMid;
   return patch;
 }

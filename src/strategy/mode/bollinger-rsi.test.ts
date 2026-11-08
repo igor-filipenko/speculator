@@ -27,8 +27,7 @@ function loose(overrides: Partial<BollingerRsiParams> = {}): BollingerRsiParams 
     maxBreakAtr: 0,
     minRewardRisk: 0,
     rsiPeriod: 5,
-    rsiOversold: 30,
-    rsiOverbought: 70,
+    rsiThreshold: 30,
     ...overrides,
   };
 }
@@ -101,7 +100,7 @@ describe("evaluateBollingerRsi", () => {
   });
 
   it("holds a lower-band exit when RSI is not oversold", () => {
-    const signal = evalRsi(crashThroughLower(), loose({ rsiOversold: -1 }));
+    const signal = evalRsi(crashThroughLower(), loose({ rsiThreshold: -1 }));
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /RSI .* > -1/);
   });
@@ -110,7 +109,7 @@ describe("evaluateBollingerRsi", () => {
     const start = 1_700_000_000;
     const candles: Candle[] = [];
     for (let i = 0; i < 40; i++) candles.push(bar(start + i * 3600, 100, 0.05));
-    const signal = evalRsi(candles, loose({ rsiOversold: 100 }));
+    const signal = evalRsi(candles, loose({ rsiThreshold: 100 }));
     assert.equal(signal.side, "HOLD", signal.reason);
     assert.match(signal.reason, /No BB\+RSI signal/);
   });
@@ -130,7 +129,7 @@ describe("evaluateBollingerRsi", () => {
   });
 
   it("holds an upper-band exit when RSI is not overbought", () => {
-    const signal = evalRsi(spikeThroughUpper(), loose({ rsiOverbought: 101 }), {
+    const signal = evalRsi(spikeThroughUpper(), loose({ rsiThreshold: -1 }), {
       perpsFees: PERPS,
     });
     assert.equal(signal.side, "HOLD", signal.reason);
@@ -154,7 +153,7 @@ describe("evaluateBollingerRsi", () => {
 
   it("sells half at the mid while RSI is still below 50", () => {
     const candles = wave("down");
-    const signal = evalRsi(candles, loose({ decayBars: 0 }), {
+    const signal = evalRsi(candles, loose({ decayBars: 0, rsiMid: 50 }), {
       price: 108,
       entryPrice: 100,
       positionSide: "long",
@@ -168,7 +167,7 @@ describe("evaluateBollingerRsi", () => {
 
   it("sells the remainder at the upper band and scratches it at breakeven", () => {
     const candles = wave("down");
-    const half = evalRsi(candles, loose({ decayBars: 0 }), {
+    const half = evalRsi(candles, loose({ decayBars: 0, rsiMid: 50 }), {
       price: 108,
       entryPrice: 100,
       positionSide: "long",
@@ -213,7 +212,7 @@ describe("evaluateBollingerRsi", () => {
 
   it("covers half of a short at the mid and the rest at the lower band", () => {
     const candles = wave("up");
-    const half = evalRsi(candles, loose({ decayBars: 0 }), {
+    const half = evalRsi(candles, loose({ decayBars: 0, rsiMid: 50 }), {
       price: 102,
       entryPrice: 110,
       positionSide: "short",
@@ -304,24 +303,22 @@ describe("BollingerRsiStrategy", () => {
     assert.equal(strategy.getRequiredCandles().timeframe, "1h");
   });
 
-  it("keeps every default on a search level and rejects an inverted RSI gate", () => {
+  it("keeps every default on a search level", () => {
     const strategy = new BollingerRsiStrategy();
     const defaults = strategy.getSearchDefaults();
     for (const axis of strategy.axes) {
       assert.ok(axis.levels.includes(defaults[axis.key] ?? Number.NaN), axis.key);
     }
-    assert.equal(strategy.accept({ ...defaults, rsiOversold: 80, rsiOverbought: 70 }), false);
-    assert.equal(strategy.accept(defaults), true);
   });
 
   it("patches RSI knobs and turns search minutes into a candle label", () => {
     const patch = new BollingerRsiStrategy().paramPatch({
       rsiPeriod: 7,
-      rsiOversold: 20,
+      rsiThreshold: 20,
       timeframe: 60,
     });
     assert.equal(patch.timeframe, "1h");
-    assert.deepEqual(patch.values, { rsiPeriod: 7, rsiOversold: 20 });
+    assert.deepEqual(patch.values, { rsiPeriod: 7, rsiThreshold: 20 });
   });
 
   it("forwards an open position into the signal", () => {

@@ -167,6 +167,12 @@ export interface Signal {
     emaFast?: number;
     emaSlow?: number;
     trendEma?: number;
+    /** MACD line (fast EMA minus slow EMA) on the signal bar. */
+    macd?: number;
+    /** Signal line: EMA of the MACD line. */
+    macdSignal?: number;
+    /** MACD line minus signal line. Above zero is the long filter. */
+    macdHist?: number;
     rsi?: number;
     /** Slow stochastic %K on the signal bar. */
     stochK?: number;

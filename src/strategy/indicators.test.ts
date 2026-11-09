@@ -8,6 +8,7 @@ import {
   donchian,
   ema,
   keltner,
+  macd,
   percentile,
   relativeVolume,
   rsi,
@@ -321,5 +322,34 @@ describe("stochastic", () => {
     assert.throws(() => stochastic([], 0, 1, 1), /%K period/);
     assert.throws(() => stochastic([], 1, 0, 1), /smoothing/);
     assert.throws(() => stochastic([], 1, 1, 0), /%D period/);
+  });
+});
+
+describe("macd", () => {
+  it("warms the histogram after the slow EMA and the signal EMA", () => {
+    const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const series = macd(values, 2, 4, 3);
+    assert.equal(series.macd[2], null);
+    assert.equal(series.macd[3], ema(values, 2)[3]! - ema(values, 4)[3]!);
+    assert.equal(series.histogram[4], null);
+    assert.ok(series.histogram[5] != null);
+    assert.equal(series.histogram[5], series.macd[5]! - series.signal[5]!);
+  });
+
+  it("is positive while a rise is accelerating and negative when it reverses", () => {
+    const up = Array.from({ length: 80 }, (_, i) => 100 * Math.pow(1.01, i));
+    const down = [
+      ...Array.from({ length: 50 }, (_, i) => 100 + i),
+      ...Array.from({ length: 25 }, (_, i) => 149 - i * 3),
+    ];
+    const upHist = macd(up, 12, 26, 9).histogram.at(-1);
+    const downHist = macd(down, 12, 26, 9).histogram.at(-1);
+    assert.ok(upHist != null && upHist > 0);
+    assert.ok(downHist != null && downHist < 0);
+  });
+
+  it("rejects a fast period that is not shorter than the slow period", () => {
+    assert.throws(() => macd([1, 2, 3], 5, 5, 3), /fast period/);
+    assert.throws(() => macd([1, 2, 3], 0, 5, 3), /periods must be >= 1/);
   });
 });

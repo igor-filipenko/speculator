@@ -177,6 +177,10 @@ export interface Signal {
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;
+    /** Keltner mid (EMA of the signal closes). */
+    kcMid?: number;
+    kcUpper?: number;
+    kcLower?: number;
     /** Prior Donchian entry-channel high (long breakout level). */
     donchianUpper?: number;
     /** Prior Donchian entry-channel low (short breakout level). */

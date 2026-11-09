@@ -56,7 +56,7 @@ src/ highlights:
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
 - Strategy knobs live on that mode's params object (`*ParamsFor`). Do not add magic numbers inside `evaluate*`.
-- Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
+- Flow: Strategy signal → RiskManager result → exchange order, or a `position-data` book update (no order) → Portfolio applyOrder / applyPositionData.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
 - A new strategy is `src/strategy/mode/<id>/` whose `index.ts` exports `strategyModule`, a test in that folder, and `INSERT INTO strategy.registry (id, name, type)` run directly against the database. The directory name is the id. Do not add a migration whose only change is that row, and do not list the id in shared code or docs. A market implementation's public entry is `src/market/<impl>/index.ts`.

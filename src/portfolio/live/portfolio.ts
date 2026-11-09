@@ -2,12 +2,14 @@ import { match } from "ts-pattern";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
 import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { tighterStopPrice } from "../../strategy/risk-manager.js";
 import type {
   BalanceSource,
   Order,
   PairConfig,
   Portfolio,
   Position,
+  PositionData,
   PortfolioSnapshot,
   PositionSource,
   Trade,
@@ -198,6 +200,19 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     if (snapshotKey(this) !== before) {
       await upsertLivePortfolio(this.toPersisted());
     }
+  }
+
+  /** Tighten the stored stop and upsert the live book. Does not insert a trade or submit an order. */
+  async applyPositionData(data: PositionData): Promise<void> {
+    const next = tighterStopPrice(
+      this.position.side,
+      this.position.size,
+      this.position.slPrice,
+      data.slPrice,
+    );
+    if (next == null || data.pair !== this.position.pair) return;
+    this.position = { ...this.position, slPrice: next };
+    await upsertLivePortfolio(this.toPersisted());
   }
 
   async applyOrder(order: Order): Promise<Trade | null> {

@@ -140,7 +140,11 @@ export interface Signal {
   at: Date;
   /** `strategy.registry.id` of the strategy that produced this signal. */
   strategyId: string;
-  /** Hard stop for an opening signal, set by the strategy. */
+  /**
+   * Hard stop. An opening signal sets the initial stop. A later signal may
+   * set a tighter candidate; the risk manager writes it onto the position
+   * only when it improves the stored stop.
+   */
   slPrice?: number;
   /**
    * Take-profit prices, nearest first.
@@ -206,7 +210,7 @@ export interface Position {
   openedAt?: Date;
   /** `strategy.registry.id` that opened this position. */
   strategyId: string;
-  /** Hard stop price from the opening signal. */
+  /** Hard stop. An opening fill sets it; a later book update may only tighten it. */
   slPrice: number;
   /**
    * Fees paid to open this position, in USDC: the network priority fee plus
@@ -331,11 +335,29 @@ export interface PositionSource {
   findOpenPosition(pair: PairConfig): Promise<OpenPosition | null>;
 }
 
+/**
+ * Book update for an open position. Not an order: size, side, and entry stay put,
+ * and nothing is sent to the exchange.
+ */
+export interface PositionData {
+  pair: string;
+  at: Date;
+  reason: string;
+  signal?: Signal;
+  /** Next hard stop. The risk manager only emits a tighter price. */
+  slPrice: number;
+}
+
 export interface Portfolio {
   getSnapshot(markPrice: number): PortfolioSnapshot;
   applyOrder(order: Order): Promise<Trade | null>;
   /** Refresh on-chain balances before sizing. Paper is a no-op. */
   syncFromChain(markPrice: number): Promise<void>;
+  /**
+   * Tighten the stored stop and persist the book. No trade row.
+   * A price that does not tighten the open position is ignored.
+   */
+  applyPositionData(data: PositionData): Promise<void>;
 }
 
 export interface RequiredCandles {
@@ -451,8 +473,15 @@ export interface NoCommand {
   kind: "no-command";
 }
 
-/** Tagged result of {@link RiskManager.check}: fill, protective exit, blocked signal, or HOLD / no-op. */
-export type RiskOrCommand = ClearRisk | RequiredCommand | ProtectiveCommand | NoCommand;
+/** Book update. The engine persists it and does not call the exchange. */
+export interface PositionDataCommand {
+  kind: "position-data";
+  data: PositionData;
+}
+
+/** Tagged result of {@link RiskManager.check}: fill, protective exit, book update, blocked signal, or HOLD / no-op. */
+export type RiskOrCommand =
+  ClearRisk | RequiredCommand | ProtectiveCommand | PositionDataCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {

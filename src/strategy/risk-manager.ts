@@ -3,6 +3,7 @@ import type {
   ClearRisk,
   Command,
   NoCommand,
+  PositionDataCommand,
   ProtectiveCommand,
   RequiredCommand,
   RiskManager,
@@ -18,6 +19,8 @@ import type {
  * pay at least {@link Signal.minRewardRisk}. An open position closes when
  * price trades through `slPrice`. A signal may close a fraction and attach a
  * new stop for the remainder; the stop still closes whatever size is left.
+ * A tighter `slPrice` on a signal that does not open, close, or scale out
+ * becomes a position-data update and is not sent to the exchange.
  */
 export class GenericRiskManager implements RiskManager {
   getDisplayName(): string {
@@ -136,6 +139,36 @@ function asProtectiveCommand(command: Command): ProtectiveCommand {
   return { kind: "protective-command", command };
 }
 
+function asPositionData(signal: Signal, slPrice: number): PositionDataCommand {
+  return {
+    kind: "position-data",
+    data: {
+      pair: signal.pair,
+      at: signal.at,
+      reason: signal.reason,
+      signal,
+      slPrice,
+    },
+  };
+}
+
+/**
+ * Next stop when it tightens an open position. Longs only move up.
+ * Shorts only move down. A flat book, a non-positive price, or a looser
+ * price returns null.
+ */
+export function tighterStopPrice(
+  side: "long" | "short" | "flat",
+  size: number,
+  current: number,
+  next: number | undefined,
+): number | null {
+  if ((side !== "long" && side !== "short") || !(size > 0)) return null;
+  if (next == null || !(next > 0) || !(current > 0)) return null;
+  if (side === "long") return next > current ? next : null;
+  return next < current ? next : null;
+}
+
 function blocked(signal: Signal, reason: string): ClearRisk {
   return { kind: "risk", risk: { signal, reason } };
 }
@@ -215,7 +248,23 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     );
   }
 
-  const stopExit = evaluateProtectiveExit(signal, snapshot);
+  const { position: open } = snapshot;
+  // A repeated entry on the side already open carries a fresh entry stop, not a trail.
+  // A fractional exit's stop belongs to the remainder and is copied onto the close.
+  const scaleOut =
+    signal.closeFraction != null && signal.closeFraction > 0 && signal.closeFraction < 1;
+  const candidate =
+    scaleOut ||
+    (open.side === "long" && signal.side === "BUY") ||
+    (open.side === "short" && signal.side === "SELL")
+      ? undefined
+      : signal.slPrice;
+  const nextStop = tighterStopPrice(open.side, open.size, open.slPrice, candidate);
+  const book =
+    nextStop == null
+      ? snapshot
+      : { ...snapshot, position: { ...snapshot.position, slPrice: nextStop } };
+  const stopExit = evaluateProtectiveExit(signal, book);
   if (stopExit) {
     return asProtectiveCommand(positionCommand(signal, stopExit));
   }
@@ -224,7 +273,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
 
   if (signal.side === "BUY") {
     if (position === "long") {
-      return blocked(signal, "already long");
+      return nextStop == null ? blocked(signal, "already long") : asPositionData(signal, nextStop);
     }
     if (position === "short") {
       if (snapshot.position.size <= 0) {
@@ -268,7 +317,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
 
   if (signal.side === "SELL") {
     if (position === "short") {
-      return blocked(signal, "already short");
+      return nextStop == null ? blocked(signal, "already short") : asPositionData(signal, nextStop);
     }
     if (position === "long") {
       if (snapshot.position.size <= 0) {
@@ -310,5 +359,6 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     );
   }
 
+  if (nextStop != null) return asPositionData(signal, nextStop);
   return noCommand();
 }

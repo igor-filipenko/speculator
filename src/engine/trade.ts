@@ -7,6 +7,7 @@ import { createMarket } from "../market/manager.js";
 import {
   logMarket,
   logPerpsFees,
+  logPositionData,
   logRisk,
   logSignal,
   logSnapshot,
@@ -331,6 +332,12 @@ async function processSignal(
     return true;
   }
   if (result.kind === "no-command") {
+    logSnapshot(portfolio.getSnapshot(price));
+    return true;
+  }
+  if (result.kind === "position-data") {
+    await portfolio.applyPositionData(result.data);
+    logPositionData(result.data);
     logSnapshot(portfolio.getSnapshot(price));
     return true;
   }

@@ -53,6 +53,8 @@ describe("liquidityTierForPair", () => {
   it("marks SOL/USDC as liquid and others as meme", () => {
     assert.equal(liquidityTierForPair("SOL/USDC"), "liquid");
     assert.equal(liquidityTierForPair("sol/usdc"), "liquid");
+    assert.equal(liquidityTierForPair("jup/usdc"), "liquid");
+    assert.equal(liquidityTierForPair("JTO/USDC"), "meme");
     assert.equal(liquidityTierForPair("MEME/USDC"), "meme");
   });
 });

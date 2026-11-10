@@ -8,6 +8,7 @@ import {
   runWalkForward,
 } from "./engine/backtest.js";
 import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
+import { parseTuneArgs, printTuneReport, runTune } from "./engine/tune.js";
 import { runPaper } from "./engine/paper.js";
 import { positionsUsage, runPositions } from "./engine/positions.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
@@ -34,6 +35,7 @@ function usage(): never {
   pnpm wallet         # live portfolio; --buy-sol tops up the SOL reserve
   pnpm positions      # list or open/close the live long or short
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
+  pnpm tune           # Walk-forward search for strategy parameters
   pnpm regime         # Replay HTF/1h market-indicator switches (no fills)
   pnpm migrate        # dbmate up (TimescaleDB)
 
@@ -45,6 +47,7 @@ function usage(): never {
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
   tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
+  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
   tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]]
 
 Options:
@@ -55,15 +58,28 @@ Options:
   --to <date>       Replay range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
-  --quotes 1m       Replay quotes on 1m closes (backtest only; default: synthetic OHLC path; excludes --monte-carlo)
+  --quotes 1m       Replay quotes on 1m closes (backtest and tune; default: synthetic OHLC path; excludes --monte-carlo)
   --monte-carlo <n> Run N Monte Carlo intra-bar path samples (backtest only; ≥ 1)
   --walk-forward <n> Walk-forward N-fold temporal validation (backtest only; ≥ 2; excludes --monte-carlo)
+  --folds <n>       Anchored walk-forward folds (tune only; ≥ 2; default 4)
+  --max-trials <n>  Parameter trials per train window (tune only; default 96)
+  --seed <n>        Latin-hypercube seed (tune only; default 1)
+  --min-trades <n>  Drop a trial with fewer round-trips (tune only; default 8)
+  --max-dd <pct>    Drop a trial whose max drawdown exceeds this (tune only; default 40)
+  --jobs <n>        Parallel replay workers (tune only; default: CPU count; 1 stays serial)
 `);
   process.exit(1);
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "positions", "backtest", "regime"] as const;
+const CLI_COMMANDS = [
+  ...ENGINE_MODES,
+  "wallet",
+  "positions",
+  "backtest",
+  "tune",
+  "regime",
+] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -100,6 +116,9 @@ async function main(): Promise<void> {
   switch (command) {
     case "backtest":
       await runBacktestCommand(rest);
+      return;
+    case "tune":
+      await runTuneCommand(rest);
       return;
     case "regime":
       await runRegimeCommand(rest);
@@ -302,6 +321,30 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
       verbose: flags.verbose,
       ...(flags.quotes !== undefined ? { quotes: flags.quotes } : {}),
     });
+  }
+}
+
+async function runTuneCommand(argv: string[]): Promise<void> {
+  const flags = parseTuneArgs(argv);
+  const config = await loadConfig();
+  const results = await runTune({
+    config,
+    strategyId: flags.strategy ?? config.strategy,
+    folds: flags.folds,
+    maxTrials: flags.maxTrials,
+    seed: flags.seed,
+    minTrades: flags.minTrades,
+    maxDrawdownPct: flags.maxDrawdownPct,
+    minReturnPct: flags.minReturnPct,
+    minProfitFactor: flags.minProfitFactor,
+    jobs: flags.jobs,
+    ...(flags.quotes !== undefined ? { quotes: flags.quotes } : {}),
+    ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
+    ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
+    ...(flags.days !== undefined ? { days: flags.days } : {}),
+  });
+  for (const result of results) {
+    printTuneReport(result);
   }
 }
 

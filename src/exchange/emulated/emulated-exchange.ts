@@ -8,7 +8,7 @@ import type {
   PairConfig,
   PerpsFees,
 } from "../../types.js";
-import { JUPITER_PERPS_FEES } from "../jupiter/perps-fees.js";
+import { JUPITER_PERPS_FEES, hasPerpsMarket } from "../jupiter/perps-fees.js";
 import { emulateFillPrice, liquidityTierForPair } from "./emulated-quote.js";
 
 /**
@@ -34,8 +34,8 @@ export class EmulatedExchange implements Exchange {
   }
 
   /** Offline snapshot. Backtest does not call Jupiter. */
-  perpsFeeSchedule(_pair: PairConfig): Promise<PerpsFees> {
-    return Promise.resolve(JUPITER_PERPS_FEES);
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees | undefined> {
+    return Promise.resolve(hasPerpsMarket(pair.symbol) ? JUPITER_PERPS_FEES : undefined);
   }
 
   spotPrice(_pair: PairConfig): Promise<number> {

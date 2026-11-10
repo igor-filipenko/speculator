@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { resetSpeculatorDbCache } from "../db/db.js";
+import { listStrategies } from "../db/strategies.js";
 import { useTestDb } from "../db/test-db.js";
 import { createCandle } from "../market/candle.js";
 import type { Candle } from "../types.js";
@@ -11,6 +12,7 @@ import {
   confirmTrend,
   evaluateMarketIndicators,
   htfParamsFor,
+  listImplementedStrategyIds,
   loadStrategy,
   mtfParamsFor,
   SimpleStrategyManager,
@@ -98,9 +100,18 @@ const params = htfParamsFor("4h");
 const mtfParams = mtfParamsFor();
 const at = new Date("2026-01-01T00:00:00.000Z");
 
+async function anyStrategyId(): Promise<string> {
+  const [id] = await listImplementedStrategyIds();
+  assert.ok(id);
+  return id;
+}
+
 describe("htfParamsFor / getRequiredCandles", () => {
   it("uses 200-EMA warmup of at least 220 bars on the given HTF", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
+    const manager = await SimpleStrategyManager.create({
+      strategyId: await anyStrategyId(),
+      htf: "4h",
+    });
     const required = manager.getRequiredHtfCandles();
     assert.equal(required.timeframe, "4h");
     assert.ok(required.count >= 200);
@@ -109,7 +120,10 @@ describe("htfParamsFor / getRequiredCandles", () => {
   });
 
   it("requires at least 120 1h bars for MTF volatility", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
+    const manager = await SimpleStrategyManager.create({
+      strategyId: await anyStrategyId(),
+      htf: "4h",
+    });
     const required = manager.getRequiredMtfCandles();
     assert.equal(required.timeframe, "1h");
     assert.ok(required.count >= 120);
@@ -121,9 +135,10 @@ describe("htfParamsFor / getRequiredCandles", () => {
 });
 
 describe("SimpleStrategyManager defaults", () => {
-  it("returns env-style strategy and GenericRiskManager from that strategy", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
-    assert.equal(manager.getActiveStrategy().getId(), "bollinger");
+  it("returns the requested strategy and GenericRiskManager", async () => {
+    const strategyId = await anyStrategyId();
+    const manager = await SimpleStrategyManager.create({ strategyId, htf: "4h" });
+    assert.equal(manager.getActiveStrategy().getId(), strategyId);
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
     assert.equal(manager.getActiveRiskManager(), manager.getActiveRiskManager());
   });
@@ -131,7 +146,10 @@ describe("SimpleStrategyManager defaults", () => {
 
 describe("applyMarketIndicators", () => {
   it("keeps GenericRiskManager when trend is bearish", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
+    const manager = await SimpleStrategyManager.create({
+      strategyId: await anyStrategyId(),
+      htf: "4h",
+    });
     const bullish = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),
@@ -158,7 +176,10 @@ describe("applyMarketIndicators", () => {
   });
 
   it("returns true when volatility changes even if trend is unchanged", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
+    const manager = await SimpleStrategyManager.create({
+      strategyId: await anyStrategyId(),
+      htf: "4h",
+    });
     const first = evaluateMarketIndicators({
       pair: "SOL/USDC",
       candles: series(250, 50, 0.8),
@@ -172,9 +193,21 @@ describe("applyMarketIndicators", () => {
     assert.equal(await manager.applyMarketIndicators(squeezed, squeezed), false);
   });
 
-  it("recreates BollingerStrategy when trend is bullish and vol is high", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" });
-    const strategyBefore = manager.getActiveStrategy();
+  it("rebuilds the strategy and keeps a search patch across regimes", async () => {
+    const strategyId = await anyStrategyId();
+    const probe = await loadStrategy(strategyId, "flat", "low");
+    const axis = probe.axes.find((item) => item.key !== "timeframe" && item.levels.length > 1);
+    assert.ok(axis);
+    const current = probe.getSearchDefaults()[axis.key];
+    const next = axis.levels.find((level) => level !== current);
+    assert.ok(next !== undefined);
+    const manager = await SimpleStrategyManager.create({
+      strategyId,
+      htf: "4h",
+      paramPatch: { values: { [axis.key]: next } },
+    });
+    assert.equal(manager.getActiveStrategy().getSearchDefaults()[axis.key], next);
+    const before = manager.getActiveStrategy();
     const mtfCandles = highVolMtf(140);
     const high = evaluateMarketIndicators({
       pair: "SOL/USDC",
@@ -188,36 +221,22 @@ describe("applyMarketIndicators", () => {
     assert.equal(high.trend, "bullish");
     assert.equal(high.volatility, "high");
     await manager.applyMarketIndicators(high);
-    assert.notEqual(manager.getActiveStrategy(), strategyBefore);
-    assert.equal(manager.getActiveStrategy().getDisplayName(), strategyBefore.getDisplayName());
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("DI"));
-    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
-  });
-
-  it("recreates DonchianStrategy with a higher volume SMA mult in squeeze", async () => {
-    const manager = await SimpleStrategyManager.create({ strategyId: "donchian", htf: "4h" });
-    assert.equal(manager.getActiveStrategy().getId(), "donchian");
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("flat"));
-    const first = evaluateMarketIndicators({
-      pair: "SOL/USDC",
-      candles: series(250, 50, 0.8),
-      price: 250,
-      at,
-      params,
-    });
-    await manager.applyMarketIndicators(first);
-    const squeezed = { ...first, volatility: "squeeze" as const };
-    await manager.applyMarketIndicators(squeezed, first);
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("×2.1"));
-    assert.ok(manager.getActiveStrategy().getDisplayName().includes("bull"));
+    assert.notEqual(manager.getActiveStrategy(), before);
+    assert.equal(manager.getActiveStrategy().getId(), strategyId);
+    assert.equal(manager.getActiveStrategy().getSearchDefaults()[axis.key], next);
     assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 });
 
 describe("loadStrategy", () => {
-  it("builds bollinger and donchian from strategy.registry", async () => {
-    assert.equal((await loadStrategy("bollinger", "flat", "low")).getId(), "bollinger");
-    assert.equal((await loadStrategy("donchian", "flat", "low")).getId(), "donchian");
+  it("builds every implemented strategy that is in strategy.registry", async () => {
+    const ids = await listImplementedStrategyIds();
+    assert.ok(ids.length > 0);
+    const known = new Set((await listStrategies()).map((row) => row.id));
+    for (const id of ids) {
+      assert.equal(known.has(id), true, id);
+      assert.equal((await loadStrategy(id, "flat", "low")).getId(), id);
+    }
   });
 
   it("rejects an id that is not in strategy.registry", async () => {

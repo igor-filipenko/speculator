@@ -1,19 +1,23 @@
-import { candleIntervalSeconds } from "../../market/candle.js";
+import { candleIntervalSeconds } from "../../../market/candle.js";
+import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
   MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
+  SearchSpace,
   Signal,
   SignalSide,
   Strategy,
+  StrategyModule,
+  StrategyParamPatch,
   Timeframe,
   Trend,
   Volatility,
-} from "../../types.js";
-import { atr, donchian, ema, sma } from "../indicators.js";
-import { buildDonchianSvg } from "./donchian-svg.js";
+} from "../../../types.js";
+import { atr, donchian, ema, sma } from "../../indicators.js";
+import { buildDonchianSvg } from "./svg.js";
 
 export interface DonchianParams {
   timeframe: Timeframe;
@@ -115,6 +119,28 @@ export function donchianParamsFor(
     atrStopMult: 3,
   };
 }
+
+/** Exit period must stay shorter than the entry period. */
+function donchianSearchAccept(values: Readonly<Record<string, number>>): boolean {
+  const exitPeriod = values["exitPeriod"];
+  const entryPeriod = values["entryPeriod"];
+  return exitPeriod !== undefined && entryPeriod !== undefined && exitPeriod < entryPeriod;
+}
+
+/**
+ * Knobs that are not the trend × volatility tables.
+ * `volumeSmaMult` and `minBreakAtrMult` stay on {@link donchianParamsFor}.
+ */
+export const DONCHIAN_SEARCH_SPACE: SearchSpace = {
+  axes: [
+    { key: "entryPeriod", levels: [20, 40, 55] },
+    { key: "exitPeriod", levels: [10, 20, 30] },
+    { key: "atrStopMult", levels: [2, 3, 4] },
+    { key: "givebackAtrMult", levels: [3, 4, 5] },
+    { key: "timeStopBars", levels: [0, 3, 6] },
+  ],
+  accept: donchianSearchAccept,
+};
 
 /**
  * Hard stop beyond the fill. Longs sit `atrStopMult` × ATR under the price;
@@ -448,12 +474,29 @@ export function evaluateDonchian(input: DonchianInput): Signal {
 
 /** 15m symmetric Donchian: closed-bar DC40 breakout + SMA volume + EMA50; long on bullish/flat, short on bearish only; exit DC20, 4×ATR giveback armed after a 2×ATR gain, or 3-bar time stop. No take-profit. */
 export class DonchianStrategy implements Strategy {
+  readonly axes = DONCHIAN_SEARCH_SPACE.axes;
   private readonly params: DonchianParams;
   private readonly trend: Trend;
 
-  constructor(trend: Trend = "flat", volatility: Volatility = "low") {
+  constructor(trend: Trend = "flat", volatility: Volatility = "low", params?: DonchianParams) {
     this.trend = trend;
-    this.params = donchianParamsFor(trend, volatility);
+    this.params = params ?? donchianParamsFor(trend, volatility);
+  }
+
+  accept(values: Readonly<Record<string, number>>): boolean {
+    return donchianSearchAccept(values);
+  }
+
+  getSearchDefaults(): Readonly<Record<string, number>> {
+    return searchDefaults(this.params);
+  }
+
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch {
+    const knobs: Record<string, number | string | boolean> = {};
+    for (const [key, value] of Object.entries(paramsFromSearch(values))) {
+      if (value !== undefined) knobs[key] = value;
+    }
+    return { values: knobs };
   }
 
   getDisplayName(): string {
@@ -666,6 +709,62 @@ function gaveBackFromExtreme(input: {
   return hit ? { extreme, level } : null;
 }
 
+/** Axis keys copy onto the params. A `timeframe` in minutes is not a Donchian search knob. */
+function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<DonchianParams> {
+  const patch: Partial<DonchianParams> = {};
+  const entryPeriod = values["entryPeriod"];
+  const exitPeriod = values["exitPeriod"];
+  const volumeSmaPeriod = values["volumeSmaPeriod"];
+  const volumeSmaMult = values["volumeSmaMult"];
+  const trendEmaPeriod = values["trendEmaPeriod"];
+  const atrPeriod = values["atrPeriod"];
+  const minBreakAtrMult = values["minBreakAtrMult"];
+  const shortMaxExtendAtrMult = values["shortMaxExtendAtrMult"];
+  const shortVolumeSmaScale = values["shortVolumeSmaScale"];
+  const shortMinBreakScale = values["shortMinBreakScale"];
+  const givebackAtrMult = values["givebackAtrMult"];
+  const givebackArmAtrMult = values["givebackArmAtrMult"];
+  const maxEntryAgeBars = values["maxEntryAgeBars"];
+  const timeStopBars = values["timeStopBars"];
+  const atrStopMult = values["atrStopMult"];
+  if (entryPeriod !== undefined) patch.entryPeriod = entryPeriod;
+  if (exitPeriod !== undefined) patch.exitPeriod = exitPeriod;
+  if (volumeSmaPeriod !== undefined) patch.volumeSmaPeriod = volumeSmaPeriod;
+  if (volumeSmaMult !== undefined) patch.volumeSmaMult = volumeSmaMult;
+  if (trendEmaPeriod !== undefined) patch.trendEmaPeriod = trendEmaPeriod;
+  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
+  if (minBreakAtrMult !== undefined) patch.minBreakAtrMult = minBreakAtrMult;
+  if (shortMaxExtendAtrMult !== undefined) patch.shortMaxExtendAtrMult = shortMaxExtendAtrMult;
+  if (shortVolumeSmaScale !== undefined) patch.shortVolumeSmaScale = shortVolumeSmaScale;
+  if (shortMinBreakScale !== undefined) patch.shortMinBreakScale = shortMinBreakScale;
+  if (givebackAtrMult !== undefined) patch.givebackAtrMult = givebackAtrMult;
+  if (givebackArmAtrMult !== undefined) patch.givebackArmAtrMult = givebackArmAtrMult;
+  if (maxEntryAgeBars !== undefined) patch.maxEntryAgeBars = maxEntryAgeBars;
+  if (timeStopBars !== undefined) patch.timeStopBars = timeStopBars;
+  if (atrStopMult !== undefined) patch.atrStopMult = atrStopMult;
+  return patch;
+}
+
+function searchDefaults(params: DonchianParams): Record<string, number> {
+  const source: Record<string, number> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "number") source[key] = value;
+  }
+  source["timeframe"] = candleIntervalSeconds(params.timeframe) / 60;
+  return source;
+}
+
 function fmt(n: number): string {
   return n.toFixed(4);
 }
+
+export const strategyModule: StrategyModule = {
+  id: "donchian",
+  create(trend, volatility, patch) {
+    return new DonchianStrategy(
+      trend,
+      volatility,
+      applySearchPatch(donchianParamsFor(trend, volatility), patch),
+    );
+  },
+};

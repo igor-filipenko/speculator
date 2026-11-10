@@ -13,3 +13,5 @@ When adding, renaming, or dropping schemas, tables, sequences, or types under `m
 3. Match least privilege to how the bot uses the object (read-only `strategy.registry` / `solana.*`; write (+ delete where the code deletes) on `bot.*` and `market.candles`).
 
 Do not leave a new table or sequence without an entry in `grant-privileges.sql`.
+
+Do not add a migration only to insert a strategy. Register it by running `INSERT INTO strategy.registry (id, name, type)` directly. The implementation is `src/strategy/mode/<id>/index.ts` exporting `strategyModule`, plus a test in that folder. The directory name is the id. Do not edit the loader or list the id elsewhere. `strategy.registry` stays read-only for the `speculator` role; the insert is an operator step, not a schema change.

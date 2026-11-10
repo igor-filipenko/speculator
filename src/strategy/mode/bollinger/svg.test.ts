@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createCandle } from "../../market/candle.js";
-import type { Candle } from "../../types.js";
+import { createCandle } from "../../../market/candle.js";
+import type { Candle } from "../../../types.js";
 import { bollingerParamsFor } from "./bollinger.js";
-import { buildBollingerSvg } from "./bollinger-svg.js";
+import { buildBollingerSvg } from "./svg.js";
 
 const strategy = bollingerParamsFor();
 

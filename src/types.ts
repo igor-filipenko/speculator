@@ -16,7 +16,7 @@ export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
  * Postgres `market.candle_source` lists additional vendors so the column type
  * does not change when a new client is added.
  */
-export type CandleSource = "gecko-terminal" | "binance";
+export type CandleSource = "gecko-terminal" | "binance" | "birdeye";
 
 /** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
 export type HtfTimeframe = "4h" | "1d";
@@ -140,7 +140,11 @@ export interface Signal {
   at: Date;
   /** `strategy.registry.id` of the strategy that produced this signal. */
   strategyId: string;
-  /** Hard stop for an opening signal, set by the strategy. */
+  /**
+   * Hard stop. An opening signal sets the initial stop. A later signal may
+   * set a tighter candidate; the risk manager writes it onto the position
+   * only when it improves the stored stop.
+   */
   slPrice?: number;
   /**
    * Take-profit prices, nearest first.
@@ -154,10 +158,21 @@ export interface Signal {
    * the same floor to the gross target. Unused when `tpPrices` is empty (Donchian sets 0).
    */
   minRewardRisk: number;
+  /**
+   * Share of the open position this exit closes. Omitted means the whole position.
+   * A protective stop ignores it and closes the full size.
+   */
+  closeFraction?: number;
   meta?: {
     emaFast?: number;
     emaSlow?: number;
     trendEma?: number;
+    /** MACD line (fast EMA minus slow EMA) on the signal bar. */
+    macd?: number;
+    /** Signal line: EMA of the MACD line. */
+    macdSignal?: number;
+    /** MACD line minus signal line. Above zero is the long filter. */
+    macdHist?: number;
     rsi?: number;
     /** Slow stochastic %K on the signal bar. */
     stochK?: number;
@@ -172,6 +187,10 @@ export interface Signal {
     bbMid?: number;
     bbUpper?: number;
     bbLower?: number;
+    /** Keltner mid (EMA of the signal closes). */
+    kcMid?: number;
+    kcUpper?: number;
+    kcLower?: number;
     /** Prior Donchian entry-channel high (long breakout level). */
     donchianUpper?: number;
     /** Prior Donchian entry-channel low (short breakout level). */
@@ -197,7 +216,7 @@ export interface Position {
   openedAt?: Date;
   /** `strategy.registry.id` that opened this position. */
   strategyId: string;
-  /** Hard stop price from the opening signal. */
+  /** Hard stop. An opening fill sets it; a later book update may only tighten it. */
   slPrice: number;
   /**
    * Fees paid to open this position, in USDC: the network priority fee plus
@@ -322,11 +341,29 @@ export interface PositionSource {
   findOpenPosition(pair: PairConfig): Promise<OpenPosition | null>;
 }
 
+/**
+ * Book update for an open position. Not an order: size, side, and entry stay put,
+ * and nothing is sent to the exchange.
+ */
+export interface PositionData {
+  pair: string;
+  at: Date;
+  reason: string;
+  signal?: Signal;
+  /** Next hard stop. The risk manager only emits a tighter price. */
+  slPrice: number;
+}
+
 export interface Portfolio {
   getSnapshot(markPrice: number): PortfolioSnapshot;
   applyOrder(order: Order): Promise<Trade | null>;
   /** Refresh on-chain balances before sizing. Paper is a no-op. */
   syncFromChain(markPrice: number): Promise<void>;
+  /**
+   * Tighten the stored stop and persist the book. No trade row.
+   * A price that does not tighten the open position is ignored.
+   */
+  applyPositionData(data: PositionData): Promise<void>;
 }
 
 export interface RequiredCandles {
@@ -334,11 +371,67 @@ export interface RequiredCandles {
   count: number;
 }
 
-export interface Strategy {
+/** One numeric knob in a {@link SearchSpace}. `timeframe` levels are minutes. */
+export interface SearchAxis {
+  key: string;
+  levels: readonly number[];
+}
+
+/**
+ * Grid explored by `pnpm tune`.
+ * Each {@link Strategy} implements this. An absent `accept` keeps every combination.
+ */
+export interface SearchSpace {
+  axes: readonly SearchAxis[];
+  /** Drop a combination. Absent means every combination is valid. */
+  accept?: (values: Readonly<Record<string, number>>) => boolean;
+}
+
+/**
+ * Overrides merged onto a strategy's regime defaults.
+ * A tune sample stores `timeframe` in minutes; {@link Strategy.paramPatch} writes
+ * the candle label here. `values` are that strategy's own knobs. Tune reads only
+ * `timeframe`.
+ */
+export interface StrategyParamPatch {
+  /** Signal series to replay when the sample names a timeframe. */
+  timeframe?: Timeframe;
+  /** Knob overrides. Keys belong to the strategy that built the patch. */
+  values?: Readonly<Record<string, number | string | boolean>>;
+}
+
+/** Copy a tune patch onto regime defaults. Unknown keys are ignored. */
+export function applySearchPatch<T extends object>(
+  base: T,
+  patch: StrategyParamPatch | undefined,
+): T {
+  if (patch === undefined) return base;
+  const merged = { ...base };
+  const record = merged as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch.values ?? {})) {
+    if (key in record) record[key] = value;
+  }
+  if (patch.timeframe !== undefined && "timeframe" in record) {
+    record["timeframe"] = patch.timeframe;
+  }
+  return merged;
+}
+
+export interface Strategy extends SearchSpace {
   getDisplayName(): string;
-  /** `strategy.registry.id` (for example `bollinger`). */
+  /** `strategy.registry.id`. */
   getId(): string;
   getRequiredCandles(): RequiredCandles;
+  /**
+   * Current numeric knobs. `timeframe` is minutes so it matches that search axis.
+   * Tune reads this for the default point on {@link SearchSpace.axes}.
+   */
+  getSearchDefaults(): Readonly<Record<string, number>>;
+  /**
+   * Tune sample → overrides for this strategy. `timeframe` in `values` is minutes.
+   * Other keys match {@link SearchSpace} axes.
+   */
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch;
   evaluateSignal(
     pair: string,
     candles: Candle[],
@@ -351,6 +444,15 @@ export interface Strategy {
   ): Signal;
   /** Strategy-owned OHLCV chart overlays. */
   buildChartSvg(pair: string, candles: Candle[]): string;
+}
+
+/**
+ * Public entry of `src/strategy/mode/<id>/`. `index.ts` exports this.
+ * `id` is the `strategy.registry` primary key, the directory name, and {@link Strategy.getId}.
+ */
+export interface StrategyModule {
+  id: string;
+  create(trend: Trend, volatility: Volatility, patch?: StrategyParamPatch): Strategy;
 }
 
 export interface Risk {
@@ -377,8 +479,15 @@ export interface NoCommand {
   kind: "no-command";
 }
 
-/** Tagged result of {@link RiskManager.check}: fill, protective exit, blocked signal, or HOLD / no-op. */
-export type RiskOrCommand = ClearRisk | RequiredCommand | ProtectiveCommand | NoCommand;
+/** Book update. The engine persists it and does not call the exchange. */
+export interface PositionDataCommand {
+  kind: "position-data";
+  data: PositionData;
+}
+
+/** Tagged result of {@link RiskManager.check}: fill, protective exit, book update, blocked signal, or HOLD / no-op. */
+export type RiskOrCommand =
+  ClearRisk | RequiredCommand | ProtectiveCommand | PositionDataCommand | NoCommand;
 
 /** Turns a strategy signal into a trade command using portfolio state. */
 export interface RiskManager {
@@ -419,9 +528,11 @@ export interface Exchange {
   execute(command: Command, pair: PairConfig): Promise<Order | Error>;
   /**
    * Open, close, and hourly short-borrow rates for this pair.
+   * Resolves `undefined` when Jupiter Perps lists no market for the pair, so it
+   * cannot be shorted and strategies stay long-only.
    * Implementations cache the result; callers may invoke this every tick.
    */
-  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees>;
+  perpsFeeSchedule(pair: PairConfig): Promise<PerpsFees | undefined>;
 }
 
 export interface ProgramState {

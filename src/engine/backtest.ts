@@ -255,7 +255,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const market = createMarket(options.config.candleSource);
+  const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
 
   const results: BacktestResult[] = [];
   for (const pair of options.config.pairs) {
@@ -344,7 +344,7 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
   const strategy = strategyManager.getActiveStrategy();
   const { fromTime, toTime } = resolveReplayWindow(options);
   const timeframe = strategy.getRequiredCandles().timeframe;
-  const market = createMarket(options.config.candleSource);
+  const market = createMarket(options.config.candleSource, options.config.birdeyeApiKey);
 
   const results: WalkForwardResult[] = [];
 
@@ -525,6 +525,24 @@ async function loadMinuteQuotes(args: {
   });
 }
 
+/**
+ * Minutes whose open falls inside `bar`. `minutes` is sorted by open time, and
+ * `cursor` is the first minute that might still belong to this bar or a later one.
+ */
+function minutesForBar(
+  minutes: readonly Candle[],
+  cursor: { index: number },
+  bar: Candle,
+): Candle[] {
+  const end = bar.time + bar.intervalSeconds;
+  let index = cursor.index;
+  while (index < minutes.length && minutes[index]!.time < bar.time) index += 1;
+  const start = index;
+  while (index < minutes.length && minutes[index]!.time < end) index += 1;
+  cursor.index = index;
+  return minutes.slice(start, index);
+}
+
 async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
@@ -558,6 +576,7 @@ async function replayPair(args: {
     strategyManager.getActiveStrategy().getRequiredCandles().timeframe,
   );
 
+  // Undefined for a pair without a Jupiter Perps market: the strategy stays long-only.
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
@@ -565,18 +584,22 @@ async function replayPair(args: {
   let htfEnd = 0;
   let mtfEnd = 0;
   let lastMarket: MarketIndicators | undefined;
+  // `minuteCandles` is time-sorted. The cursor walks it once per replay.
+  const minuteCursor = { index: 0 };
 
   for (let i = 0; i < candles.length; i++) {
     const candle = candles[i]!;
-    const closed = candles.slice(0, i);
+    // Live loads `count` candles including the forming one. Match that window so
+    // indicators see the same history and the replay stays linear in bar count.
+    const windowCount = strategyManager.getActiveStrategy().getRequiredCandles().count;
+    const closed = candles.slice(Math.max(0, i - (windowCount - 1)), i);
     const positionSide = portfolio.getSnapshot(candle.open).position.side;
     const ticks =
       args.minuteCandles !== undefined
-        ? minuteQuoteTicks(candle, args.minuteCandles)
+        ? minuteQuoteTicks(candle, minutesForBar(args.minuteCandles, minuteCursor, candle))
         : intraBarTicks(candle, barIntervalSec, positionSide, args.rng);
 
-    // Volume-weighted slippage: set bar USDC volume once per candle.
-    // GeckoTerminal volume field is in base token units; multiply by close for USDC equivalent.
+    // Volume-weighted slippage. Every source stores base-token volume.
     exchange.setCandleVolumeUsdc(candle.volume * candle.close);
 
     for (const tick of ticks) {
@@ -619,6 +642,10 @@ async function replayPair(args: {
       );
 
       const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
+      if (result.kind === "position-data") {
+        portfolio.applyPositionDataSync(result.data);
+        continue;
+      }
       if (result.kind === "command" || result.kind === "protective-command") {
         const command = result.command;
         // Protective exits fill at the stop/trail level; cross signals use the tick price.
@@ -653,7 +680,7 @@ async function replayPair(args: {
   const snap = portfolio.getSnapshot(lastClose);
   const { longs, shorts } = countRoundTripsBySide(snap.trades);
   const roundTrips = longs + shorts;
-  const wins = snap.trades.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const wins = roundTripPnls(snap.trades).filter((pnl) => pnl > 0).length;
   const holdMs = roundTripHoldMs(snap.trades);
   const holdStats = summarizeHoldMs(holdMs);
   const totalReturnPct =
@@ -734,17 +761,53 @@ export function computeBuyHoldEquity(
 export function roundTripHoldMs(trades: readonly Trade[]): number[] {
   const holds: number[] = [];
   let openedAt: Date | undefined;
+  let closedAt: Date | undefined;
+  const flush = (): void => {
+    if (openedAt !== undefined && closedAt !== undefined) {
+      holds.push(closedAt.getTime() - openedAt.getTime());
+    }
+    openedAt = undefined;
+    closedAt = undefined;
+  };
   for (const trade of trades) {
     if (trade.realizedPnl === undefined) {
+      flush();
       openedAt = trade.at;
       continue;
     }
-    if (openedAt !== undefined) {
-      holds.push(trade.at.getTime() - openedAt.getTime());
-      openedAt = undefined;
-    }
+    if (openedAt !== undefined) closedAt = trade.at;
   }
+  flush();
   return holds;
+}
+
+/**
+ * Net realized P&L of each round-trip. Partial closes add into the same trip
+ * until the next open.
+ */
+export function roundTripPnls(trades: readonly Trade[]): number[] {
+  const pnls: number[] = [];
+  let opened = false;
+  let sum = 0;
+  let closes = 0;
+  const flush = (): void => {
+    if (opened && closes > 0) pnls.push(sum);
+    opened = false;
+    sum = 0;
+    closes = 0;
+  };
+  for (const trade of trades) {
+    if (trade.realizedPnl === undefined) {
+      flush();
+      opened = true;
+      continue;
+    }
+    if (!opened) continue;
+    sum += trade.realizedPnl;
+    closes += 1;
+  }
+  flush();
+  return pnls;
 }
 
 /**
@@ -818,7 +881,7 @@ function accumulateCosts(totals: BacktestCostTotals, trade: Trade, order: Order)
  * Returns a closure that produces values in [0, 1) from the given seed.
  * Using a deterministic seed per run makes Monte Carlo results reproducible.
  */
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
   return function (): number {
     s = (s + 0x6d2b79f5) >>> 0;

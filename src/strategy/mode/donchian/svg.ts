@@ -1,5 +1,5 @@
-import type { Candle } from "../../types.js";
-import { donchian, sma } from "../indicators.js";
+import type { Candle } from "../../../types.js";
+import { donchian, sma } from "../../indicators.js";
 import type { DonchianParams } from "./donchian.js";
 
 export interface DonchianChartInput {

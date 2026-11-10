@@ -41,8 +41,9 @@ function geckoTimeframe(timeframe: Timeframe): {
 }
 
 /**
- * GeckoTerminal OHLCV for a Solana pool.
+ * GeckoTerminal OHLCV for a Solana pool, priced in the quote token (`currency=token`).
  * Candles are returned oldest → newest for `[fromTime, toTime)`.
+ * Volume is stored in base-token units, same as Birdeye `v` and Binance kline volume.
  */
 export class GeckoTerminalMarket implements Market {
   readonly source = "gecko-terminal" as const;
@@ -159,7 +160,7 @@ async function fetchPage(args: {
   const url = new URL(`${GECKO_BASE}/networks/solana/pools/${args.poolAddress}/ohlcv/${path}`);
   url.searchParams.set("aggregate", String(aggregate));
   url.searchParams.set("limit", String(cappedLimit));
-  url.searchParams.set("currency", "usd");
+  url.searchParams.set("currency", "token");
   url.searchParams.set("before_timestamp", String(args.beforeTimestamp));
 
   const json = await fetchOhlcvJson(url, args.timeoutMs);
@@ -176,7 +177,7 @@ async function fetchPage(args: {
         high,
         low,
         close,
-        volume,
+        volume: geckoBaseVolume(volume, close),
         timeframe: args.timeframe,
         source: "gecko-terminal",
       }),
@@ -261,6 +262,17 @@ async function fetchOhlcvJson(url: URL, timeoutMs: number): Promise<GeckoOhlcvJs
   }
 
   return (await response.json()) as GeckoOhlcvJson;
+}
+
+/**
+ * `currency=token` volume is quote notional (USDC). Base volume is that divided by close,
+ * so `volume * close` in the backtest is USDC again.
+ */
+export function geckoBaseVolume(quoteVolume: number, close: number): number {
+  if (!Number.isFinite(quoteVolume) || !(close > 0)) {
+    return 0;
+  }
+  return quoteVolume / close;
 }
 
 function sleep(ms: number): Promise<void> {

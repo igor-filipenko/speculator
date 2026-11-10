@@ -7,7 +7,7 @@ import type { CandleSource, HtfTimeframe, PairConfig } from "./types.js";
 
 loadDotenv();
 
-const candleSources = ["gecko-terminal", "binance"] as const;
+const candleSources = ["gecko-terminal", "binance", "birdeye"] as const;
 
 const envSchema = z
   .object({
@@ -15,6 +15,7 @@ const envSchema = z
     HTF: z.enum(["4h", "1d"]).default("4h"),
     CANDLE_SOURCE: z.enum(candleSources).default("gecko-terminal"),
     JUPITER_API_KEY: z.string().optional().default(""),
+    BIRDEYE_API_KEY: z.string().optional().default(""),
     WATCHLIST: z.string().default("SOL/USDC"),
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
     PAPER_CASH_USDC: z.coerce.number().positive().default(1000),
@@ -31,6 +32,10 @@ const envSchema = z
   .refine((env) => env.SOL_RESERVE_MAX > env.SOL_RESERVE_MIN, {
     path: ["SOL_RESERVE_MAX"],
     message: "SOL_RESERVE_MAX must be greater than SOL_RESERVE_MIN",
+  })
+  .refine((env) => env.CANDLE_SOURCE !== "birdeye" || env.BIRDEYE_API_KEY.trim() !== "", {
+    path: ["BIRDEYE_API_KEY"],
+    message: "BIRDEYE_API_KEY is required when CANDLE_SOURCE is birdeye",
   });
 
 export interface TelegramConfig {
@@ -43,9 +48,11 @@ export interface AppConfig {
   strategy: string;
   /** Higher-timeframe bars for StrategyManager trend / S/R (default 4h). */
   htf: HtfTimeframe;
-  /** OHLCV vendor: gecko-terminal or binance. */
+  /** OHLCV vendor: gecko-terminal, binance, or birdeye. */
   candleSource: CandleSource;
   jupiterApiKey: string;
+  /** Required when `candleSource` is birdeye. */
+  birdeyeApiKey: string;
   watchlist: string[];
   pollIntervalMs: number;
   paperCashUsdc: number;
@@ -144,6 +151,7 @@ export async function loadConfig(): Promise<AppConfig> {
     htf: env.HTF,
     candleSource: env.CANDLE_SOURCE,
     jupiterApiKey: env.JUPITER_API_KEY,
+    birdeyeApiKey: env.BIRDEYE_API_KEY.trim(),
     watchlist,
     pollIntervalMs: env.POLL_INTERVAL_MS,
     paperCashUsdc: env.PAPER_CASH_USDC,

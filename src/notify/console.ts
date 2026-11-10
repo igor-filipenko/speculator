@@ -4,6 +4,7 @@ import type {
   MtfSnapshot,
   Order,
   PerpsFees,
+  PositionData,
   Risk,
   Signal,
   PortfolioSnapshot,
@@ -70,7 +71,11 @@ function band(label: string, lower?: number, mid?: number, upper?: number): stri
   return ` ${label} ${parts.join(" ")}`;
 }
 
-export function logPerpsFees(pair: string, fees: PerpsFees): void {
+export function logPerpsFees(pair: string, fees: PerpsFees | undefined): void {
+  if (fees === undefined) {
+    console.log(`[${pair}] no Jupiter Perps market: long-only`);
+    return;
+  }
   console.log(
     `[${pair}] perps fees open=${pct(fees.openFeePct)} close=${pct(fees.closeFeePct)} ` +
       `borrow=${pct(fees.borrowFeePctPerHour)}/h`,
@@ -90,6 +95,11 @@ export function logSignal(signal: Signal): void {
       ` strategy=${signal.strategyId}${sl}${tp} minR:R=${signal.minRewardRisk.toFixed(2)}` +
       ` — ${signal.reason}${meta}`,
   );
+}
+
+export function logPositionData(data: PositionData): void {
+  const ts = data.at.toISOString();
+  console.log(`[${ts}] ${data.pair} STOP ${data.slPrice.toFixed(4)} — ${data.reason}`);
 }
 
 export function logRisk(risk: Risk): void {

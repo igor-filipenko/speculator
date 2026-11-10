@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createCandle } from "../../market/candle.js";
-import type { Candle, MarketIndicators, PerpsFees } from "../../types.js";
+import { createCandle } from "../../../market/candle.js";
+import type { Candle, MarketIndicators, PerpsFees } from "../../../types.js";
 import {
   DonchianStrategy,
   donchianParamsFor,
+  strategyModule,
   evaluateDonchian,
   type DonchianParams,
 } from "./donchian.js";
@@ -772,9 +773,16 @@ describe("stricter entries", () => {
 });
 
 describe("DonchianStrategy", () => {
+  it("copies search knobs into a strategy-agnostic patch", () => {
+    const patch = new DonchianStrategy().paramPatch({ entryPeriod: 55, timeStopBars: 0 });
+    assert.equal(patch.timeframe, undefined);
+    assert.deepEqual(patch.values, { entryPeriod: 55, timeStopBars: 0 });
+  });
+
   it("exposes a 3×ATR hard stop and required candles on 15m", () => {
     const strategy = new DonchianStrategy("flat", "low");
     assert.equal(strategy.getId(), "donchian");
+    assert.equal(strategyModule.id, strategy.getId());
     assert.match(strategy.getDisplayName(), /flat/);
     assert.equal(strategy.hardStopLoss("long", 100, 4), 88);
     assert.equal(strategy.hardStopLoss("short", 100, 4), 112);
@@ -789,6 +797,12 @@ describe("DonchianStrategy", () => {
     assert.match(strategy.getDisplayName(), /×1\.6/);
     assert.match(strategy.getDisplayName(), /bull/);
     assert.equal(strategy.hardStopLoss("long", 100, 4), 88);
+  });
+
+  it("raises the volume SMA multiplier in a bullish squeeze", () => {
+    const strategy = new DonchianStrategy("bullish", "squeeze");
+    assert.match(strategy.getDisplayName(), /×2\.1/);
+    assert.match(strategy.getDisplayName(), /bull/);
   });
 
   it("sets doNotBuy from MarketIndicators.trend, not from constructor params", () => {

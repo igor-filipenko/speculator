@@ -32,6 +32,7 @@ import {
   splitCandlesIntoFolds,
   computeBuyHoldEquity,
   roundTripHoldMs,
+  roundTripPnls,
 } from "./backtest.js";
 import { intraBarPrices } from "../backtest/intra-bar.js";
 
@@ -42,6 +43,7 @@ function makeConfig(cash = 1000): AppConfig {
     strategy: "bollinger",
     htf: "4h",
     jupiterApiKey: "",
+    birdeyeApiKey: "",
     watchlist: ["SOL/USDC"],
     pollIntervalMs: 60_000,
     paperCashUsdc: cash,
@@ -107,6 +109,11 @@ function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): 
   };
 }
 
+/** Search-space members for strategies that are not tuned in these tests. */
+function untuned(): Pick<Strategy, "axes" | "getSearchDefaults" | "paramPatch"> {
+  return { axes: [], getSearchDefaults: () => ({}), paramPatch: () => ({}) };
+}
+
 function scriptedStrategy(opts: {
   buyIndex: number;
   /** Distance below the buy price stored as slPrice when withStop is set. */
@@ -115,9 +122,10 @@ function scriptedStrategy(opts: {
 }): Strategy {
   const stopDistance = opts.stopDistance ?? 100;
   return {
+    ...untuned(),
     getDisplayName: () => "scripted",
     getId: () => "bollinger",
-    getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
+    getRequiredCandles: () => ({ timeframe: "15m", count: 1000 }),
     evaluateSignal: (pair, candles, _market, price, at) => {
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
@@ -271,6 +279,30 @@ describe("roundTripHoldMs", () => {
 
   it("ignores an open that never closes", () => {
     assert.deepEqual(roundTripHoldMs([tradeFill("BUY", "2026-01-01T00:00:00.000Z")]), []);
+  });
+
+  it("keeps a partial close on the same hold until the remainder exits", () => {
+    assert.deepEqual(
+      roundTripHoldMs([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:00:00.000Z", 1),
+        tradeFill("SELL", "2026-01-01T02:00:00.000Z", 0.5),
+      ]),
+      [2 * 60 * 60 * 1000],
+    );
+  });
+});
+
+describe("roundTripPnls", () => {
+  it("sums partial closes into one trip", () => {
+    assert.deepEqual(
+      roundTripPnls([
+        tradeFill("BUY", "2026-01-01T00:00:00.000Z"),
+        tradeFill("SELL", "2026-01-01T01:00:00.000Z", 1),
+        tradeFill("SELL", "2026-01-01T02:00:00.000Z", -0.25),
+      ]),
+      [0.75],
+    );
   });
 });
 
@@ -433,6 +465,82 @@ describe("runBacktest", () => {
     assert.equal(result.metrics.roundTripAvgMs, result.metrics.roundTripMinMs);
   });
 
+  it("hands the strategy at most getRequiredCandles().count candles per tick", async () => {
+    await useTestDb();
+    const count = 5;
+    const lengths: number[] = [];
+    const strategy: Strategy = {
+      ...untuned(),
+      getDisplayName: () => "window-probe",
+      getId: () => "bollinger",
+      getRequiredCandles: () => ({ timeframe: "15m", count }),
+      evaluateSignal: (pair, window, _market, price, at) => {
+        lengths.push(window.length);
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "probe",
+          price,
+          at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
+        };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    };
+    await runBacktest({
+      config: makeConfig(500),
+      strategyManager: managerFor(strategy),
+      candles: series(30, 100, 0.1),
+    });
+    assert.ok(lengths.length > 0);
+    assert.equal(Math.max(...lengths), count);
+  });
+
+  it("withholds the perps schedule for a pair Jupiter Perps does not list", async () => {
+    await useTestDb();
+    const seen = new Map<string, boolean>();
+    const probe = (): Strategy => ({
+      ...untuned(),
+      getDisplayName: () => "perps-probe",
+      getId: () => "bollinger",
+      getRequiredCandles: () => ({ timeframe: "15m", count: 5 }),
+      evaluateSignal: (pair, _window, _market, price, at, _portfolio, perpsFees) => {
+        seen.set(pair, perpsFees !== undefined);
+        return {
+          pair,
+          strategyId: "bollinger",
+          side: "HOLD" as const,
+          reason: "probe",
+          price,
+          at,
+          tpPrices: [],
+          minRewardRisk: 0.1,
+        };
+      },
+      buildChartSvg: () => "<svg></svg>",
+    });
+    const base = makeConfig(500);
+    const sol = base.pairs[0]!;
+    const jup = {
+      ...sol,
+      symbol: "JUP/USDC",
+      baseMint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+      baseDecimals: 6,
+      poolAddress: "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL",
+    };
+    for (const pair of [sol, jup]) {
+      await runBacktest({
+        config: { ...base, pairs: [pair], watchlist: [pair.symbol] },
+        strategyManager: managerFor(probe()),
+        candles: series(12, 100, 0.1),
+      });
+    }
+    assert.equal(seen.get("SOL/USDC"), true);
+    assert.equal(seen.get("JUP/USDC"), false);
+  });
+
   it("keeps flat equity when indicators never fire", async () => {
     await useTestDb();
     const strategy = await loadStrategy("bollinger", "flat", "low");
@@ -519,6 +627,7 @@ describe("runBacktest", () => {
     });
     const calls: { price: number; last: Candle }[] = [];
     const strategy: Strategy = {
+      ...untuned(),
       getDisplayName: () => "recorder",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
@@ -589,6 +698,7 @@ describe("runBacktest", () => {
       volume: 1,
     });
     const strategy: Strategy = {
+      ...untuned(),
       getDisplayName: () => "wick-buy",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),

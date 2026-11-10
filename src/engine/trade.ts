@@ -7,6 +7,7 @@ import { createMarket } from "../market/manager.js";
 import {
   logMarket,
   logPerpsFees,
+  logPositionData,
   logRisk,
   logSignal,
   logSnapshot,
@@ -114,7 +115,7 @@ export async function runTrade(options: TradeOptions): Promise<void> {
  */
 export async function runTradingLoop(options: TradingLoopOptions): Promise<void> {
   const { config, strategyManager, exchange, once = false, modeLabel } = options;
-  const market = createMarket(config.candleSource);
+  const market = createMarket(config.candleSource, config.birdeyeApiKey);
   const strategy = strategyManager.getActiveStrategy();
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
@@ -331,6 +332,12 @@ async function processSignal(
     return true;
   }
   if (result.kind === "no-command") {
+    logSnapshot(portfolio.getSnapshot(price));
+    return true;
+  }
+  if (result.kind === "position-data") {
+    await portfolio.applyPositionData(result.data);
+    logPositionData(result.data);
     logSnapshot(portfolio.getSnapshot(price));
     return true;
   }

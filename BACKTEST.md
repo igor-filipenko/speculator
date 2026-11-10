@@ -14,8 +14,8 @@ pnpm backtest
 # Custom window, print trades + chart
 pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --verbose
 
-# Different strategy
-pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
+# Override STRATEGY with another registry id
+pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy <id>
 ```
 
 ---
@@ -26,7 +26,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
 | -------------------- | ----------------------------------------------------------------------------------- |
 | `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
 | `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
-| `--strategy <name>`  | Override `STRATEGY` from `.env` (`bollinger` \| `donchian`)                         |
+| `--strategy <name>`  | Override `STRATEGY` from `.env` with a `strategy.registry` id                       |
 | `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
 | `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |
@@ -36,7 +36,7 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy donchian
 ## Output fields
 
 ```
-=== Backtest SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
+=== Backtest SOL/USDC | <strategy> ===
 Candles: 2658 | 2026-09-01T00:00:00.000Z → 2026-09-30T23:45:01.000Z
 Start: 100.00 USDC → End equity: 184.43 USDC (+84.43%)
 Buy & hold: 114.42 USDC (+14.42%) | vs hold: +70.01 USDC (+70.01% pp)
@@ -112,12 +112,11 @@ Splits the full period into N sequential windows and runs an **independent** bac
 ```bash
 pnpm backtest -- \
   --from 01-07-2026 --to 30-09-2026 \
-  --strategy bollinger \
   --walk-forward 6
 ```
 
 ```
-=== Walk-Forward SOL/USDC | bollinger (15m BB14×1.4 ADX32 Stoch50 tStop2) ===
+=== Walk-Forward SOL/USDC | <strategy> ===
 Period: 2026-07-01 → 2026-09-30 | 6 folds × ~1488 candles each
 
 Fold  Period                   Candles     Return       vs B&H   Sharpe   Max DD     PF
@@ -203,9 +202,10 @@ Check:
 
 ### Step 4 — Cross-strategy comparison
 
+Run the same window once per `strategy.registry` id:
+
 ```bash
-pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --strategy bollinger --walk-forward 6
-pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --strategy donchian --walk-forward 6
+pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --strategy <id> --walk-forward 6
 ```
 
 Compare by `N/N folds beat B&H`, not by total return. Total return can be inflated by a single lucky fold.

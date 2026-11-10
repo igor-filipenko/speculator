@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) using Bollinger or Donchian on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** / **regime** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) from the strategy named by `STRATEGY` on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** / **regime** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
 
 Build/run: [README.md](./README.md).
 
@@ -38,28 +38,29 @@ scripts/
   grant-privileges.sql  # keep in sync with migrations/
 
 src/ highlights:
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | regime
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | tune | regime
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
-  market/               # OHLCV clients (gecko, binance), Timescale cache, HTF/1h indicators
+  market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache, HTF/1h indicators
   exchange/             # emulated, or jupiter (spot long + perps short)
-  strategy/             # indicators + bollinger/donchian + SVGs
+  strategy/             # indicators, one package per strategy under mode/<id>/, optional svg charts
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
-  engine/               # watch | paper | trade (shared loop) | wallet | backtest | regime
+  engine/               # watch | paper | trade (shared loop) | wallet | backtest | tune | regime
   chart/render-png.ts
 ```
 
 ## Conventions
 
 - Prefer small pure functions for indicators and strategy; keep I/O at the edges (market, exchange, engine).
-- Strategy knobs live on the mode `*Params` object (`bollingerParamsFor` / `donchianParamsFor` / …). Do not add magic numbers inside `evaluate*`.
-- Flow: Strategy signal → RiskManager command → Exchange order → Portfolio applyOrder.
+- Strategy knobs live on that mode's params object (`*ParamsFor`). Do not add magic numbers inside `evaluate*`.
+- Flow: Strategy signal → RiskManager result → exchange order, or a `position-data` book update (no order) → Portfolio applyOrder / applyPositionData.
 - Paper and backtest fills must be labeled **simulated** in logs; live fills must be labeled **LIVE** and include a tx signature when present.
 - One position per pair: ignore a new entry on the side already open. `BUY` opens a long or covers a short; `SELL` opens a short or closes a long.
-- When changing strategy defaults, update `.env.example` (and README) together.
+- A new strategy is `src/strategy/mode/<id>/` whose `index.ts` exports `strategyModule`, a test in that folder, and `INSERT INTO strategy.registry (id, name, type)` run directly against the database. The directory name is the id. Do not add a migration whose only change is that row, and do not list the id in shared code or docs. A market implementation's public entry is `src/market/<impl>/index.ts`.
+- When changing a strategy's defaults, edit `*ParamsFor` in its file. Do not copy those defaults into README or `.env.example`.
 - When changing SQL under `migrations/`, update [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) in the same change (schemas, tables, sequences, types, and default privileges for role `speculator`).
 - After substantive code changes, run `pnpm check` (`typecheck` + ESLint with `--max-warnings 0` + `web` check).
 - Keep TypeScript strict flags in `tsconfig.base.json` / `tsconfig.json` and type-aware rules in `eslint.config.js` (and `web/eslint.config.js`); do not weaken them without discussion.

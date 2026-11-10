@@ -3,6 +3,7 @@ import type {
   ClearRisk,
   Command,
   NoCommand,
+  PositionDataCommand,
   ProtectiveCommand,
   RequiredCommand,
   RiskManager,
@@ -16,7 +17,10 @@ import type {
  * size the USDC budget so a stop-out loses at most {@link MAX_RISK_PERCENT} of
  * equity. When the signal lists take-profit prices, the furthest target must
  * pay at least {@link Signal.minRewardRisk}. An open position closes when
- * price trades through `slPrice`.
+ * price trades through `slPrice`. A signal may close a fraction and attach a
+ * new stop for the remainder; the stop still closes whatever size is left.
+ * A tighter `slPrice` on a signal that does not open, close, or scale out
+ * becomes a position-data update and is not sent to the exchange.
  */
 export class GenericRiskManager implements RiskManager {
   getDisplayName(): string {
@@ -44,13 +48,26 @@ const REWARD_RISK_EPSILON = 1e-9;
 /** Minimum USDC to spend on an opening order. */
 export const MIN_OPEN_DEPOSIT_USDC = 10;
 
-/** Attach the signal, and copy its hard stop onto an opening command. */
+/** Attach the signal, and copy its hard stop onto an opening or scale-out command. */
 function positionCommand(signal: Signal, command: Command, opening = false): Command {
   const next: Command = { ...command, signal };
-  if (opening && signal.slPrice !== undefined) {
+  const scaleOut =
+    signal.closeFraction != null && signal.closeFraction > 0 && signal.closeFraction < 1;
+  if ((opening || scaleOut) && signal.slPrice !== undefined) {
     next.slPrice = signal.slPrice;
   }
   return next;
+}
+
+/** Base size to close. A fractional signal leaves the rest open; anything else closes all. */
+function signalCloseSize(signal: Signal, positionSize: number): number {
+  const fraction = signal.closeFraction;
+  if (fraction == null || !(fraction > 0) || fraction >= 1 || !(positionSize > 0)) {
+    return positionSize;
+  }
+  const size = positionSize * fraction;
+  if (!(size > 0) || size >= positionSize) return positionSize;
+  return size;
 }
 
 /**
@@ -120,6 +137,36 @@ function openingQuoteBudget(
 
 function asProtectiveCommand(command: Command): ProtectiveCommand {
   return { kind: "protective-command", command };
+}
+
+function asPositionData(signal: Signal, slPrice: number): PositionDataCommand {
+  return {
+    kind: "position-data",
+    data: {
+      pair: signal.pair,
+      at: signal.at,
+      reason: signal.reason,
+      signal,
+      slPrice,
+    },
+  };
+}
+
+/**
+ * Next stop when it tightens an open position. Longs only move up.
+ * Shorts only move down. A flat book, a non-positive price, or a looser
+ * price returns null.
+ */
+export function tighterStopPrice(
+  side: "long" | "short" | "flat",
+  size: number,
+  current: number,
+  next: number | undefined,
+): number | null {
+  if ((side !== "long" && side !== "short") || !(size > 0)) return null;
+  if (next == null || !(next > 0) || !(current > 0)) return null;
+  if (side === "long") return next > current ? next : null;
+  return next < current ? next : null;
 }
 
 function blocked(signal: Signal, reason: string): ClearRisk {
@@ -201,7 +248,23 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     );
   }
 
-  const stopExit = evaluateProtectiveExit(signal, snapshot);
+  const { position: open } = snapshot;
+  // A repeated entry on the side already open carries a fresh entry stop, not a trail.
+  // A fractional exit's stop belongs to the remainder and is copied onto the close.
+  const scaleOut =
+    signal.closeFraction != null && signal.closeFraction > 0 && signal.closeFraction < 1;
+  const candidate =
+    scaleOut ||
+    (open.side === "long" && signal.side === "BUY") ||
+    (open.side === "short" && signal.side === "SELL")
+      ? undefined
+      : signal.slPrice;
+  const nextStop = tighterStopPrice(open.side, open.size, open.slPrice, candidate);
+  const book =
+    nextStop == null
+      ? snapshot
+      : { ...snapshot, position: { ...snapshot.position, slPrice: nextStop } };
+  const stopExit = evaluateProtectiveExit(signal, book);
   if (stopExit) {
     return asProtectiveCommand(positionCommand(signal, stopExit));
   }
@@ -210,7 +273,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
 
   if (signal.side === "BUY") {
     if (position === "long") {
-      return blocked(signal, "already long");
+      return nextStop == null ? blocked(signal, "already long") : asPositionData(signal, nextStop);
     }
     if (position === "short") {
       if (snapshot.position.size <= 0) {
@@ -224,7 +287,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
           reason: signal.reason,
           at: signal.at,
           priceHint: signal.price,
-          baseSize: snapshot.position.size,
+          baseSize: signalCloseSize(signal, snapshot.position.size),
         }),
       );
     }
@@ -254,7 +317,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
 
   if (signal.side === "SELL") {
     if (position === "short") {
-      return blocked(signal, "already short");
+      return nextStop == null ? blocked(signal, "already short") : asPositionData(signal, nextStop);
     }
     if (position === "long") {
       if (snapshot.position.size <= 0) {
@@ -268,7 +331,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
           reason: signal.reason,
           at: signal.at,
           priceHint: signal.price,
-          baseSize: snapshot.position.size,
+          baseSize: signalCloseSize(signal, snapshot.position.size),
         }),
       );
     }
@@ -296,5 +359,6 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     );
   }
 
+  if (nextStop != null) return asPositionData(signal, nextStop);
   return noCommand();
 }

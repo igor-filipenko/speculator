@@ -6,7 +6,12 @@ import {
   upsertCandles,
   type CandleRangeBounds,
 } from "../../db/candles.js";
-import { candleIntervalSeconds, createCandle, expectedCandleCount } from "../candle.js";
+import {
+  candleIntervalSeconds,
+  createCandle,
+  expectedCandleCount,
+  sanitizeCandles,
+} from "../candle.js";
 import type { Candle, CandleSource, FetchCandlesOptions, Market, Timeframe } from "../../types.js";
 
 /**
@@ -36,7 +41,7 @@ export class CachedMarket implements Market {
       const expected = expectedCandleCount(fromTime, toTime, interval);
       const cached = await readCandles(this.source, pair.poolAddress, timeframe, fromTime, toTime);
       if (expected > 0 && cached.length === expected) {
-        return cached;
+        return this.cleaned(cached, pair.symbol, timeframe);
       }
     }
 
@@ -132,7 +137,18 @@ export class CachedMarket implements Market {
         `No OHLCV candles available for ${pair.symbol} (${this.source} ${timeframe}) in the requested window`,
       );
     }
-    return result;
+    return this.cleaned(result, pair.symbol, timeframe);
+  }
+
+  /** Repair vendor spikes on read so a bad stored print never reaches a strategy. */
+  private cleaned(candles: Candle[], symbol: string, timeframe: Timeframe): Candle[] {
+    const { candles: repaired, repaired: count } = sanitizeCandles(candles);
+    if (count > 0) {
+      console.warn(
+        `OHLCV ${this.source} ${timeframe} ${symbol}: clamped ${count} spike wick(s) to the candle body`,
+      );
+    }
+    return repaired;
   }
 }
 

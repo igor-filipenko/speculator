@@ -1,20 +1,25 @@
-import { liquidityTierForPair, TIER_COSTS } from "../../exchange/emulated/emulated-quote.js";
-import { shortPositionFeePct } from "../../exchange/jupiter/perps-fees.js";
+import { liquidityTierForPair, TIER_COSTS } from "../../../exchange/emulated/emulated-quote.js";
+import { shortPositionFeePct } from "../../../exchange/jupiter/perps-fees.js";
+import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/candle.js";
+import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
   MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
+  SearchSpace,
   Signal,
   SignalSide,
   Strategy,
+  StrategyModule,
+  StrategyParamPatch,
   Timeframe,
   Trend,
   Volatility,
-} from "../../types.js";
-import { atr, bollinger, dmi } from "../indicators.js";
-import { buildBollingerSvg } from "./bollinger-svg.js";
+} from "../../../types.js";
+import { atr, bollinger, dmi } from "../../indicators.js";
+import { buildBollingerSvg } from "./svg.js";
 
 export interface BollingerParams {
   timeframe: Timeframe;
@@ -24,11 +29,16 @@ export interface BollingerParams {
   stdDev: number;
   /** Wilder ATR period (into Signal.meta for risk stops). */
   atrPeriod: number;
-  /** Wilder ADX period. Recorded on the signal; it does not gate entries. */
+  /** Wilder ADX / DI period. */
   adxPeriod: number;
   /**
+   * New fades only while ADX is below this. At or above it the tape is trending
+   * and the band touch waits for a range. 0 disables. Exits ignore it.
+   */
+  adxMax: number;
+  /**
    * Block a short when +DI is above this multiple of −DI, and a long when −DI
-   * is above this multiple of +DI. 1.5 means that side is clearly leading.
+   * is above this multiple of +DI. 1 blocks as soon as that side leads.
    * Exits ignore it.
    */
   diRatio: number;
@@ -49,6 +59,19 @@ export interface BollingerParams {
   minRewardRisk: number;
   /** Stop distance beyond the entry-bar extreme, in ATRs. */
   stopAtr: number;
+  /**
+   * HTF trend gate for new entries. Exits ignore it.
+   * 0 = off. 1 = block a long in a bearish trend and a short in a bullish one.
+   * 2 = trade only when the trend is flat. An unknown trend never blocks.
+   */
+  trendFilter: number;
+  /**
+   * Bars of `timeframe` over which an open fade's exit slides from the
+   * profitable price to the fee breakeven. At that horizon the position closes
+   * at the quote. 0 disables. A short's breakeven ignores borrow accrued after
+   * the fill. Missing `openedAt` leaves the current gate and does not flatten.
+   */
+  decayBars: number;
 }
 
 /**
@@ -70,6 +93,46 @@ export function bollingerTpPrices(side: "long" | "short", price: number, bbMid: 
   if (!(price > 0) || !(bbMid > 0)) return [];
   const beyond = side === "long" ? bbMid > price : bbMid < price;
   return beyond ? [bbMid] : [];
+}
+
+/** Exit price after sliding from the profitable price toward fee breakeven. */
+export interface BollingerDecayTarget {
+  /** `strict` at t = 0, `floor` once `decayBars` have elapsed. */
+  target: number;
+  floor: number;
+  barsHeld: number;
+  /** True once `barsHeld` has reached `decayBars`. */
+  flatten: boolean;
+}
+
+/**
+ * Linear slide from today's profitable price (`strict`) to the fee-breakeven
+ * `floor`. `decayBars` ≤ 0 or a missing `openedAt` leaves `target` at `strict`
+ * and does not flatten. Bars match Donchian: whole strategy-timeframe bars
+ * since the fill.
+ */
+export function bollingerDecayTarget(input: {
+  strict: number;
+  floor: number;
+  decayBars: number;
+  openedAt?: Date;
+  at: Date;
+  timeframe: Timeframe;
+}): BollingerDecayTarget {
+  const { strict, floor } = input;
+  const idle: BollingerDecayTarget = { target: strict, floor, barsHeld: 0, flatten: false };
+  if (!(input.decayBars > 0) || input.openedAt == null) return idle;
+  const intervalSec = candleIntervalSeconds(input.timeframe);
+  if (!(intervalSec > 0)) return idle;
+  const elapsedSec = Math.max(0, (input.at.getTime() - input.openedAt.getTime()) / 1000);
+  const barsHeld = Math.floor(elapsedSec / intervalSec);
+  const t = Math.min(1, barsHeld / input.decayBars);
+  return {
+    target: strict + (floor - strict) * t,
+    floor,
+    barsHeld,
+    flatten: barsHeld >= input.decayBars,
+  };
 }
 
 /**
@@ -155,18 +218,43 @@ function openingRewardHoldReason(input: {
 /** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
 export function bollingerParamsFor(): BollingerParams {
   return {
-    timeframe: "15m",
+    timeframe: "1h",
     period: 20,
-    stdDev: 2.0,
+    stdDev: 1.3,
     atrPeriod: 20,
-    adxPeriod: 20,
-    diRatio: 1.2,
+    adxPeriod: 28,
+    adxMax: 20,
+    diRatio: 1,
     minReclaimDepth: 0.1,
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
     stopAtr: 2.5,
+    trendFilter: 0,
+    decayBars: 12,
   };
 }
+
+/**
+ * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h and `trendFilter`
+ * stays at 0: the last three SOL seeds never kept 15m, and the HTF gate did not
+ * cluster. Wide bands, a 30-bar lookback, and the tightest stops only won on
+ * those 15m folds. `atrPeriod` is its own axis, not tied to `period`.
+ */
+export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
+  axes: [
+    { key: "period", levels: [14, 20] },
+    { key: "atrPeriod", levels: [14, 20, 28] },
+    { key: "adxPeriod", levels: [20, 28] },
+    { key: "adxMax", levels: [0, 20, 25] },
+    { key: "stdDev", levels: [1.2, 1.3, 1.5] },
+    { key: "diRatio", levels: [1, 1.5, 2] },
+    { key: "minReclaimDepth", levels: [0.1, 0.2] },
+    { key: "maxBreakAtr", levels: [1.5, 2, 2.5, 4] },
+    { key: "minRewardRisk", levels: [0.2, 0.3, 0.4] },
+    { key: "stopAtr", levels: [2, 2.5, 3, 4] },
+    { key: "decayBars", levels: [0, 3, 6, 9, 12] },
+  ],
+};
 
 export interface BollingerInput {
   pair: string;
@@ -198,8 +286,8 @@ export interface BollingerInput {
  * or prior close ≤ prior lower then close > lower, when close < mid
  * and reclaim depth ≥ minReclaimDepth.
  * A candle that traded through the band is ignored when its range exceeds `maxBreakAtr` × ATR.
+ * A new fade is skipped when ADX ≥ `adxMax` (the tape is trending; wait for a range).
  * A long is blocked when −DI > `diRatio` × +DI. A short is blocked when +DI > `diRatio` × −DI.
- * ADX is stored on the signal and does not gate the entry.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * Already long → HOLD on reclaim (no pyramid). SELL when long and price ≥ middle
  * **and** the quote is high enough that the sell fill clears the entry after the exit-leg fee.
@@ -209,6 +297,10 @@ export interface BollingerInput {
  * `openedAt`, and cover slippage. Missing fees keep the short on HOLD.
  * An upper-band short — wick or close — is not opened without that schedule.
  * Regime and DI do not block a mid exit.
+ * When `decayBars` > 0 that profitable price slides linearly to the fee
+ * breakeven over that many bars, then the position closes at the quote.
+ * A short's breakeven ignores borrow accrued after the fill. Missing
+ * `openedAt`, or a missing perps schedule on a short, does not flatten.
  * An opening signal sets `tpPrices` to the middle band, then HOLDs unless the
  * fee-adjusted reward is positive and reward/risk ≥ `minRewardRisk`.
  */
@@ -292,18 +384,32 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   if (long) {
     const exitFee = legFeePct(pair, "spot");
     const minExit = exitFee < 1 ? entry / (1 - exitFee) : entry;
-    const profitablePrice = Math.max(bbMid, minExit);
-    if (price >= profitablePrice) {
+    const decay = bollingerDecayTarget({
+      strict: Math.max(bbMid, minExit),
+      floor: minExit,
+      decayBars: strategy.decayBars,
+      at,
+      timeframe: strategy.timeframe,
+      ...(input.openedAt !== undefined ? { openedAt: input.openedAt } : {}),
+    });
+    if (price >= decay.target) {
       return {
         ...base,
         side: "SELL",
-        reason: `Price ${fmt(price)} > profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+        reason: `Price ${fmt(price)} > profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)})`,
+      };
+    }
+    if (decay.flatten) {
+      return {
+        ...base,
+        side: "SELL",
+        reason: timeDecayReason(decay, entry, bbMid),
       };
     }
     return {
       ...base,
       side: "HOLD",
-      reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)}`,
+      reason: `Waiting for profitable price at ${fmt(decay.target)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, spotFee=${pct(exitFee)}`,
     };
   }
 
@@ -318,19 +424,39 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         heldMs,
       });
       const slip = legFeePct(pair, "perps");
-      const minExit = slip > -1 ? (entry * (1 - feePct)) / (1 + slip) : entry * (1 - feePct);
-      const profitablePrice = Math.min(bbMid, minExit);
-      if (price <= profitablePrice) {
+      const minExit = shortCoverPrice(entry, feePct, slip);
+      const floorFeePct = shortPositionFeePct({
+        openFeePct: fees.openFeePct,
+        closeFeePct: fees.closeFeePct,
+        borrowFeePctPerHour: fees.borrowFeePctPerHour,
+        heldMs: 0,
+      });
+      const decay = bollingerDecayTarget({
+        strict: Math.min(bbMid, minExit),
+        floor: shortCoverPrice(entry, floorFeePct, slip),
+        decayBars: strategy.decayBars,
+        at,
+        timeframe: strategy.timeframe,
+        ...(input.openedAt !== undefined ? { openedAt: input.openedAt } : {}),
+      });
+      if (price <= decay.target) {
         return {
           ...base,
           side: "BUY",
-          reason: `Price ${fmt(price)} < profitable price ${fmt(profitablePrice)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+          reason: `Price ${fmt(price)} < profitable price ${fmt(decay.target)}, (entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)})`,
+        };
+      }
+      if (decay.flatten) {
+        return {
+          ...base,
+          side: "BUY",
+          reason: timeDecayReason(decay, entry, bbMid),
         };
       }
       return {
         ...base,
         side: "HOLD",
-        reason: `Waiting for profitable price at ${fmt(profitablePrice)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
+        reason: `Waiting for profitable price at ${fmt(decay.target)}, mid=${fmt(bbMid)}, entry=${fmt(entry)}, minExit=${fmt(minExit)}, perpsFee=${pct(feePct)}`,
       };
     }
     return {
@@ -368,13 +494,18 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         `(close ${fmt(close)} vs lower ${fmt(bbLower)} → mid ${fmt(bbMid)})`;
     } else if (breakoutHold != null) {
       reason = breakoutHold;
+    } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
+      reason = adxBlockReason("long", adxNow, strategy.adxMax);
     } else if (diBlocksEntry("long", plusDi, minusDi, strategy.diRatio)) {
       reason = diBlockReason("long", plusDi, minusDi, strategy.diRatio);
+    } else if (trendBlocksEntry("long", input.trend, strategy.trendFilter)) {
+      reason = trendBlockReason("long", input.trend, strategy.trendFilter);
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
       reason =
         `Lower BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} > ${fmt(bbLower)}); ` +
+        `${adxPassNote(adxNow, strategy.adxMax)}; ` +
         `${diPassNote("long", plusDi, minusDi, strategy.diRatio)}; ` +
         `depth ${pct(reclaimDepth)}`;
     }
@@ -405,13 +536,18 @@ export function evaluateBollinger(input: BollingerInput): Signal {
           `(close ${fmt(close)} vs upper ${fmt(bbUpper)} → mid ${fmt(bbMid)})`;
       } else if (breakoutHold != null) {
         reason = breakoutHold;
+      } else if (adxBlocksEntry(adxNow, strategy.adxMax)) {
+        reason = adxBlockReason("short", adxNow, strategy.adxMax);
       } else if (diBlocksEntry("short", plusDi, minusDi, strategy.diRatio)) {
         reason = diBlockReason("short", plusDi, minusDi, strategy.diRatio);
+      } else if (trendBlocksEntry("short", input.trend, strategy.trendFilter)) {
+        reason = trendBlockReason("short", input.trend, strategy.trendFilter);
       } else {
         side = "SELL";
         const how = wickReject ? "wick rejection" : "close rejection";
         reason =
           `Upper BB ${how} (prev ${fmt(closePrev)}, close ${fmt(close)} < ${fmt(bbUpper)}); ` +
+          `${adxPassNote(adxNow, strategy.adxMax)}; ` +
           `${diPassNote("short", plusDi, minusDi, strategy.diRatio)}; ` +
           `depth ${pct(rejectDepth)}`;
       }
@@ -456,17 +592,35 @@ export function evaluateBollinger(input: BollingerInput): Signal {
   };
 }
 
-/** 15m mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. ADX is recorded and does not gate entries. */
+/** 1h mean-reversion: closed-bar BB wick/close reclaim; skip impulse breakouts and fades while ADX ≥ adxMax; block a long when −DI leads +DI and a short when +DI leads −DI; exit at mid. `decayBars` slides that target to fee breakeven, then closes at the quote. */
 export class BollingerStrategy implements Strategy {
+  readonly axes = BOLLINGER_SEARCH_SPACE.axes;
   private readonly params: BollingerParams;
 
-  constructor(_trend: Trend = "flat", _volatility: Volatility = "low") {
-    this.params = bollingerParamsFor();
+  constructor(_trend: Trend = "flat", _volatility: Volatility = "low", params?: BollingerParams) {
+    this.params = params ?? bollingerParamsFor();
+  }
+
+  getSearchDefaults(): Readonly<Record<string, number>> {
+    return searchDefaults(this.params);
+  }
+
+  paramPatch(values: Readonly<Record<string, number>>): StrategyParamPatch {
+    const params = paramsFromSearch(values);
+    const knobs: Record<string, number | string | boolean> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (key === "timeframe" || value === undefined) continue;
+      knobs[key] = value;
+    }
+    if (params.timeframe === undefined) return { values: knobs };
+    return { timeframe: params.timeframe, values: knobs };
   }
 
   getDisplayName(): string {
-    const { timeframe, period, stdDev, diRatio } = this.params;
-    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio})`;
+    const { timeframe, period, stdDev, diRatio, adxMax, decayBars } = this.params;
+    const adx = adxMax > 0 ? ` ADX<${adxMax}` : "";
+    const decay = decayBars > 0 ? ` decay${decayBars}` : "";
+    return `bollinger (${timeframe} BB${period}×${stdDev} DI${diRatio}${adx}${decay})`;
   }
 
   getId(): string {
@@ -520,6 +674,18 @@ export class BollingerStrategy implements Strategy {
   }
 }
 
+/** Cover quote after `feePct` of entry notional and perps slippage. */
+function shortCoverPrice(entry: number, feePct: number, slip: number): number {
+  return slip > -1 ? (entry * (1 - feePct)) / (1 + slip) : entry * (1 - feePct);
+}
+
+function timeDecayReason(decay: BollingerDecayTarget, entry: number, mid: number): string {
+  return (
+    `Time decay: ${decay.barsHeld} bars, target ${fmt(decay.target)}, floor ${fmt(decay.floor)} ` +
+    `(entry=${fmt(entry)}, mid=${fmt(mid)})`
+  );
+}
+
 function breakoutRangeHold(
   side: "long" | "short",
   bars: { candle: Candle; atr: number | null | undefined }[],
@@ -545,6 +711,24 @@ function breakoutRangeHold(
 }
 
 /**
+ * Range gate. A new fade waits while ADX is at or above `adxMax`.
+ * `adxMax` ≤ 0 leaves the gate off. Exits do not call this.
+ */
+export function adxBlocksEntry(adx: number, adxMax: number): boolean {
+  if (!(adxMax > 0)) return false;
+  return adx >= adxMax;
+}
+
+function adxBlockReason(side: "long" | "short", adx: number, adxMax: number): string {
+  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  return `${head}: ADX ${fmt(adx)} >= ${adxMax}, waiting for a range`;
+}
+
+function adxPassNote(adx: number, adxMax: number): string {
+  return adxMax > 0 ? `ADX ${fmt(adx)} < ${adxMax}` : `ADX ${fmt(adx)}`;
+}
+
+/**
  * Directional block. A short is refused when +DI leads −DI by `diRatio`.
  * A long is refused when −DI leads +DI by the same multiple. Equality does not block.
  */
@@ -557,6 +741,25 @@ export function diBlocksEntry(
   if (diRatio === 0) return false;
   if (side === "short") return plusDi > diRatio * minusDi;
   return minusDi > diRatio * plusDi;
+}
+
+/**
+ * HTF trend gate on a new entry. Mode 1 refuses a long in a bearish trend and a
+ * short in a bullish one. Mode 2 refuses both unless the trend is flat.
+ * Mode 0 and an unknown trend never block.
+ */
+export function trendBlocksEntry(side: "long" | "short", trend: Trend, mode: number): boolean {
+  if (mode === 0 || trend === "unknown") return false;
+  if (mode === 2) return trend !== "flat";
+  if (side === "long") return trend === "bearish";
+  return trend === "bullish";
+}
+
+function trendBlockReason(side: "long" | "short", trend: Trend, mode: number): string {
+  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
+  return mode === 2
+    ? `${head}: HTF trend is ${trend}, entries need flat`
+    : `${head}: HTF trend is ${trend}, against a ${side}`;
 }
 
 function diBlockReason(
@@ -584,6 +787,51 @@ function diPassNote(
   return `-DI ${fmt(minusDi)} <= ${diRatio}× +DI ${fmt(plusDi)}`;
 }
 
+/** Search minutes become a candle label. Other axis keys copy onto the params. */
+function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<BollingerParams> {
+  const patch: Partial<BollingerParams> = {};
+  const timeframe = values["timeframe"];
+  const period = values["period"];
+  const stdDev = values["stdDev"];
+  const atrPeriod = values["atrPeriod"];
+  const adxPeriod = values["adxPeriod"];
+  const adxMax = values["adxMax"];
+  const diRatio = values["diRatio"];
+  const minReclaimDepth = values["minReclaimDepth"];
+  const maxBreakAtr = values["maxBreakAtr"];
+  const minRewardRisk = values["minRewardRisk"];
+  const stopAtr = values["stopAtr"];
+  const trendFilter = values["trendFilter"];
+  const decayBars = values["decayBars"];
+  if (timeframe !== undefined) {
+    const label = timeframeFromMinutes(timeframe);
+    if (label === undefined) throw new Error(`No timeframe for ${timeframe} minutes`);
+    patch.timeframe = label;
+  }
+  if (period !== undefined) patch.period = period;
+  if (stdDev !== undefined) patch.stdDev = stdDev;
+  if (atrPeriod !== undefined) patch.atrPeriod = atrPeriod;
+  if (adxPeriod !== undefined) patch.adxPeriod = adxPeriod;
+  if (adxMax !== undefined) patch.adxMax = adxMax;
+  if (diRatio !== undefined) patch.diRatio = diRatio;
+  if (minReclaimDepth !== undefined) patch.minReclaimDepth = minReclaimDepth;
+  if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;
+  if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
+  if (stopAtr !== undefined) patch.stopAtr = stopAtr;
+  if (trendFilter !== undefined) patch.trendFilter = trendFilter;
+  if (decayBars !== undefined) patch.decayBars = decayBars;
+  return patch;
+}
+
+function searchDefaults(params: BollingerParams): Record<string, number> {
+  const source: Record<string, number> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "number") source[key] = value;
+  }
+  source["timeframe"] = candleIntervalSeconds(params.timeframe) / 60;
+  return source;
+}
+
 function fmt(n: number): string {
   return n.toFixed(4);
 }
@@ -591,3 +839,10 @@ function fmt(n: number): string {
 function pct(n: number): string {
   return `${(n * 100).toFixed(2)}%`;
 }
+
+export const strategyModule: StrategyModule = {
+  id: "bollinger",
+  create(trend, volatility, patch) {
+    return new BollingerStrategy(trend, volatility, applySearchPatch(bollingerParamsFor(), patch));
+  },
+};

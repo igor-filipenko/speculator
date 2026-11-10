@@ -512,6 +512,64 @@ export function keltner(candles: AtrCandle[], period: number, atrMult: number): 
  * Linear-interpolated percentile. `p` is in [0, 1] (e.g. 0.7 = 70th).
  * Returns undefined when `values` is empty.
  */
+export interface MacdSeries {
+  /** Fast EMA minus slow EMA. Null until the slow EMA is warm. */
+  macd: (number | null)[];
+  /** EMA of the MACD line. Null until that EMA is warm. */
+  signal: (number | null)[];
+  /** MACD line minus signal line. Positive means the MACD line is above its signal. */
+  histogram: (number | null)[];
+}
+
+/**
+ * MACD. The histogram is the series a zero threshold reads: above zero the
+ * fast line has crossed above the signal line, below zero it has crossed under.
+ * EMAs use the same SMA seed as {@link ema}.
+ */
+export function macd(
+  values: number[],
+  fastPeriod: number,
+  slowPeriod: number,
+  signalPeriod: number,
+): MacdSeries {
+  if (fastPeriod < 1 || slowPeriod < 1 || signalPeriod < 1) {
+    throw new Error("MACD periods must be >= 1");
+  }
+  if (fastPeriod >= slowPeriod) {
+    throw new Error("MACD fast period must be < slow period");
+  }
+
+  const n = values.length;
+  const macdLine: (number | null)[] = Array.from({ length: n }, () => null);
+  const signal: (number | null)[] = Array.from({ length: n }, () => null);
+  const histogram: (number | null)[] = Array.from({ length: n }, () => null);
+  const fast = ema(values, fastPeriod);
+  const slow = ema(values, slowPeriod);
+  const defined: number[] = [];
+  const definedAt: number[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const fastValue = fast[i];
+    const slowValue = slow[i];
+    if (fastValue == null || slowValue == null) continue;
+    const line = fastValue - slowValue;
+    macdLine[i] = line;
+    defined.push(line);
+    definedAt.push(i);
+  }
+
+  const signalOnDefined = ema(defined, signalPeriod);
+  for (let j = 0; j < defined.length; j++) {
+    const signalValue = signalOnDefined[j];
+    if (signalValue == null) continue;
+    const i = definedAt[j]!;
+    signal[i] = signalValue;
+    histogram[i] = defined[j]! - signalValue;
+  }
+
+  return { macd: macdLine, signal, histogram };
+}
+
 export function percentile(values: number[], p: number): number | undefined {
   if (!(p >= 0 && p <= 1)) {
     throw new Error("percentile p must be in [0, 1]");

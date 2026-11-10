@@ -2,7 +2,7 @@
 
 TypeScript CLI bot for Solana **trade recommendations** (`BUY` / `SELL` / `HOLD`).
 
-- **OHLCV:** GeckoTerminal or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
+- **OHLCV:** GeckoTerminal, Birdeye pair candles, or Binance spot klines (`CANDLE_SOURCE`, default gecko-terminal)
 - **Spot / paper fills:** Jupiter Swap quote API (`/swap/v1/quote`)
 - **Live trades:** Jupiter Swap API V2 (`/swap/v2/order` + `/swap/v2/execute`) signed with a Solana CLI keypair
 - **Backtest:** offline candle replay with emulated Jupiter-like slippage, pool fee, and Solana priority fee
@@ -33,9 +33,10 @@ Edit `.env`:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `bollinger` (default) or `donchian`                                                   |
+| `STRATEGY`                            | `strategy.registry` id. Implementation is `src/strategy/mode/<id>/index.ts`           |
 | `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
-| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default) or `binance`                                 |
+| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default), `binance`, or `birdeye`                     |
+| `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool               |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
 | `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
 | `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
@@ -199,7 +200,7 @@ pnpm backtest -- --verbose
 
 Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines; `birdeye` uses the Solana pool). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -209,6 +210,31 @@ OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by
 Short opens and covers skip the spot pool fee. They pay a perps schedule instead: open and close base fees plus hourly short borrow on entry notional for the time the short is open. Watch, paper, and trade load that schedule from [Jupiter pool-info](https://perps-api.jup.ag/v1/pool-info) (`openFeePercent`, `shortBorrowRatePercent`; close uses the same base rate) and reuse it for one hour. Backtest uses the offline snapshot (0.06% open, 0.06% close, 0.0007% per hour as of 2026-10-02) and does not call Jupiter. Price impact is not charged; pool-info only publishes its cap.
 
 The report prints equity, return, buy-and-hold benchmark (same emulated round-trip costs), excess vs hold, long/short round-trip counts, win rate, max drawdown, and cost totals. Pass `--verbose` to also list each simulated trade and draw the console chart. Backtest never writes paper portfolio state.
+
+Offline **tune** searches the active strategy's numeric knobs by anchored walk-forward. Candles load once. Each train window is a full factorial when it fits in `--max-trials`, otherwise a seeded Latin hypercube. The chosen set is the center of a stable neighborhood (median Sharpe of the set and its adjacent levels), then that single set is replayed on the next fold. The report compares the stitched out-of-sample track to today's defaults and does not rewrite them. The report says **Keep defaults** unless the search beats them on mean OOS Sharpe, compounds a positive OOS return, and is positive in at least two thirds of the test folds. Candles are read through a spike filter that clamps vendor wicks far beyond the candle body. See [TUNE.md](./TUNE.md) for methodology and how to judge a result.
+
+```bash
+pnpm tune
+pnpm tune -- --days 180
+pnpm tune -- --from 01-01-2026 --to 01-10-2026 --max-trials 48
+```
+
+| Flag                 | Meaning                                                                   |
+| -------------------- | ------------------------------------------------------------------------- |
+| `--days <n>`         | Lookback from now (default **365**; not with `--from`)                    |
+| `--from` / `--to`    | Same UTC dates as backtest                                                |
+| `--strategy <name>`  | `strategy.registry` id (default: env `STRATEGY`)                          |
+| `--folds <n>`        | Sequential folds, first is train-only (default **4**, minimum 2)          |
+| `--max-trials <n>`   | Trials per train window before neighbor fill (default **96**)             |
+| `--seed <n>`         | Latin-hypercube seed (default **1**)                                      |
+| `--min-trades <n>`   | Reject a trial with fewer completed round-trips (default **8**)           |
+| `--max-dd <pct>`     | Reject a trial whose max drawdown exceeds this percent (default **40**)   |
+| `--min-return <pct>` | Reject a trial that returns at most this percent on train (default **0**) |
+| `--min-pf <x>`       | Reject a trial below this profit factor on train (default **1.1**)        |
+| `--jobs <n>`         | Replay workers (default: one per CPU; **1** runs on this thread)          |
+| `--quotes 1m`        | Step each signal bar on real 1m closes (default: synthetic OHLC path)     |
+
+Tune searches the numeric axes exported by the active strategy. The default replay uses the synthetic OHLC path. `--quotes 1m` uses the same minute-close fills as backtest.
 
 Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
 
@@ -318,27 +344,13 @@ psql "$DATABASE_URL" -c "SELECT at, pair, side, price FROM market.signals ORDER 
 
 Useful controls: `sudo systemctl stop bot` · `sudo systemctl restart miniapp` · `sudo systemctl disable bot`.
 
-## Strategy (v1)
+## Strategy
 
-ATR stop/trail and cooldown via `GenericRiskManager`. One virtual long per pair (`flat → long → flat`).
+One position per pair: `long`, `short`, or `flat`.
 
-`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The **active strategy is still the env/CLI default**; the **risk manager follows HTF trend** (`bullish` / `flat` → `GenericRiskManager`, `bearish` / `unknown` → `HighRiskManager` which blocks new BUYs). **Bollinger also switches to HighRiskManager when 1h volatility is `high`**, so it does not fade wide, noisy bands. A Telegram message is sent when the trend or volatility changes.
+The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
-### Bollinger flat (`bollinger`)
-
-Mean-reversion on 15m (BB 14, 2.5σ). Buys on a **closed** lower-band reclaim — same-bar wick (low ≤ lower, green close back inside) or prior close ≤ prior lower — with the close still below mid. Shorts are the mirror at the upper band and need a perps fee schedule. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops and mid-exits still use the forming range.
-
-A long is blocked when −DI > **1.5** × +DI. A short is blocked when +DI > **1.5** × −DI. Equality does not block, and the ratio does not block an exit. ADX is recorded on the signal and does not gate entries. Reclaim depth `(close − lower) / (mid − lower)` must be ≥ 1% (the short uses the mirror from the upper band). A candle that traded through the band is ignored when its range is wider than **2.5×ATR**. An opening signal is held when the middle-band target does not clear round-trip fees (`reward > 0`) or when that fee-adjusted reward per unit of stop risk is below 0.5. A long pays spot slippage and pool fee on the entry and on the target; a short pays perps open and close fees plus slippage on both legs. Borrow is charged on the exit once the hold is known. The fixed priority fee and volume impact depend on size, which is chosen after the signal, so they are not in the ratio. The hard stop sits **3×ATR** beyond the signal-bar extreme. A long exits only when price is at least the mid and high enough that the sell fill clears the entry after the exit-leg fee. A short covers only when a perps fee schedule is present and price is at or below the mid **and** low enough to clear the open fee, close fee, hourly borrow accrued since the fill, and cover slippage. Without that schedule the short stays on hold and an upper-band short is not opened. Cooldown 2 bars, minHold 0. `/chart` draws Bollinger mid/upper/lower plus +DI and −DI.
-
-### Donchian breakout (`donchian`)
-
-Symmetric channel breakout on 15m. A **closed** close that crosses the prior **40-bar high** by at least 0.5–0.7×ATR opens a long when HTF trend is **bullish or flat**. The mirror — a close through the prior **40-bar low** by the same ATR margin — opens a short only when HTF trend is **bearish**. Flat allows longs only; unknown opens neither. Each entry also needs last volume above `k × SMA(volume)` of the previous 20 bars and the close on the breakout side of EMA 50 (above for a long, below for a short). A new short needs a perps fee schedule. A forming last bar is ignored for entries (intra-bar / live fill on the next tick after close); ATR stops still use the forming range.
-
-A long exits when a closed close crosses the prior **20-bar low**, when price gives back 4×ATR from the hold peak (armed once the peak is 2×ATR above the fill), or on a **3-bar time stop** if no later **close** reaches the breakout high minus 1×ATR (wicks do not count). A short covers on the mirror: prior 20-bar high, 4×ATR off the trough (same arming), or no close down to the breakout low plus 1×ATR. Volume, EMA, and HTF trend do not block exits.
-
-**Volume SMA multiplier** `k` (longs): bullish high 1.6 / low 2.0 / squeeze 2.1; flat high 2.0 / low 2.6 / squeeze 2.3; bearish and unknown 2.3. **Shorts are stricter**: `k` ×1.4 and the minimum break ×1.5 (optional `shortMaxExtendAtrMult` skips capitulation shorts far under the EMA; off by default). Entries fire only within 0.25 bar of the breakout bar's close, so a stale signal cannot re-open after a stop-out. Once the giveback is armed it never trails worse than the fill.
-
-The opening signal sets a hard stop **3×ATR** from the entry price. There is no take-profit and no reward:risk gate; the channel exit, giveback, time stop, and hard stop end the trade. `/chart` draws Donchian mid/upper/lower plus a volume pane with the SMA overlay.
+`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The risk manager is `GenericRiskManager` in every regime (hard stop and max deposit). Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file. A Telegram message is sent when the trend or volatility changes.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 
@@ -359,9 +371,10 @@ src/
   config.ts                # zod + env
   types.ts
   db/                      # Timescale: migrate, candles, bot ledgers, tokens/pools, signals
-  market/gecko/            # GeckoTerminalMarket
-  market/binance/          # BinanceMarket spot klines
-  market/cached/           # CachedMarket (Timescale gap fill)
+  market/gecko/            # GeckoTerminalMarket; public entry index.ts
+  market/binance/          # BinanceMarket spot klines; public entry index.ts
+  market/birdeye/          # BirdeyeMarket pair OHLCV; public entry index.ts
+  market/cached/           # CachedMarket (Timescale gap fill); public entry index.ts
   market/manager.ts        # createMarket(CandleSource)
   market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
   market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
@@ -370,12 +383,9 @@ src/
   exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
-  strategy/mode/bollinger.ts
-  strategy/mode/donchian.ts
-  strategy/strategy-manager.ts # loadStrategy + HTF trend / 1h vol; getActiveStrategy/RiskManager
+  strategy/mode/           # one <id>/ package per strategy (index.ts exports strategyModule)
+  strategy/strategy-manager.ts # discovers mode/<id>/index; HTF trend / 1h vol; getActiveStrategy/RiskManager
   strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
-  strategy/mode/bollinger-svg.ts # BB SVG for /chart
-  strategy/mode/donchian-svg.ts  # Donchian + volume SMA SVG for /chart
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   portfolio/paper/         # simulated cash book + Timescale mode=paper
   portfolio/live/          # on-chain cash/size + ledger

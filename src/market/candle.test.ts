@@ -5,6 +5,7 @@ import {
   createCandle,
   expectedCandleCount,
   isCandleFirstMinute,
+  sanitizeCandles,
 } from "./candle.js";
 
 describe("candleIntervalSeconds", () => {
@@ -76,5 +77,47 @@ describe("Candle.isClosed", () => {
     assert.equal(candle.isClosed(candle.time), false);
     assert.equal(candle.isClosed(candle.time + 15 * 60 - 1), false);
     assert.equal(candle.isClosed(candle.time + 15 * 60), true);
+  });
+});
+
+describe("sanitizeCandles", () => {
+  it("clamps a spike high to the body and leaves normal wicks alone", () => {
+    const spike = createCandle({
+      time: 0,
+      open: 92.3,
+      high: 200,
+      low: 91.9,
+      close: 92.0,
+      volume: 1,
+    });
+    const normal = createCandle({
+      time: 900,
+      open: 92,
+      high: 92.4,
+      low: 91.5,
+      close: 92.2,
+      volume: 1,
+    });
+    const { candles, repaired } = sanitizeCandles([spike, normal]);
+    assert.equal(repaired, 1);
+    assert.equal(candles[0]?.high, 92.3);
+    assert.equal(candles[0]?.low, 91.9);
+    assert.equal(candles[1], normal);
+    assert.equal(spike.high, 200);
+  });
+
+  it("clamps a spike low to the body", () => {
+    const spike = createCandle({ time: 0, open: 92, high: 92.5, low: 10, close: 92.2, volume: 1 });
+    const { candles, repaired } = sanitizeCandles([spike]);
+    assert.equal(repaired, 1);
+    assert.equal(candles[0]?.low, 92);
+  });
+
+  it("allows a wider wick on a 4h bar than on a 15m bar", () => {
+    const wick = { time: 0, open: 100, high: 108, low: 99, close: 101, volume: 1 };
+    const fourHour = createCandle({ ...wick, timeframe: "4h" });
+    const quarter = createCandle({ ...wick, timeframe: "15m" });
+    assert.equal(sanitizeCandles([fourHour]).repaired, 0);
+    assert.equal(sanitizeCandles([quarter]).repaired, 1);
   });
 });

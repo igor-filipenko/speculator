@@ -14,6 +14,15 @@ export const JUPITER_PERPS_FEES: PerpsFees = {
   borrowFeePctPerHour: 0.0007 / 100,
 };
 
+/** Assets Jupiter Perps lists. Any other base token cannot be shorted there. */
+const PERPS_BASES: ReadonlySet<string> = new Set(["SOL", "ETH", "BTC"]);
+
+/** True when `BASE/QUOTE` has a Jupiter Perps market, so a short can execute. */
+export function hasPerpsMarket(symbol: string): boolean {
+  const base = symbol.split("/")[0]?.trim().toUpperCase();
+  return base !== undefined && PERPS_BASES.has(base);
+}
+
 /** Open + close + hourly borrow accrued over `heldMs`, as a fraction of entry notional. */
 export function shortPositionFeePct(input: PerpsFees & { heldMs: number }): number {
   return input.openFeePct + shortCloseFeePct(input);

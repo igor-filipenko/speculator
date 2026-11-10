@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   JUPITER_PERPS_FEES,
+  hasPerpsMarket,
   perpsOpenFeeUsdc,
   shortCloseFeePct,
   shortPositionFeePct,
@@ -36,5 +37,16 @@ describe("shortPositionFeePct", () => {
       10 * 100 * JUPITER_PERPS_FEES.openFeePct,
     );
     assert.equal(perpsOpenFeeUsdc({ size: 10, price: 100 }), 0);
+  });
+});
+
+describe("hasPerpsMarket", () => {
+  it("lists SOL, ETH, and BTC only", () => {
+    assert.equal(hasPerpsMarket("SOL/USDC"), true);
+    assert.equal(hasPerpsMarket("eth/usdc"), true);
+    assert.equal(hasPerpsMarket("BTC/USDC"), true);
+    assert.equal(hasPerpsMarket("JUP/USDC"), false);
+    assert.equal(hasPerpsMarket("JTO/USDC"), false);
+    assert.equal(hasPerpsMarket(""), false);
   });
 });

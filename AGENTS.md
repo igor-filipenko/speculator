@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) from the strategy named by `STRATEGY` on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** / **regime** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) from the strategy named by `STRATEGY` on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
 
 Build/run: [README.md](./README.md).
 
@@ -13,7 +13,6 @@ Build/run: [README.md](./README.md).
 - Live Jupiter swaps and wallet signing are in scope for **`pnpm trade`** and **`pnpm positions`**. Paper and watch construct `JupiterExchange` without a keypair, so fills stay simulated quotes. Backtest must not call live Jupiter.
 - The Mini App server (`server/`) is **read-only** (health + portfolio). It must not place orders or call Jupiter.
 - Candle-replay **backtest** (`pnpm backtest`): Gecko OHLCV + Timescale `market.candles` cache + Jupiter-like fee/slippage emulation.
-- Candle-replay **regime** (`pnpm regime`): same HTF/1h close cadence as backtest; logs trend/vol switches and draws a CLI chart. No fills.
 - One position per pair: `long` or `short` or `flat`. No leverage multiplier and no multi-position sizing.
 - Package manager is **pnpm** only (not npm/yarn/bun). Runtime is **Node ≥24** (24 Active LTS recommended). Rust toolchain required for `server/`.
 - Comments and user-facing docs in this repo are **English**.
@@ -38,17 +37,17 @@ scripts/
   grant-privileges.sql  # keep in sync with migrations/
 
 src/ highlights:
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | tune | regime
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | tune
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
-  market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache, HTF/1h indicators
+  market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache
   exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators, one package per strategy under mode/<id>/, optional svg charts
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
-  engine/               # watch | paper | trade (shared loop) | wallet | backtest | tune | regime
+  engine/               # watch | paper | trade (shared loop) | wallet | backtest | tune
   chart/render-png.ts
 ```
 

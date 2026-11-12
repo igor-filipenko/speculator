@@ -18,84 +18,6 @@ export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
  */
 export type CandleSource = "gecko-terminal" | "binance" | "birdeye";
 
-/** Higher-timeframe bars used by {@link StrategyManager} (not the signal strategy). */
-export type HtfTimeframe = "4h" | "1d";
-
-/** 1h bars used for {@link MarketIndicators} volatility (not the HTF trend). */
-export type MtfTimeframe = "1h";
-
-export type Trend = "bullish" | "bearish" | "flat" | "unknown";
-
-export type Volatility = "high" | "low" | "squeeze" | "unknown";
-
-/** Clustered swing high/low used as support or resistance. */
-export interface PriceLevel {
-  price: number;
-  kind: "support" | "resistance";
-  /** Confirmed swing pivots in this cluster. */
-  touches: number;
-  /** Sum of volume in each pivot's confirmation window. */
-  volume: number;
-  /** Last pivot time (Unix seconds). */
-  lastTime: number;
-}
-
-/** HTF trend / S/R diagnostics (chart candles live here). */
-export interface HtfSnapshot {
-  timeframe: HtfTimeframe;
-  ema200?: number;
-  ema50?: number;
-  adx?: number;
-  /** Wilder +DI at the last HTF bar. */
-  plusDi?: number;
-  /** Wilder −DI at the last HTF bar. */
-  minusDi?: number;
-  atr?: number;
-  /** ATR / price. */
-  atrPct?: number;
-  /** (price − EMA200) / EMA200. */
-  distEma200Pct?: number;
-  /** Nearest support below price. */
-  support?: number;
-  /** Nearest resistance above price. */
-  resistance?: number;
-  /** Key clustered S/R (nearest-first within each side). */
-  levels?: PriceLevel[];
-  /** HTF OHLCV used to compute this snapshot. */
-  candles: Candle[];
-}
-
-/** 1h volatility diagnostics (no candle dump). */
-export interface MtfSnapshot {
-  timeframe: MtfTimeframe;
-  atr?: number;
-  /** ATR / price on 1h. */
-  atrPct?: number;
-  bbMid?: number;
-  bbUpper?: number;
-  bbLower?: number;
-  kcMid?: number;
-  kcUpper?: number;
-  kcLower?: number;
-  /** Nearest support below price. */
-  support?: number;
-  /** Nearest resistance above price. */
-  resistance?: number;
-  /** Key clustered S/R (nearest-first within each side). */
-  levels?: PriceLevel[];
-}
-
-/** HTF trend + S/R snapshot; 1h volatility is in {@link MarketIndicators.volatility}. */
-export interface MarketIndicators {
-  pair: string;
-  price: number;
-  trend: Trend;
-  volatility: Volatility;
-  htf?: HtfSnapshot;
-  /** 1h volatility diagnostics. */
-  mtf?: MtfSnapshot;
-}
-
 export interface Candle {
   /** Unix timestamp in seconds (candle open time). */
   time: number;
@@ -388,7 +310,7 @@ export interface SearchSpace {
 }
 
 /**
- * Overrides merged onto a strategy's regime defaults.
+ * Overrides merged onto a strategy's defaults.
  * A tune sample stores `timeframe` in minutes; {@link Strategy.paramPatch} writes
  * the candle label here. `values` are that strategy's own knobs. Tune reads only
  * `timeframe`.
@@ -400,7 +322,7 @@ export interface StrategyParamPatch {
   values?: Readonly<Record<string, number | string | boolean>>;
 }
 
-/** Copy a tune patch onto regime defaults. Unknown keys are ignored. */
+/** Copy a tune patch onto strategy defaults. Unknown keys are ignored. */
 export function applySearchPatch<T extends object>(
   base: T,
   patch: StrategyParamPatch | undefined,
@@ -435,7 +357,6 @@ export interface Strategy extends SearchSpace {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -452,7 +373,7 @@ export interface Strategy extends SearchSpace {
  */
 export interface StrategyModule {
   id: string;
-  create(trend: Trend, volatility: Volatility, patch?: StrategyParamPatch): Strategy;
+  create(patch?: StrategyParamPatch): Strategy;
 }
 
 export interface Risk {
@@ -495,31 +416,10 @@ export interface RiskManager {
   check(signal: Signal, snapshot: PortfolioSnapshot, candles: Candle[]): RiskOrCommand;
 }
 
-/**
- * HTF market indicators plus the active strategy / risk (trend picks the risk manager).
- * Does not fetch candles — callers use {@link getRequiredHtfCandles} /
- * {@link getRequiredMtfCandles} then {@link evaluate}.
- */
+/** Active strategy and risk manager for one process. */
 export interface StrategyManager {
   getActiveStrategy(): Strategy;
   getActiveRiskManager(): RiskManager;
-  getRequiredHtfCandles(): RequiredCandles;
-  getRequiredMtfCandles(): RequiredCandles;
-  evaluate(
-    pair: string,
-    htfCandles: Candle[],
-    mtfCandles: Candle[],
-    price: number,
-    at: Date,
-  ): MarketIndicators;
-  /**
-   * Sync risk manager to {@link MarketIndicators.trend}.
-   * Returns true when trend or volatility changed.
-   */
-  applyMarketIndicators(
-    indicators: MarketIndicators,
-    lastMarketIndicators?: MarketIndicators,
-  ): Promise<boolean>;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */
@@ -539,7 +439,6 @@ export interface ProgramState {
   readonly strategy: Strategy;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;
-  readonly lastMarketIndicators: Map<string, MarketIndicators>;
   readonly portfolios: Map<string, Portfolio>;
 }
 

@@ -155,10 +155,6 @@ Consistency: 5/6 folds beat B&H | 6/6 positive returns | Worst: fold 2 (−1.23%
 - **N/N positive** — how many folds had a positive return
 - **Worst fold** — identifies which sub-period was weakest and by how much
 
-### Technical note
-
-HTF (4h) and MTF (1h) candles span the **full window** and are shared across all folds. `syncMarketIndicators` uses `atTime` filtering, so fold 3 sees HTF history from folds 1 and 2 — matching live behaviour where indicators are built from all available history.
-
 ---
 
 ## Full analysis workflow
@@ -210,15 +206,6 @@ pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --strategy <id> --walk-forwar
 
 Compare by `N/N folds beat B&H`, not by total return. Total return can be inflated by a single lucky fold.
 
-### Step 5 — HTF sensitivity
-
-```bash
-pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --walk-forward 6
-HTF=1d pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --walk-forward 6
-```
-
-If results differ substantially between `HTF=4h` and `HTF=1d`, the strategy is sensitive to the trend filter — lower confidence.
-
 ---
 
 ## Pre-live checklist
@@ -242,4 +229,3 @@ If results differ substantially between `HTF=4h` and `HTF=1d`, the strategy is s
 - **Sharpe > 10** is unrealistically high for real markets — it reflects the smooth bar-level returns of a high-frequency strategy, not true risk-adjusted performance.
 - **Walk-forward uses fixed parameters**: it tests temporal consistency of the current `.env` settings, not parameter optimisation. It is an honest out-of-sample test only if parameters were not already tuned on the same window.
 - **1 month of data** is statistically insufficient for robust conclusions. Use at least 3 months with 6+ walk-forward folds.
-- **No slippage on HTF candles**: the market indicators (ADX, EMA trend, ATR) are computed from cached candles, not live quotes — their accuracy depends on GeckoTerminal data quality.

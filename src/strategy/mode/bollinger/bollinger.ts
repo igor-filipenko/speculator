@@ -4,7 +4,6 @@ import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/can
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -15,8 +14,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { atr, bollinger, dmi } from "../../indicators.js";
 import { buildBollingerSvg } from "./svg.js";
@@ -59,12 +56,6 @@ export interface BollingerParams {
   minRewardRisk: number;
   /** Stop distance beyond the entry-bar extreme, in ATRs. */
   stopAtr: number;
-  /**
-   * HTF trend gate for new entries. Exits ignore it.
-   * 0 = off. 1 = block a long in a bearish trend and a short in a bullish one.
-   * 2 = trade only when the trend is flat. An unknown trend never blocks.
-   */
-  trendFilter: number;
   /**
    * Bars of `timeframe` over which an open fade's exit slides from the
    * profitable price to the fee breakeven. At that horizon the position closes
@@ -215,7 +206,7 @@ function openingRewardHoldReason(input: {
   return null;
 }
 
-/** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
+/** Signal-side params. */
 export function bollingerParamsFor(): BollingerParams {
   return {
     timeframe: "1h",
@@ -229,16 +220,14 @@ export function bollingerParamsFor(): BollingerParams {
     maxBreakAtr: 2.5,
     minRewardRisk: 0.3,
     stopAtr: 2.5,
-    trendFilter: 0,
     decayBars: 12,
   };
 }
 
 /**
- * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h and `trendFilter`
- * stays at 0: the last three SOL seeds never kept 15m, and the HTF gate did not
- * cluster. Wide bands, a 30-bar lookback, and the tightest stops only won on
- * those 15m folds. `atrPeriod` is its own axis, not tied to `period`.
+ * Decision knobs for `pnpm tune`. Signal timeframe stays at 1h: the last three
+ * SOL seeds never kept 15m. Wide bands, a 30-bar lookback, and the tightest
+ * stops only won on those 15m folds. `atrPeriod` is its own axis, not tied to `period`.
  */
 export const BOLLINGER_SEARCH_SPACE: SearchSpace = {
   axes: [
@@ -274,10 +263,6 @@ export interface BollingerInput {
    * Missing rates block a new short and keep an open short on HOLD.
    */
   perpsFees?: PerpsFees;
-  /** HTF trend. */
-  trend: Trend;
-  /** 1h volatility. */
-  volatility: Volatility;
 }
 
 /**
@@ -498,8 +483,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
       reason = adxBlockReason("long", adxNow, strategy.adxMax);
     } else if (diBlocksEntry("long", plusDi, minusDi, strategy.diRatio)) {
       reason = diBlockReason("long", plusDi, minusDi, strategy.diRatio);
-    } else if (trendBlocksEntry("long", input.trend, strategy.trendFilter)) {
-      reason = trendBlockReason("long", input.trend, strategy.trendFilter);
     } else {
       side = "BUY";
       const how = wickReclaim ? "wick reclaim" : "close reclaim";
@@ -540,8 +523,6 @@ export function evaluateBollinger(input: BollingerInput): Signal {
         reason = adxBlockReason("short", adxNow, strategy.adxMax);
       } else if (diBlocksEntry("short", plusDi, minusDi, strategy.diRatio)) {
         reason = diBlockReason("short", plusDi, minusDi, strategy.diRatio);
-      } else if (trendBlocksEntry("short", input.trend, strategy.trendFilter)) {
-        reason = trendBlockReason("short", input.trend, strategy.trendFilter);
       } else {
         side = "SELL";
         const how = wickReject ? "wick rejection" : "close rejection";
@@ -597,7 +578,7 @@ export class BollingerStrategy implements Strategy {
   readonly axes = BOLLINGER_SEARCH_SPACE.axes;
   private readonly params: BollingerParams;
 
-  constructor(_trend: Trend = "flat", _volatility: Volatility = "low", params?: BollingerParams) {
+  constructor(params?: BollingerParams) {
     this.params = params ?? bollingerParamsFor();
   }
 
@@ -639,7 +620,6 @@ export class BollingerStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -656,8 +636,6 @@ export class BollingerStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      trend: market.trend,
-      volatility: market.volatility,
       ...(perpsFees !== undefined ? { perpsFees } : {}),
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? {
@@ -743,25 +721,6 @@ export function diBlocksEntry(
   return minusDi > diRatio * plusDi;
 }
 
-/**
- * HTF trend gate on a new entry. Mode 1 refuses a long in a bearish trend and a
- * short in a bullish one. Mode 2 refuses both unless the trend is flat.
- * Mode 0 and an unknown trend never block.
- */
-export function trendBlocksEntry(side: "long" | "short", trend: Trend, mode: number): boolean {
-  if (mode === 0 || trend === "unknown") return false;
-  if (mode === 2) return trend !== "flat";
-  if (side === "long") return trend === "bearish";
-  return trend === "bullish";
-}
-
-function trendBlockReason(side: "long" | "short", trend: Trend, mode: number): string {
-  const head = side === "long" ? "Lower reclaim ignored" : "Upper rejection ignored";
-  return mode === 2
-    ? `${head}: HTF trend is ${trend}, entries need flat`
-    : `${head}: HTF trend is ${trend}, against a ${side}`;
-}
-
 function diBlockReason(
   side: "long" | "short",
   plusDi: number,
@@ -801,7 +760,6 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   const maxBreakAtr = values["maxBreakAtr"];
   const minRewardRisk = values["minRewardRisk"];
   const stopAtr = values["stopAtr"];
-  const trendFilter = values["trendFilter"];
   const decayBars = values["decayBars"];
   if (timeframe !== undefined) {
     const label = timeframeFromMinutes(timeframe);
@@ -818,7 +776,6 @@ function paramsFromSearch(values: Readonly<Record<string, number>>): Partial<Bol
   if (maxBreakAtr !== undefined) patch.maxBreakAtr = maxBreakAtr;
   if (minRewardRisk !== undefined) patch.minRewardRisk = minRewardRisk;
   if (stopAtr !== undefined) patch.stopAtr = stopAtr;
-  if (trendFilter !== undefined) patch.trendFilter = trendFilter;
   if (decayBars !== undefined) patch.decayBars = decayBars;
   return patch;
 }
@@ -842,7 +799,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "bollinger",
-  create(trend, volatility, patch) {
-    return new BollingerStrategy(trend, volatility, applySearchPatch(bollingerParamsFor(), patch));
+  create(patch) {
+    return new BollingerStrategy(applySearchPatch(bollingerParamsFor(), patch));
   },
 };

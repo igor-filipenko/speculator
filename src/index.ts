@@ -7,7 +7,6 @@ import {
   runBacktest,
   runWalkForward,
 } from "./engine/backtest.js";
-import { parseRegimeArgs, printRegimeReport, runRegime } from "./engine/regime.js";
 import { parseTuneArgs, printTuneReport, runTune } from "./engine/tune.js";
 import { runPaper } from "./engine/paper.js";
 import { positionsUsage, runPositions } from "./engine/positions.js";
@@ -17,14 +16,7 @@ import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
 import { PaperPortfolio } from "./portfolio/paper/portfolio.js";
 import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
-import type {
-  Candle,
-  MarketIndicators,
-  Portfolio,
-  ProgramState,
-  ShutdownCb,
-  Signal,
-} from "./types.js";
+import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal } from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
@@ -36,7 +28,6 @@ function usage(): never {
   pnpm positions      # list or open/close the live long or short
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
   pnpm tune           # Walk-forward search for strategy parameters
-  pnpm regime         # Replay HTF/1h market-indicator switches (no fills)
   pnpm migrate        # dbmate up (TimescaleDB)
 
   tsx src/index.ts watch|paper|trade [--once]
@@ -48,12 +39,11 @@ function usage(): never {
   tsx src/index.ts positions close short
   tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
   tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
-  tsx src/index.ts regime [--days <n> | --from <date> [--to <date>]]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
   --buy-sol         Buy SOL up to SOL_RESERVE_MAX when below SOL_RESERVE_MIN (wallet)
-  --days <n>        Replay lookback in days (regime only; default: 90)
+  --days <n>        Replay lookback in days (tune only; default: 365)
   --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Replay range end inclusive (default: now; requires --from)
   --strategy <name> Override strategy (backtest only; default: env STRATEGY)
@@ -72,14 +62,7 @@ Options:
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [
-  ...ENGINE_MODES,
-  "wallet",
-  "positions",
-  "backtest",
-  "tune",
-  "regime",
-] as const;
+const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "positions", "backtest", "tune"] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -120,9 +103,6 @@ async function main(): Promise<void> {
     case "tune":
       await runTuneCommand(rest);
       return;
-    case "regime":
-      await runRegimeCommand(rest);
-      return;
     case "watch":
       await runWatchCommand(rest);
       return;
@@ -146,14 +126,12 @@ async function runWatchCommand(argv: string[]): Promise<void> {
   const config = await loadConfig();
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: config.strategy,
-    htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
   const programState: ProgramState = {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: new Map<string, Portfolio>(),
   };
 
@@ -179,7 +157,6 @@ async function runPaperCommand(argv: string[]): Promise<void> {
   const config = await loadConfig();
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: config.strategy,
-    htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
@@ -191,7 +168,6 @@ async function runPaperCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios,
   };
 
@@ -217,7 +193,6 @@ async function runTradeCommand(argv: string[]): Promise<void> {
   const config = await loadConfig();
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: config.strategy,
-    htf: config.htf,
   });
   const strategy = strategyManager.getActiveStrategy();
   const runtime = await createLiveRuntime(config);
@@ -227,7 +202,6 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     strategy,
     lastSignals: new Map<string, Signal>(),
     lastCandles: new Map<string, Candle[]>(),
-    lastMarketIndicators: new Map<string, MarketIndicators>(),
     portfolios: runtime.portfolios,
   };
 
@@ -289,7 +263,6 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
 
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: flags.strategy ?? config.strategy,
-    htf: config.htf,
   });
 
   if (flags.walkForwardFolds !== undefined) {
@@ -345,26 +318,6 @@ async function runTuneCommand(argv: string[]): Promise<void> {
   });
   for (const result of results) {
     printTuneReport(result);
-  }
-}
-
-async function runRegimeCommand(argv: string[]): Promise<void> {
-  const flags = parseRegimeArgs(argv);
-  const config = await loadConfig();
-  const strategyManager = await SimpleStrategyManager.create({
-    strategyId: config.strategy,
-    htf: config.htf,
-  });
-  const results = await runRegime({
-    config,
-    strategyManager,
-    ...(flags.days > 0 ? { days: flags.days } : {}),
-    ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
-    ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
-  });
-
-  for (const result of results) {
-    await printRegimeReport(result);
   }
 }
 

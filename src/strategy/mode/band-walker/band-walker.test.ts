@@ -88,8 +88,6 @@ function evalWalk(
     strategy,
     price: last.close,
     at: new Date((last.time + last.intervalSeconds) * 1000),
-    trend: "flat",
-    volatility: "low",
     ...extra,
   });
 }

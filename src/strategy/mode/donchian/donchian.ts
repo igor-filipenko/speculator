@@ -2,7 +2,6 @@ import { candleIntervalSeconds } from "../../../market/candle.js";
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -13,8 +12,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { atr, donchian, ema, sma } from "../../indicators.js";
 import { buildDonchianSvg } from "./svg.js";
@@ -78,36 +75,17 @@ export interface DonchianParams {
   atrStopMult: number;
 }
 
-/** Volume confirmation by HTF trend × 1h volatility. The same multiple applies both sides. */
-const VOLUME_SMA_MULT: Record<Trend, Record<Volatility, number>> = {
-  bullish: { high: 1.6, low: 2.0, squeeze: 2.1, unknown: 1.7 },
-  flat: { high: 2.0, low: 2.6, squeeze: 2.3, unknown: 2.3 },
-  bearish: { high: 2.3, low: 2.3, squeeze: 2.3, unknown: 2.3 },
-  unknown: { high: 2.3, low: 2.3, squeeze: 2.3, unknown: 2.3 },
-};
-
-/** Skip channel pokes that are not a real break (false breaks). */
-const MIN_BREAK_ATR: Record<Volatility, number> = {
-  high: 0.7,
-  low: 0.7,
-  squeeze: 0.5,
-  unknown: 0.5,
-};
-
-/** Signal-side params for HTF `trend` × 1h `volatility` (defaults: flat / low). */
-export function donchianParamsFor(
-  trend: Trend = "flat",
-  volatility: Volatility = "low",
-): DonchianParams {
+/** Signal-side params. Volume and break distance are fixed (formerly flat / low). */
+export function donchianParamsFor(): DonchianParams {
   return {
     timeframe: "15m",
     entryPeriod: 40,
     exitPeriod: 20,
     volumeSmaPeriod: 20,
-    volumeSmaMult: VOLUME_SMA_MULT[trend][volatility],
+    volumeSmaMult: 2.6,
     trendEmaPeriod: 50,
     atrPeriod: 14,
-    minBreakAtrMult: MIN_BREAK_ATR[volatility],
+    minBreakAtrMult: 0.7,
     shortMaxExtendAtrMult: 0,
     shortVolumeSmaScale: 1.4,
     shortMinBreakScale: 1.5,
@@ -174,27 +152,22 @@ export interface DonchianInput {
    * Missing rates block a new short. Covers do not need them.
    */
   perpsFees?: PerpsFees;
-  /**
-   * HTF trend. Long breakouts need bullish or flat; short breakouts need
-   * bearish. Exits ignore it.
-   */
-  trend: Trend;
 }
 
 /**
  * Symmetric Donchian breakout.
  * BUY when a **closed** bar's close crosses above the prior entry-period high by
  * minBreakAtrMult×ATR, volume exceeds k × prior volume SMA, close is above the
- * trend EMA, and HTF trend is bullish or flat.
+ * trend EMA.
  * SELL (open short) is the mirror through the prior entry-period low, with close
- * under the trend EMA and HTF bearish (flat does not open shorts). A short is not opened without a
+ * under the trend EMA. A short is not opened without a
  * perps fee schedule.
  * A forming last candle is ignored for entries (live/intra-bar); fill is the next tick after close.
  * An open long sells on the prior exit-period low, on givebackAtrMult×ATR off the
  * peak (armed once the peak is givebackArmAtrMult×ATR above the fill), or when timeStopBars pass without a close at breakoutHigh − ATR.
  * An open short covers on the prior exit-period high, on the same giveback off the
  * trough, or when no close reaches breakoutLow + ATR. Wicks alone do not count.
- * Volume / EMA / trend do not block exits.
+ * Volume and the trend EMA do not block exits.
  * An opening signal sets `slPrice` at atrStopMult×ATR. There is no take-profit: the
  * trade ends on the channel exit, the giveback, the time stop, or the hard stop.
  */
@@ -412,9 +385,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   if ((brokeEntryUpper || brokeEntryLower) && staleEntry) {
     reason = `Entry ignored: breakout bar closed ${entryAgeBars.toFixed(2)} bars ago (> ${strategy.maxEntryAgeBars})`;
   } else if (brokeEntryUpper) {
-    if (input.trend !== "bullish" && input.trend !== "flat") {
-      reason = `Breakout ignored: HTF trend not bullish or flat`;
-    } else if (close <= entryUpperPrev + breakMargin) {
+    if (close <= entryUpperPrev + breakMargin) {
       reason =
         `Breakout ignored: close ${fmt(close)} − upper ${fmt(entryUpperPrev)} ` +
         `<= ${fmt(breakMargin)} (${strategy.minBreakAtrMult}×ATR)`;
@@ -433,9 +404,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
         `volume ${fmt(volume)} > ${fmt(volumeThreshold)} (${strategy.volumeSmaMult}× SMA); ${emaNote}`.trim();
     }
   } else if (brokeEntryLower) {
-    if (input.trend !== "bearish") {
-      reason = `Breakdown ignored: HTF trend not bearish`;
-    } else if (input.perpsFees == null) {
+    if (input.perpsFees == null) {
       reason = "Breakdown ignored: perps fee schedule missing";
     } else if (close >= entryLowerPrev - shortBreakMargin) {
       reason =
@@ -472,15 +441,13 @@ export function evaluateDonchian(input: DonchianInput): Signal {
   };
 }
 
-/** 15m symmetric Donchian: closed-bar DC40 breakout + SMA volume + EMA50; long on bullish/flat, short on bearish only; exit DC20, 4×ATR giveback armed after a 2×ATR gain, or 3-bar time stop. No take-profit. */
+/** 15m symmetric Donchian: closed-bar DC40 breakout + SMA volume + EMA50; exit DC20, 4×ATR giveback armed after a 2×ATR gain, or 3-bar time stop. No take-profit. */
 export class DonchianStrategy implements Strategy {
   readonly axes = DONCHIAN_SEARCH_SPACE.axes;
   private readonly params: DonchianParams;
-  private readonly trend: Trend;
 
-  constructor(trend: Trend = "flat", volatility: Volatility = "low", params?: DonchianParams) {
-    this.trend = trend;
-    this.params = params ?? donchianParamsFor(trend, volatility);
+  constructor(params?: DonchianParams) {
+    this.params = params ?? donchianParamsFor();
   }
 
   accept(values: Readonly<Record<string, number>>): boolean {
@@ -509,16 +476,8 @@ export class DonchianStrategy implements Strategy {
       trendEmaPeriod,
       timeStopBars,
     } = this.params;
-    const gate =
-      this.trend === "bullish"
-        ? "bull"
-        : this.trend === "bearish"
-          ? "bear"
-          : this.trend === "flat"
-            ? "flat"
-            : "no-entry";
     const stop = timeStopBars > 0 ? ` tStop${timeStopBars}` : "";
-    return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod}${stop} ${gate})`;
+    return `donchian (${timeframe} DC${entryPeriod}/${exitPeriod} volSMA${volumeSmaPeriod}×${volumeSmaMult.toFixed(1)} EMA${trendEmaPeriod}${stop})`;
   }
 
   getId(): string {
@@ -544,7 +503,6 @@ export class DonchianStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    market: MarketIndicators,
     price: number,
     at: Date,
     snapshot?: PortfolioSnapshot,
@@ -561,7 +519,6 @@ export class DonchianStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      trend: market.trend,
       ...(perpsFees !== undefined ? { perpsFees } : {}),
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? {
@@ -760,11 +717,7 @@ function fmt(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "donchian",
-  create(trend, volatility, patch) {
-    return new DonchianStrategy(
-      trend,
-      volatility,
-      applySearchPatch(donchianParamsFor(trend, volatility), patch),
-    );
+  create(patch) {
+    return new DonchianStrategy(applySearchPatch(donchianParamsFor(), patch));
   },
 };

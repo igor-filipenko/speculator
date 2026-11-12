@@ -3,7 +3,6 @@ import { isMainThread, parentPort, Worker } from "node:worker_threads";
 import type { AppConfig } from "../config.js";
 import { createMarket } from "../market/manager.js";
 import { createCandle, timeframeFromMinutes } from "../market/candle.js";
-import { loadHtfCandles, loadMtfCandles } from "../backtest/market-replay.js";
 import { readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 import { SimpleStrategyManager, type StrategyParamPatch } from "../strategy/strategy-manager.js";
 import type {
@@ -150,8 +149,6 @@ export interface RunTuneOptions {
   space?: SearchSpace;
   /** Signal candles. When set, skips the network and reuses this series for every pair. */
   candles?: Candle[];
-  htfCandles?: Candle[];
-  mtfCandles?: Candle[];
 }
 
 /** Axis values taken from `source`. Each axis key must be present. */
@@ -424,7 +421,6 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
   const window = replayWindow(options);
   const probe = await SimpleStrategyManager.create({
     strategyId: options.strategyId,
-    htf: options.config.htf,
   });
   const strategy = probe.getActiveStrategy();
   const space = options.space ?? strategy;
@@ -441,33 +437,14 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
 
   const results: TuneResult[] = [];
   for (const pair of options.config.pairs) {
-    const [candles, htfCandles, mtfCandles] = await Promise.all([
+    const candles =
       options.candles ??
-        market.fetchCandles({
-          pair,
-          timeframe,
-          fromTime: window.fromTime,
-          toTime: window.toTime,
-        }),
-      loadHtfCandles({
+      (await market.fetchCandles({
         pair,
-        market,
-        strategyManager: probe,
+        timeframe,
         fromTime: window.fromTime,
         toTime: window.toTime,
-        injected: options.htfCandles,
-        skipFetch: skipNetwork && options.htfCandles === undefined,
-      }),
-      loadMtfCandles({
-        pair,
-        market,
-        strategyManager: probe,
-        fromTime: window.fromTime,
-        toTime: window.toTime,
-        injected: options.mtfCandles,
-        skipFetch: skipNetwork && options.mtfCandles === undefined,
-      }),
-    ]);
+      }));
     const altCandles: Record<string, Candle[]> = {};
     for (const label of altTimeframes) {
       altCandles[label] = await market.fetchCandles({
@@ -504,8 +481,6 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
         defaults,
         candles,
         altCandles,
-        htfCandles,
-        mtfCandles,
         ...(minuteCandles !== undefined ? { minuteCandles } : {}),
         folds: options.folds,
         maxTrials: options.maxTrials,
@@ -615,8 +590,6 @@ interface ReplayContext {
   candles: Candle[];
   /** Signal candles for the other timeframes on the search axis, by label. */
   altCandles: Record<string, Candle[]>;
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
   minuteCandles?: Candle[];
   pool?: ReplayPool;
@@ -678,8 +651,6 @@ async function tunePair(args: {
   defaults: Readonly<Record<string, number>>;
   candles: Candle[];
   altCandles: Record<string, Candle[]>;
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   folds: number;
   maxTrials: number;
   seed: number;
@@ -701,8 +672,6 @@ async function tunePair(args: {
           strategyId: args.strategyId,
           candles: args.candles,
           altCandles: args.altCandles,
-          htfCandles: args.htfCandles,
-          mtfCandles: args.mtfCandles,
           ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
         })
       : undefined;
@@ -721,8 +690,6 @@ async function tunePair(args: {
       strategyId: args.strategyId,
       candles: args.candles,
       altCandles: args.altCandles,
-      htfCandles: args.htfCandles,
-      mtfCandles: args.mtfCandles,
       ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
       ...(pool !== undefined ? { pool } : {}),
     };
@@ -991,8 +958,6 @@ async function replaySlice(ctx: ReplayContext, request: ReplayRequest): Promise<
     config: ctx.config,
     strategyId: ctx.strategyId,
     candles: replayCandles(ctx.candles, ctx.altCandles, request),
-    htfCandles: ctx.htfCandles,
-    mtfCandles: ctx.mtfCandles,
     ...(ctx.minuteCandles !== undefined ? { minuteCandles: ctx.minuteCandles } : {}),
     ...(request.patch !== undefined ? { patch: request.patch } : {}),
   });
@@ -1026,22 +991,17 @@ async function replayMetrics(args: {
   config: AppConfig;
   strategyId: string;
   candles: Candle[];
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   minuteCandles?: Candle[];
   patch?: StrategyParamPatch;
 }): Promise<BacktestMetrics> {
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: args.strategyId,
-    htf: args.config.htf,
     ...(args.patch !== undefined ? { paramPatch: args.patch } : {}),
   });
   const [result] = await runBacktest({
     config: args.config,
     strategyManager,
     candles: args.candles,
-    htfCandles: args.htfCandles,
-    mtfCandles: args.mtfCandles,
     ...(args.minuteCandles !== undefined
       ? { quotes: "1m" as const, minuteCandles: args.minuteCandles }
       : {}),
@@ -1418,8 +1378,6 @@ interface PoolInit {
   strategyId: string;
   candles: Candle[];
   altCandles: Record<string, Candle[]>;
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
   minuteCandles?: Candle[];
 }
@@ -1430,8 +1388,6 @@ interface WorkerInitMessage {
   strategyId: string;
   candles: CandlePayload[];
   altCandles: Record<string, CandlePayload[]>;
-  htfCandles: CandlePayload[];
-  mtfCandles: CandlePayload[];
   minuteCandles?: CandlePayload[];
 }
 
@@ -1519,8 +1475,6 @@ class ReplayPool {
       altCandles: Object.fromEntries(
         Object.entries(init.altCandles).map(([label, rows]) => [label, candlePayload(rows)]),
       ),
-      htfCandles: candlePayload(init.htfCandles),
-      mtfCandles: candlePayload(init.mtfCandles),
       ...(init.minuteCandles !== undefined
         ? { minuteCandles: candlePayload(init.minuteCandles) }
         : {}),
@@ -1690,8 +1644,6 @@ function startReplayWorker(): void {
             rows.map((row) => createCandle(row)),
           ]),
         ),
-        htfCandles: message.htfCandles.map((row) => createCandle(row)),
-        mtfCandles: message.mtfCandles.map((row) => createCandle(row)),
         ...(message.minuteCandles !== undefined
           ? { minuteCandles: message.minuteCandles.map((row) => createCandle(row)) }
           : {}),
@@ -1716,8 +1668,6 @@ function startReplayWorker(): void {
         end: message.end,
         ...(message.patch !== undefined ? { patch: message.patch } : {}),
       }),
-      htfCandles: current.htfCandles,
-      mtfCandles: current.mtfCandles,
       ...(current.minuteCandles !== undefined ? { minuteCandles: current.minuteCandles } : {}),
       ...(message.patch !== undefined ? { patch: message.patch } : {}),
     }).then(

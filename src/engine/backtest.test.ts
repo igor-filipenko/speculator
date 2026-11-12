@@ -6,15 +6,9 @@ import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quot
 import { createCandle } from "../market/candle.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import { GenericRiskManager } from "../strategy/risk-manager.js";
-import {
-  evaluateMarketIndicators,
-  htfParamsFor,
-  loadStrategy,
-  SimpleStrategyManager,
-} from "../strategy/strategy-manager.js";
+import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
 import type {
   Candle,
-  MarketIndicators,
   Order,
   RiskManager,
   Signal,
@@ -41,7 +35,6 @@ const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 function makeConfig(cash = 1000): AppConfig {
   return {
     strategy: "bollinger",
-    htf: "4h",
     jupiterApiKey: "",
     birdeyeApiKey: "",
     watchlist: ["SOL/USDC"],
@@ -70,42 +63,11 @@ function makeRisk(): GenericRiskManager {
   return new GenericRiskManager();
 }
 
-function htfAwareManager(strategy: Strategy): StrategyManager {
-  const params = htfParamsFor("4h");
-  const riskManager: RiskManager = new GenericRiskManager();
-  return {
-    getActiveStrategy: () => strategy,
-    getActiveRiskManager: () => riskManager,
-    getRequiredHtfCandles: () => ({ timeframe: "4h", count: 220 }),
-    getRequiredMtfCandles: () => ({ timeframe: "1h" as const, count: 120 }),
-    evaluate: (pair, htfCandles, mtfCandles, price, at): MarketIndicators =>
-      evaluateMarketIndicators({
-        pair,
-        candles: htfCandles,
-        mtfCandles,
-        price,
-        at,
-        params,
-      }),
-    applyMarketIndicators: (state, prev) => Promise.resolve(prev?.trend !== state.trend),
-  };
-}
-
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
 function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): StrategyManager {
   return {
     getActiveStrategy: () => strategy,
     getActiveRiskManager: () => riskManager,
-    getRequiredHtfCandles: () => ({ timeframe: "4h", count: 220 }),
-    getRequiredMtfCandles: () => ({ timeframe: "1h" as const, count: 120 }),
-    evaluate: (pair, candles, _mtfCandles, price): MarketIndicators => ({
-      pair,
-      price,
-      trend: "unknown",
-      volatility: "unknown",
-      htf: { timeframe: "4h", candles },
-    }),
-    applyMarketIndicators: () => Promise.resolve(false),
   };
 }
 
@@ -126,7 +88,7 @@ function scriptedStrategy(opts: {
     getDisplayName: () => "scripted",
     getId: () => "bollinger",
     getRequiredCandles: () => ({ timeframe: "15m", count: 1000 }),
-    evaluateSignal: (pair, candles, _market, price, at) => {
+    evaluateSignal: (pair, candles, price, at) => {
       const last = candles[candles.length - 1]!;
       const i = candles.length - 1;
       const side: SignalSide = i === opts.buyIndex ? "BUY" : "HOLD";
@@ -164,28 +126,6 @@ function series(count: number, startPrice: number, delta: number, start = 1_700_
         low: price - 0.5,
         close: price,
         volume: 10,
-      }),
-    );
-  }
-  return candles;
-}
-
-function htfSeries(count: number, startPrice: number, delta: number, start: number): Candle[] {
-  const interval = 4 * 60 * 60;
-  const candles: Candle[] = [];
-  let price = startPrice;
-  for (let i = 0; i < count; i++) {
-    price += delta;
-    const close = price;
-    candles.push(
-      createCandle({
-        time: start + i * interval,
-        open: close - delta / 2,
-        high: close + Math.abs(delta) + 0.2,
-        low: close - Math.abs(delta) - 0.2,
-        close,
-        volume: 1,
-        timeframe: "4h",
       }),
     );
   }
@@ -474,7 +414,7 @@ describe("runBacktest", () => {
       getDisplayName: () => "window-probe",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count }),
-      evaluateSignal: (pair, window, _market, price, at) => {
+      evaluateSignal: (pair, window, price, at) => {
         lengths.push(window.length);
         return {
           pair,
@@ -506,7 +446,7 @@ describe("runBacktest", () => {
       getDisplayName: () => "perps-probe",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 5 }),
-      evaluateSignal: (pair, _window, _market, price, at, _portfolio, perpsFees) => {
+      evaluateSignal: (pair, _window, price, at, _portfolio, perpsFees) => {
         seen.set(pair, perpsFees !== undefined);
         return {
           pair,
@@ -543,7 +483,7 @@ describe("runBacktest", () => {
 
   it("keeps flat equity when indicators never fire", async () => {
     await useTestDb();
-    const strategy = await loadStrategy("bollinger", "flat", "low");
+    const strategy = await loadStrategy("bollinger");
     const needed = strategy.getRequiredCandles().count + 10;
     const start = 1_700_000_000;
     const interval = 15 * 60;
@@ -560,7 +500,7 @@ describe("runBacktest", () => {
 
     const [result] = await runBacktest({
       config: makeConfig(500),
-      strategyManager: await SimpleStrategyManager.create({ strategyId: "bollinger", htf: "4h" }),
+      strategyManager: await SimpleStrategyManager.create({ strategyId: "bollinger" }),
       candles,
     });
 
@@ -576,31 +516,11 @@ describe("runBacktest", () => {
     assert.ok(result.metrics.vsHoldReturnPct > 0);
   });
 
-  it("fills a scripted BUY when HTF trend is bearish", async () => {
-    const intervalHtf = 4 * 60 * 60;
-    const ltfStart = 1_700_000_000;
-    const htf = htfSeries(250, 250, -0.8, ltfStart - 250 * intervalHtf);
-    const ltf = series(20, 100, 0.1);
+  it("fills a scripted BUY", async () => {
     const [result] = await runBacktest({
       config: makeConfig(1000),
-      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
-      candles: ltf,
-      htfCandles: htf,
-    });
-    assert.ok(result);
-    assert.ok(result.trades.some((t) => t.side === "BUY"));
-  });
-
-  it("allows BUY when HTF trend is bullish", async () => {
-    const intervalHtf = 4 * 60 * 60;
-    const ltfStart = 1_700_000_000;
-    const htf = htfSeries(250, 50, 0.8, ltfStart - 250 * intervalHtf);
-    const ltf = series(20, 100, 0.1);
-    const [result] = await runBacktest({
-      config: makeConfig(1000),
-      strategyManager: htfAwareManager(scriptedStrategy({ buyIndex: 5 })),
-      candles: ltf,
-      htfCandles: htf,
+      strategyManager: managerFor(scriptedStrategy({ buyIndex: 5 })),
+      candles: series(20, 100, 0.1),
     });
     assert.ok(result);
     assert.ok(result.trades.some((t) => t.side === "BUY"));
@@ -631,7 +551,7 @@ describe("runBacktest", () => {
       getDisplayName: () => "recorder",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
-      evaluateSignal: (pair, window, _market, price, at) => {
+      evaluateSignal: (pair, window, price, at) => {
         calls.push({ price, last: window[window.length - 1]! });
         return {
           pair,
@@ -702,7 +622,7 @@ describe("runBacktest", () => {
       getDisplayName: () => "wick-buy",
       getId: () => "bollinger",
       getRequiredCandles: () => ({ timeframe: "15m", count: 2 }),
-      evaluateSignal: (pair, window, _market, price, at) => {
+      evaluateSignal: (pair, window, price, at) => {
         const last = window[window.length - 1]!;
         const side: SignalSide =
           last.time === wickBar.time && price === last.low && last.low < last.open ? "BUY" : "HOLD";

@@ -16,7 +16,6 @@
     "positions": "tsx src/index.ts positions",
     "backtest": "tsx src/index.ts backtest",
     "tune": "tsx src/index.ts tune",
-    "regime": "tsx src/index.ts regime",
     "migrate": "dbmate --no-dump-schema --migrations-dir ./migrations up",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",

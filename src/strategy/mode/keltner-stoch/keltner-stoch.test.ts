@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { liquidityTierForPair, TIER_COSTS } from "../../../exchange/emulated/emulated-quote.js";
 import { createCandle } from "../../../market/candle.js";
-import type { Candle, MarketIndicators } from "../../../types.js";
+import type { Candle } from "../../../types.js";
 import {
   KeltnerStochStrategy,
   evaluateKeltnerStoch,
@@ -306,30 +306,23 @@ describe("KeltnerStochStrategy", () => {
     const candles = crashThroughLower().slice(0, 40);
     const last = candles[candles.length - 1]!;
     const at = new Date((last.time + 15 * 60) * 1000);
-    const signal = new KeltnerStochStrategy("flat", "low", loose()).evaluateSignal(
-      "SOL/USDC",
-      candles,
-      { pair: "SOL/USDC", price: 101, trend: "flat", volatility: "low" } satisfies MarketIndicators,
-      101,
-      at,
-      {
-        cashUsdc: 1000,
-        position: {
-          pair: "SOL/USDC",
-          side: "long",
-          size: 1,
-          entryPrice: 95,
-          strategyId: "keltner-stoch",
-          slPrice: 90,
-        },
-        realizedPnl: 0,
-        equity: 1000,
-        trades: [],
-        nativeSol: 0,
-        insufficientSol: 0,
-        simulated: true,
+    const signal = new KeltnerStochStrategy(loose()).evaluateSignal("SOL/USDC", candles, 101, at, {
+      cashUsdc: 1000,
+      position: {
+        pair: "SOL/USDC",
+        side: "long",
+        size: 1,
+        entryPrice: 95,
+        strategyId: "keltner-stoch",
+        slPrice: 90,
       },
-    );
+      realizedPnl: 0,
+      equity: 1000,
+      trades: [],
+      nativeSol: 0,
+      insufficientSol: 0,
+      simulated: true,
+    });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.equal(signal.strategyId, "keltner-stoch");
   });

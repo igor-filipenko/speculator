@@ -2,7 +2,6 @@ import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/can
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -12,8 +11,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { ema, macd } from "../../indicators.js";
 import { buildMacdCrossoverSvg } from "./svg.js";
@@ -38,7 +35,7 @@ export interface MacdCrossoverParams {
   direction: number;
 }
 
-/** 4h MACD histogram with the fast price average against the slow one. Both sides. */
+/** 4h MACD histogram with the fast price average against the slow one. Long only. */
 export function macdCrossoverParamsFor(): MacdCrossoverParams {
   return {
     timeframe: "4h",
@@ -223,11 +220,7 @@ export class MacdCrossoverStrategy implements Strategy {
   readonly axes = MACD_CROSSOVER_SEARCH_SPACE.axes;
   private readonly params: MacdCrossoverParams;
 
-  constructor(
-    _trend: Trend = "flat",
-    _volatility: Volatility = "low",
-    params?: MacdCrossoverParams,
-  ) {
+  constructor(params?: MacdCrossoverParams) {
     this.params = params ?? macdCrossoverParamsFor();
   }
 
@@ -269,7 +262,6 @@ export class MacdCrossoverStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    _market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -361,11 +353,7 @@ function fmt(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "macd-crossover",
-  create(trend, volatility, patch) {
-    return new MacdCrossoverStrategy(
-      trend,
-      volatility,
-      applySearchPatch(macdCrossoverParamsFor(), patch),
-    );
+  create(patch) {
+    return new MacdCrossoverStrategy(applySearchPatch(macdCrossoverParamsFor(), patch));
   },
 };

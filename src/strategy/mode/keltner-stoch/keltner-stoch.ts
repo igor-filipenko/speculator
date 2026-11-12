@@ -3,7 +3,6 @@ import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/can
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -14,8 +13,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { atr, dmi, keltner, stochastic } from "../../indicators.js";
 import { buildKeltnerStochSvg } from "./svg.js";
@@ -307,11 +304,7 @@ export class KeltnerStochStrategy implements Strategy {
   readonly axes = KELTNER_STOCH_SEARCH_SPACE.axes;
   private readonly params: KeltnerStochParams;
 
-  constructor(
-    _trend: Trend = "flat",
-    _volatility: Volatility = "low",
-    params?: KeltnerStochParams,
-  ) {
+  constructor(params?: KeltnerStochParams) {
     this.params = params ?? keltnerStochParamsFor();
   }
 
@@ -366,7 +359,6 @@ export class KeltnerStochStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    _market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -733,11 +725,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "keltner-stoch",
-  create(trend, volatility, patch) {
-    return new KeltnerStochStrategy(
-      trend,
-      volatility,
-      applySearchPatch(keltnerStochParamsFor(), patch),
-    );
+  create(patch) {
+    return new KeltnerStochStrategy(applySearchPatch(keltnerStochParamsFor(), patch));
   },
 };

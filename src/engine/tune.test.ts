@@ -26,7 +26,6 @@ const SOL_USDC_POOL = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
 function makeConfig(): AppConfig {
   return {
     strategy: "bollinger",
-    htf: "4h",
     jupiterApiKey: "",
     birdeyeApiKey: "",
     watchlist: ["SOL/USDC"],
@@ -423,7 +422,7 @@ describe("timeframe axis", () => {
   const hourly = Array.from({ length: 4 }, (_, i) => hour(i));
 
   it("keeps 1h and splits the ATR period from the band and ADX periods", () => {
-    const strategy = bollingerStrategy.create("flat", "low");
+    const strategy = bollingerStrategy.create();
     const defaults = defaultLevels(strategy, strategy.getSearchDefaults());
     assert.equal(defaults["timeframe"], undefined);
     assert.equal(defaults["trendFilter"], undefined);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createCandle } from "../../../market/candle.js";
-import type { Candle, MarketIndicators, PerpsFees } from "../../../types.js";
+import type { Candle, PerpsFees } from "../../../types.js";
 import {
   BollingerRsiStrategy,
   bollingerRsiParamsFor,
@@ -325,30 +325,23 @@ describe("BollingerRsiStrategy", () => {
     const candles = crashThroughLower().slice(0, 40);
     const last = candles[candles.length - 1]!;
     const at = new Date((last.time + 15 * 60) * 1000);
-    const signal = new BollingerRsiStrategy("flat", "low", loose()).evaluateSignal(
-      "SOL/USDC",
-      candles,
-      { pair: "SOL/USDC", price: 101, trend: "flat", volatility: "low" } satisfies MarketIndicators,
-      101,
-      at,
-      {
-        cashUsdc: 1000,
-        position: {
-          pair: "SOL/USDC",
-          side: "long",
-          size: 1,
-          entryPrice: 95,
-          strategyId: "bollinger-rsi",
-          slPrice: 90,
-        },
-        realizedPnl: 0,
-        equity: 1000,
-        trades: [],
-        nativeSol: 0,
-        insufficientSol: 0,
-        simulated: true,
+    const signal = new BollingerRsiStrategy(loose()).evaluateSignal("SOL/USDC", candles, 101, at, {
+      cashUsdc: 1000,
+      position: {
+        pair: "SOL/USDC",
+        side: "long",
+        size: 1,
+        entryPrice: 95,
+        strategyId: "bollinger-rsi",
+        slPrice: 90,
       },
-    );
+      realizedPnl: 0,
+      equity: 1000,
+      trades: [],
+      nativeSol: 0,
+      insufficientSol: 0,
+      simulated: true,
+    });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.equal(signal.strategyId, "bollinger-rsi");
   });

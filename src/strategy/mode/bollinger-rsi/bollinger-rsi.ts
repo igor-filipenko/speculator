@@ -4,7 +4,6 @@ import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/can
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -15,8 +14,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { atr, bollinger, dmi, rsi } from "../../indicators.js";
 import { buildBollingerSvg } from "../bollinger/index.js";
@@ -324,11 +321,7 @@ export class BollingerRsiStrategy implements Strategy {
   readonly axes = BOLLINGER_RSI_SEARCH_SPACE.axes;
   private readonly params: BollingerRsiParams;
 
-  constructor(
-    _trend: Trend = "flat",
-    _volatility: Volatility = "low",
-    params?: BollingerRsiParams,
-  ) {
+  constructor(params?: BollingerRsiParams) {
     this.params = params ?? bollingerRsiParamsFor();
   }
 
@@ -369,7 +362,6 @@ export class BollingerRsiStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    _market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -817,11 +809,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "bollinger-rsi",
-  create(trend, volatility, patch) {
-    return new BollingerRsiStrategy(
-      trend,
-      volatility,
-      applySearchPatch(bollingerRsiParamsFor(), patch),
-    );
+  create(patch) {
+    return new BollingerRsiStrategy(applySearchPatch(bollingerRsiParamsFor(), patch));
   },
 };

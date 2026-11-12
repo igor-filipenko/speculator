@@ -1,19 +1,8 @@
 import { Bot, type Context, InputFile } from "grammy";
 import { match } from "ts-pattern";
 import type { TelegramConfig } from "../config.js";
-import { renderMarketPng, renderOhlcvPng } from "../chart/render-png.js";
-import type {
-  HtfSnapshot,
-  MarketIndicators,
-  MtfSnapshot,
-  Portfolio,
-  PriceLevel,
-  ProgramState,
-  Risk,
-  Signal,
-  Trade,
-  Trend,
-} from "../types.js";
+import { renderOhlcvPng } from "../chart/render-png.js";
+import type { Portfolio, ProgramState, Risk, Signal, Trade } from "../types.js";
 
 /** Tagged payloads for outbound Telegram notifications. */
 type TelegramInfo =
@@ -23,7 +12,6 @@ type TelegramInfo =
   | { type: "risk"; risk: Risk }
   | { type: "trade"; trade: Trade }
   | { type: "protective"; trade: Trade }
-  | { type: "market"; market: MarketIndicators; previous?: Trend }
   | { type: "error"; pair?: string; message: string };
 
 const PARSE_MODE = "MarkdownV2" as const;
@@ -86,11 +74,6 @@ async function notifyTelegram(
       .with({ type: "risk" }, ({ risk }) => formatRiskMessage(risk))
       .with({ type: "trade" }, ({ trade }) => formatTradeMessage(trade))
       .with({ type: "protective" }, ({ trade }) => formatProtectiveMessage(trade))
-      .with({ type: "market" }, ({ market, previous }) =>
-        previous !== undefined
-          ? formatMarketMessage(market, previous)
-          : formatMarketMessage(market),
-      )
       .with({ type: "error" }, ({ pair, message }) => formatErrorMessage(pair, message))
       .exhaustive();
 
@@ -281,7 +264,6 @@ function formatStartMessage(): string {
     "*Commands*",
     `/start — ${escapeMd("this help")}`,
     `/report — ${escapeMd("last signal per pair")}`,
-    `/market — ${escapeMd("HTF trend chart (EMA200, ADX, S/R) plus 1h volatility")}`,
     `/chart — ${escapeMd("OHLCV candle chart (strategy overlays)")}`,
     `/portfolio — ${escapeMd("current portfolio")}`,
   ].join("\n");
@@ -305,174 +287,6 @@ function formatReportMessage(lastSignals: Map<string, Signal>): string {
 
   const blocks = [...lastSignals.values()].map(formatSignalMessage);
   return ["📊 *Report*", ...blocks].join("\n\n");
-}
-
-function signedPct(frac: number): string {
-  const pct = frac * 100;
-  const sign = pct > 0 ? "+" : "";
-  return `${sign}${pct.toFixed(2)}%`;
-}
-
-function pctOf(frac: number): string {
-  return `${(frac * 100).toFixed(2)}%`;
-}
-
-function formatLevelPrice(n: number): string {
-  if (n >= 1000) return n.toFixed(1);
-  if (n >= 1) return n.toFixed(2);
-  return n.toFixed(4);
-}
-
-export function formatMarketIndicatorsMessage(indicators: MarketIndicators): string {
-  const trendIcon = match(indicators.trend)
-    .with("bullish", () => "🐂")
-    .with("bearish", () => "🐻")
-    .with("flat", () => "↕️")
-    .with("unknown", () => "❔")
-    .exhaustive();
-
-  const htfTf = indicators.htf?.timeframe ?? "";
-  const last = indicators.htf?.candles[indicators.htf.candles.length - 1];
-  const atIso = last !== undefined ? new Date(last.time * 1000).toISOString() : undefined;
-  const lines = [
-    `${trendIcon} *${escapeMd(indicators.pair)}*`,
-    `Price ${code(indicators.price.toFixed(6))}`,
-    "",
-    `*HTF ${escapeMd(htfTf)}*  Trend ${code(indicators.trend)}`,
-    ...formatHtfIndicatorLines(indicators.htf),
-    "",
-    `*MTF 1h*  Volatility ${code(indicators.volatility)}`,
-    ...formatMtfIndicatorLines(indicators.mtf),
-  ];
-  if (atIso !== undefined) {
-    lines.push("", `_${escapeMd(atIso)}_`);
-  }
-  return lines.join("\n");
-}
-
-function formatHtfIndicatorLines(htf: HtfSnapshot | undefined): string[] {
-  if (htf === undefined) {
-    return [`_no HTF indicators_`];
-  }
-  const lines: string[] = [];
-  if (htf.ema200 != null) {
-    const dist = htf.distEma200Pct != null ? ` (${signedPct(htf.distEma200Pct)})` : "";
-    lines.push(`EMA200 ${code(htf.ema200.toFixed(4))}${escapeMd(dist)}`);
-  }
-  if (htf.ema50 != null) {
-    lines.push(`EMA50 ${code(htf.ema50.toFixed(4))}`);
-  }
-  if (htf.adx != null) {
-    lines.push(`ADX ${code(htf.adx.toFixed(2))}`);
-  }
-  if (htf.plusDi != null) {
-    lines.push(`${escapeMd("+DI")} ${code(htf.plusDi.toFixed(1))}`);
-  }
-  if (htf.minusDi != null) {
-    lines.push(`${escapeMd("-DI")} ${code(htf.minusDi.toFixed(1))}`);
-  }
-  if (htf.atr != null) {
-    const atrPct = htf.atrPct != null ? ` (${pctOf(htf.atrPct)})` : "";
-    lines.push(`ATR ${code(htf.atr.toFixed(4))}${escapeMd(atrPct)}`);
-  }
-  lines.push(...formatSupportResistanceLines(htf));
-  return lines.length > 0 ? lines : [`_no HTF indicators_`];
-}
-
-function formatMtfIndicatorLines(mtf: MtfSnapshot | undefined): string[] {
-  if (mtf === undefined) {
-    return [`_no MTF indicators_`];
-  }
-  const lines: string[] = [];
-  if (mtf.atr != null) {
-    const atrPct = mtf.atrPct != null ? ` (${pctOf(mtf.atrPct)})` : "";
-    lines.push(`ATR ${code(mtf.atr.toFixed(4))}${escapeMd(atrPct)}`);
-  } else if (mtf.atrPct != null) {
-    lines.push(`ATR% ${code(pctOf(mtf.atrPct))}`);
-  }
-  if (mtf.bbLower != null && mtf.bbMid != null && mtf.bbUpper != null) {
-    lines.push(
-      `BB ${code(formatLevelPrice(mtf.bbLower))} / ${code(formatLevelPrice(mtf.bbMid))} / ${code(formatLevelPrice(mtf.bbUpper))}`,
-    );
-  } else {
-    if (mtf.bbLower != null) {
-      lines.push(`BB lower ${code(formatLevelPrice(mtf.bbLower))}`);
-    }
-    if (mtf.bbMid != null) {
-      lines.push(`BB mid ${code(formatLevelPrice(mtf.bbMid))}`);
-    }
-    if (mtf.bbUpper != null) {
-      lines.push(`BB upper ${code(formatLevelPrice(mtf.bbUpper))}`);
-    }
-  }
-  if (mtf.kcLower != null && mtf.kcMid != null && mtf.kcUpper != null) {
-    lines.push(
-      `KC ${code(formatLevelPrice(mtf.kcLower))} / ${code(formatLevelPrice(mtf.kcMid))} / ${code(formatLevelPrice(mtf.kcUpper))}`,
-    );
-  } else {
-    if (mtf.kcLower != null) {
-      lines.push(`KC lower ${code(formatLevelPrice(mtf.kcLower))}`);
-    }
-    if (mtf.kcMid != null) {
-      lines.push(`KC mid ${code(formatLevelPrice(mtf.kcMid))}`);
-    }
-    if (mtf.kcUpper != null) {
-      lines.push(`KC upper ${code(formatLevelPrice(mtf.kcUpper))}`);
-    }
-  }
-  lines.push(...formatSupportResistanceLines(mtf));
-  return lines.length > 0 ? lines : [`_no MTF indicators_`];
-}
-
-function formatSupportResistanceLines(snapshot: {
-  levels?: PriceLevel[];
-  support?: number;
-  resistance?: number;
-}): string[] {
-  const lines: string[] = [];
-  const supports = (snapshot.levels ?? [])
-    .filter((l) => l.kind === "support")
-    .map((l) => code(formatLevelPrice(l.price)));
-  const resistances = (snapshot.levels ?? [])
-    .filter((l) => l.kind === "resistance")
-    .map((l) => code(formatLevelPrice(l.price)));
-  if (supports.length > 0) {
-    lines.push(`Support ${supports.join(" · ")}`);
-  } else if (snapshot.support != null) {
-    lines.push(`Support ${code(formatLevelPrice(snapshot.support))}`);
-  }
-  if (resistances.length > 0) {
-    lines.push(`Resistance ${resistances.join(" · ")}`);
-  } else if (snapshot.resistance != null) {
-    lines.push(`Resistance ${code(formatLevelPrice(snapshot.resistance))}`);
-  }
-  return lines;
-}
-
-export function formatMarketMessage(indicators: MarketIndicators, previous?: Trend): string {
-  const change =
-    previous !== undefined
-      ? `${escapeMd(previous)} → ${escapeMd(indicators.trend)}`
-      : escapeMd(indicators.trend);
-  return [
-    `🔄 *${escapeMd(indicators.pair)}*  *MARKET*`,
-    change,
-    "",
-    formatMarketIndicatorsMessage(indicators),
-  ].join("\n");
-}
-
-export function formatMarketIndicatorsListMessage(
-  lastMarketIndicators: Map<string, MarketIndicators>,
-): string {
-  if (lastMarketIndicators.size === 0) {
-    return ["📡 *Market*", "", `_No market indicators yet\\. Wait for the next poll tick\\._`].join(
-      "\n",
-    );
-  }
-
-  const blocks = [...lastMarketIndicators.values()].map(formatMarketIndicatorsMessage);
-  return ["📡 *Market*", ...blocks].join("\n\n");
 }
 
 export function formatErrorMessage(pair: string | undefined, message: string): string {
@@ -525,7 +339,7 @@ function formatChartCaption(pair: string, signal: Signal | undefined): string {
 }
 
 /**
- * Register /start, /report, /market, /chart, /portfolio and begin long polling.
+ * Register /start, /report, /chart, /portfolio and begin long polling.
  * Only the configured chatId is answered. Returns a stop function for shutdown.
  */
 function startTelegramCommands(
@@ -576,20 +390,6 @@ function startTelegramCommands(
     }
   });
 
-  instance.command("market", async (ctx) => {
-    try {
-      await sendMarketCharts(ctx, state.lastMarketIndicators);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`Telegram /market failed: ${message}`);
-      try {
-        await replyMd(ctx, escapeMd("Failed to fetch market indicators."));
-      } catch {
-        /* ignore secondary reply failure */
-      }
-    }
-  });
-
   instance.command("chart", async (ctx) => {
     try {
       await sendCharts(ctx, state);
@@ -629,51 +429,6 @@ function startTelegramCommands(
     await instance.stop();
     commandsStarted = false;
   };
-}
-
-/** Send one HTF MarketIndicators chart photo per pair. */
-async function sendMarketCharts(
-  ctx: Context,
-  lastMarketIndicators: Map<string, MarketIndicators>,
-): Promise<void> {
-  if (lastMarketIndicators.size === 0) {
-    await replyMd(ctx, formatMarketIndicatorsListMessage(lastMarketIndicators));
-    return;
-  }
-
-  let sent = 0;
-  for (const [pair, market] of lastMarketIndicators) {
-    if ((market.htf?.candles.length ?? 0) === 0) {
-      try {
-        await replyMd(ctx, formatMarketIndicatorsMessage(market));
-        sent += 1;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`Telegram /market text failed for ${pair}: ${message}`);
-      }
-      continue;
-    }
-    try {
-      const png = renderMarketPng(market);
-      await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-market.png`), {
-        caption: formatMarketIndicatorsMessage(market),
-        parse_mode: PARSE_MODE,
-      });
-      sent += 1;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`Telegram /market failed for ${pair}: ${message}`);
-      try {
-        await replyMd(ctx, `Market chart failed for ${code(pair)}\\.`);
-      } catch {
-        /* ignore secondary reply failure */
-      }
-    }
-  }
-
-  if (sent === 0) {
-    await replyMd(ctx, formatMarketIndicatorsListMessage(lastMarketIndicators));
-  }
 }
 
 /** Send one OHLCV chart photo per pair that has cached candles. */

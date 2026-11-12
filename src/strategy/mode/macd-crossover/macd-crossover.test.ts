@@ -144,10 +144,11 @@ describe("evaluateMacdCrossover", () => {
 
   it("sells a downtrend with a negative histogram when perps fees are known", () => {
     const candles = bars(reversal());
-    const blocked = evalAt(candles, macdCrossoverParamsFor());
+    const both = { ...macdCrossoverParamsFor(), direction: 0 };
+    const blocked = evalAt(candles, both);
     assert.equal(blocked.side, "HOLD", blocked.reason);
     assert.match(blocked.reason, /perps fee schedule missing/);
-    const signal = evalAt(candles, macdCrossoverParamsFor(), { perpsFees });
+    const signal = evalAt(candles, both, { perpsFees });
     assert.equal(signal.side, "SELL", signal.reason);
     assert.match(signal.reason, /downtrend/);
     assert.ok((signal.meta?.macdHist ?? 0) < 0);
@@ -270,7 +271,7 @@ describe("MacdCrossoverStrategy", () => {
     assert.equal(strategyModule.id, strategy.getId());
     assert.equal(
       strategy.getDisplayName(),
-      `macd-crossover (${params.timeframe} MACD ${params.fastPeriod}/${params.slowPeriod}/${params.signalPeriod} EMA${params.pricePeriod}/${params.trendPeriod} both)`,
+      `macd-crossover (${params.timeframe} MACD ${params.fastPeriod}/${params.slowPeriod}/${params.signalPeriod} EMA${params.pricePeriod}/${params.trendPeriod} long)`,
     );
     assert.equal(strategy.getRequiredCandles().timeframe, "4h");
     assert.equal(strategy.getRequiredCandles().count, params.trendPeriod * 3 + 1);
@@ -287,13 +288,12 @@ describe("MacdCrossoverStrategy", () => {
   });
 
   it("passes perps fees through to a new short", () => {
-    const strategy = new MacdCrossoverStrategy();
+    const strategy = new MacdCrossoverStrategy({ ...macdCrossoverParamsFor(), direction: 0 });
     const candles = bars(reversal());
     const last = candles[candles.length - 1]!;
     const signal = strategy.evaluateSignal(
       "SOL/USDC",
       candles,
-      { pair: "SOL/USDC", price: last.close, trend: "bearish", volatility: "high" },
       last.close,
       new Date((last.time + last.intervalSeconds) * 1000),
       undefined,

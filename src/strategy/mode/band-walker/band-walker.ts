@@ -2,7 +2,6 @@ import { candleIntervalSeconds, timeframeFromMinutes } from "../../../market/can
 import { applySearchPatch } from "../../../types.js";
 import type {
   Candle,
-  MarketIndicators,
   PerpsFees,
   PortfolioSnapshot,
   RequiredCandles,
@@ -13,8 +12,6 @@ import type {
   StrategyModule,
   StrategyParamPatch,
   Timeframe,
-  Trend,
-  Volatility,
 } from "../../../types.js";
 import { atr, bollinger, dmi } from "../../indicators.js";
 import { buildBollingerSvg } from "../bollinger/index.js";
@@ -52,7 +49,7 @@ export interface BandWalkerParams {
   trailLockEntry: boolean;
 }
 
-/** Signal-side params. Trend and 1h volatility do not change this set. */
+/** Signal-side params. */
 export function bandWalkerParamsFor(): BandWalkerParams {
   return {
     timeframe: "1h",
@@ -148,10 +145,6 @@ export interface BandWalkerInput {
    * Missing rates block a new short. A cover does not need them.
    */
   perpsFees?: PerpsFees;
-  /** HTF trend. Recorded by the caller; it does not gate this strategy. */
-  trend: Trend;
-  /** 1h volatility. Recorded by the caller; it does not gate this strategy. */
-  volatility: Volatility;
 }
 
 /**
@@ -304,7 +297,7 @@ export class BandWalkerStrategy implements Strategy {
   readonly axes = BAND_WALKER_SEARCH_SPACE.axes;
   private readonly params: BandWalkerParams;
 
-  constructor(_trend: Trend = "flat", _volatility: Volatility = "low", params?: BandWalkerParams) {
+  constructor(params?: BandWalkerParams) {
     this.params = params ?? bandWalkerParamsFor();
   }
 
@@ -338,7 +331,6 @@ export class BandWalkerStrategy implements Strategy {
   evaluateSignal(
     pair: string,
     candles: Candle[],
-    market: MarketIndicators,
     price: number,
     at: Date,
     portfolio?: PortfolioSnapshot,
@@ -355,8 +347,6 @@ export class BandWalkerStrategy implements Strategy {
       strategy: this.params,
       price,
       at,
-      trend: market.trend,
-      volatility: market.volatility,
       ...(perpsFees !== undefined ? { perpsFees } : {}),
       ...(positioned?.side === "long" || positioned?.side === "short"
         ? {
@@ -604,11 +594,7 @@ function searchDefaults(params: BandWalkerParams): Record<string, number> {
 
 export const strategyModule: StrategyModule = {
   id: "band-walker",
-  create(trend, volatility, patch) {
-    return new BandWalkerStrategy(
-      trend,
-      volatility,
-      applySearchPatch(bandWalkerParamsFor(), patch),
-    );
+  create(patch) {
+    return new BandWalkerStrategy(applySearchPatch(bandWalkerParamsFor(), patch));
   },
 };

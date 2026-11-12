@@ -10,7 +10,6 @@ import {
   isOrder,
   type Candle,
   type Market,
-  type MarketIndicators,
   type Order,
   type PairConfig,
   type Strategy,
@@ -18,7 +17,6 @@ import {
   type Trade,
 } from "../types.js";
 import { intraBarTicks, minuteQuoteTicks } from "../backtest/intra-bar.js";
-import { loadHtfCandles, loadMtfCandles, syncMarketIndicators } from "../backtest/market-replay.js";
 import { parseReplayDate, readFlagValue, resolveReplayWindow } from "../backtest/replay-window.js";
 
 export { parseReplayDate as parseBacktestDate, resolveReplayWindow as resolveBacktestWindow };
@@ -203,10 +201,6 @@ export interface RunWalkForwardOptions {
   walkForwardFolds: number;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
-  /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
-  htfCandles?: Candle[];
-  /** Inject 1h candles for volatility; skips 1h fetch when set. */
-  mtfCandles?: Candle[];
   /** When `1m`, replay quotes are minute closes. Default is the synthetic OHLC path. */
   quotes?: "1m";
   /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
@@ -222,10 +216,6 @@ export interface RunBacktestOptions {
   toTime?: number;
   /** Inject signal-timeframe candles (skips network/cache; tests). */
   candles?: Candle[];
-  /** Inject HTF candles for {@link StrategyManager}; skips HTF fetch when set. */
-  htfCandles?: Candle[];
-  /** Inject 1h candles for volatility; skips 1h fetch when set. */
-  mtfCandles?: Candle[];
   /** When `1m`, replay quotes are minute closes. Default is the synthetic OHLC path. */
   quotes?: "1m";
   /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
@@ -244,8 +234,7 @@ export interface RunBacktestOptions {
  * sees the same incomplete last bar as live. The default path is fixed from the
  * position at the bar open: long visits the high last, short visits the low last,
  * flat follows candle color. `quotes: "1m"` steps each bar on real minute closes
- * instead. HTF and 1h candles are loaded once per pair; market state is evaluated
- * as those bars close.
+ * instead.
  */
 export async function runBacktest(options: RunBacktestOptions): Promise<BacktestResult[]> {
   if (options.quotes === "1m" && options.monteCarloRuns != null && options.monteCarloRuns > 0) {
@@ -275,26 +264,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       );
     }
 
-    const skipNetwork = options.candles !== undefined;
-    const htfCandles = await loadHtfCandles({
-      pair,
-      market,
-      strategyManager,
-      fromTime,
-      toTime,
-      injected: options.htfCandles,
-      skipFetch: skipNetwork && options.htfCandles === undefined,
-    });
-    const mtfCandles = await loadMtfCandles({
-      pair,
-      market,
-      strategyManager,
-      fromTime,
-      toTime,
-      injected: options.mtfCandles,
-      skipFetch: skipNetwork && options.mtfCandles === undefined,
-    });
-
     const minuteCandles = await loadMinuteQuotes({
       quotes: options.quotes,
       injected: options.minuteCandles,
@@ -307,8 +276,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       pair,
       strategyManager,
       candles,
-      htfCandles,
-      mtfCandles,
       startingCashUsdc: options.config.paperCashUsdc,
       fromTime: candles[0]!.time,
       toTime: candles[candles.length - 1]!.time + 1,
@@ -334,10 +301,6 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
  * Walk-forward validation: split the replay window into `options.walkForwardFolds`
  * sequential folds and run an independent backtest on each fold with the same fixed
  * strategy parameters.  Returns one {@link WalkForwardResult} per pair.
- *
- * HTF/MTF candles spanning the full window are shared across all folds so that
- * indicator state from earlier folds primes later ones — matching live behaviour
- * where indicators are computed from all available history.
  */
 export async function runWalkForward(options: RunWalkForwardOptions): Promise<WalkForwardResult[]> {
   const { strategyManager } = options;
@@ -365,31 +328,6 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
       );
     }
 
-    // Load HTF/MTF with warmup spanning the full window.  Each fold's replayPair
-    // call receives the same arrays; syncMarketIndicators advances by atTime, so
-    // HTF/MTF history from earlier folds naturally primes later ones.
-    const fullFrom = allCandles[0]!.time;
-    const fullTo = allCandles[allCandles.length - 1]!.time + 1;
-    const skipNetwork = options.candles !== undefined;
-    const htfCandles = await loadHtfCandles({
-      pair,
-      market,
-      strategyManager,
-      fromTime: fullFrom,
-      toTime: fullTo,
-      injected: options.htfCandles,
-      skipFetch: skipNetwork && options.htfCandles === undefined,
-    });
-    const mtfCandles = await loadMtfCandles({
-      pair,
-      market,
-      strategyManager,
-      fromTime: fullFrom,
-      toTime: fullTo,
-      injected: options.mtfCandles,
-      skipFetch: skipNetwork && options.mtfCandles === undefined,
-    });
-
     const minuteCandles = await loadMinuteQuotes({
       quotes: options.quotes,
       injected: options.minuteCandles,
@@ -415,8 +353,6 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
         pair,
         strategyManager,
         candles: fc,
-        htfCandles,
-        mtfCandles,
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: foldFrom,
         toTime: foldTo,
@@ -459,8 +395,8 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
     results.push({
       pair: pair.symbol,
       strategy,
-      fromTime: fullFrom,
-      toTime: fullTo,
+      fromTime: allCandles[0]!.time,
+      toTime: allCandles[allCandles.length - 1]!.time + 1,
       folds: foldResults,
       oosReturnPct,
       oosVsHoldPct,
@@ -547,8 +483,6 @@ async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
   candles: Candle[];
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
@@ -563,7 +497,7 @@ async function replayPair(args: {
   if (args.minuteCandles !== undefined && args.rng !== undefined) {
     throw new Error("--quotes 1m and --monte-carlo cannot be combined");
   }
-  const { pair, strategyManager, candles, htfCandles, mtfCandles, startingCashUsdc } = args;
+  const { pair, strategyManager, candles, startingCashUsdc } = args;
   const portfolio = new PaperPortfolio(pair.symbol, startingCashUsdc);
   const exchange = new EmulatedExchange();
   const costs: BacktestCostTotals = {
@@ -581,9 +515,6 @@ async function replayPair(args: {
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
-  let htfEnd = 0;
-  let mtfEnd = 0;
-  let lastMarket: MarketIndicators | undefined;
   // `minuteCandles` is time-sorted. The cursor walks it once per replay.
   const minuteCursor = { index: 0 };
 
@@ -607,34 +538,12 @@ async function replayPair(args: {
       const price = tick.price;
       exchange.setMidPrice(price);
 
-      const synced = await syncMarketIndicators({
-        pair: pair.symbol,
-        strategyManager,
-        htfCandles,
-        mtfCandles,
-        atTime: tick.atSec,
-        price,
-        htfEnd,
-        mtfEnd,
-        lastMarket,
-      });
-      htfEnd = synced.htfEnd;
-      mtfEnd = synced.mtfEnd;
-      lastMarket = synced.lastMarket;
-
       const strategy = strategyManager.getActiveStrategy();
       const riskManager = strategyManager.getActiveRiskManager();
 
-      const market = lastMarket ?? {
-        pair: pair.symbol,
-        price,
-        trend: "unknown" as const,
-        volatility: "unknown" as const,
-      };
       const signal = strategy.evaluateSignal(
         pair.symbol,
         window,
-        market,
         price,
         new Date(tick.atSec * 1000),
         portfolio.getSnapshot(price),
@@ -899,8 +808,6 @@ async function runMonteCarloForPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
   candles: Candle[];
-  htfCandles: Candle[];
-  mtfCandles: Candle[];
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;

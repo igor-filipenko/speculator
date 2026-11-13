@@ -2,10 +2,8 @@ import { Connection } from "@solana/web3.js";
 import { assertTradeConfig, isPublicSolanaRpc, type AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
 import { candleIntervalSeconds, isCandleFirstMinute } from "../market/candle.js";
-import { refreshMarketIndicators } from "../market/htf-indicators.js";
 import { createMarket } from "../market/manager.js";
 import {
-  logMarket,
   logPerpsFees,
   logPositionData,
   logRisk,
@@ -23,7 +21,6 @@ import {
   type Candle,
   type Exchange,
   type Market,
-  type MarketIndicators,
   type PairConfig,
   type Portfolio,
   type PositionSource,
@@ -120,10 +117,9 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
-  const lastMarketIndicators = options.state.lastMarketIndicators;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting ${modeLabel} mode | strategy=${strategy.getDisplayName()} | htf=${config.htf} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const startMsg = `Starting ${modeLabel} mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });
@@ -143,7 +139,6 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
           portfolios,
           lastSignals,
           lastCandles,
-          lastMarketIndicators,
           telegram,
         });
         nextDelay = nextDelay.min(requiredNextDelay);
@@ -182,7 +177,6 @@ async function processPair(args: {
   portfolios: Map<string, Portfolio>;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
-  lastMarketIndicators: Map<string, MarketIndicators>;
   telegram: Telegram;
 }): Promise<Delay> {
   const {
@@ -193,7 +187,6 @@ async function processPair(args: {
     portfolios,
     lastSignals,
     lastCandles,
-    lastMarketIndicators,
     telegram,
   } = args;
 
@@ -201,39 +194,6 @@ async function processPair(args: {
   const nowSec = Math.floor(Date.now() / 1000);
   const nowMinute = Math.floor(nowSec / 60);
   const tryUseCache = nowMinute % 2 === 1;
-
-  try {
-    const previous = lastMarketIndicators.get(pair.symbol);
-    const indicators = await refreshMarketIndicators({
-      pair,
-      market,
-      required: strategyManager.getRequiredHtfCandles(),
-      mtfRequired: strategyManager.getRequiredMtfCandles(),
-      price,
-      at: new Date(nowSec * 1000),
-      ...(tryUseCache ? { tryUseCache } : {}),
-    });
-    logMarket(indicators);
-    const marketChanged =
-      previous !== undefined
-        ? await strategyManager.applyMarketIndicators(indicators, previous)
-        : await strategyManager.applyMarketIndicators(indicators);
-    lastMarketIndicators.set(pair.symbol, indicators);
-    if (marketChanged) {
-      console.log(
-        `[${pair.symbol}] market changed trend=${previous?.trend}→${indicators.trend}` +
-          ` vol=${previous?.volatility}→${indicators.volatility}`,
-      );
-      await telegram.notify({
-        type: "market",
-        market: indicators,
-        ...(previous !== undefined ? { previous: previous.trend } : {}),
-      });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[${pair.symbol}] market indicators failed: ${message}`);
-  }
 
   const strategy = strategyManager.getActiveStrategy();
   const riskManager = strategyManager.getActiveRiskManager();
@@ -257,12 +217,6 @@ async function processPair(args: {
     await portfolio.syncFromChain(price);
   }
 
-  const indicators = lastMarketIndicators.get(pair.symbol) ?? {
-    pair: pair.symbol,
-    price,
-    trend: "unknown" as const,
-    volatility: "unknown" as const,
-  };
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   logPerpsFees(pair.symbol, perpsFees);
   // Wall clock, not candle open: otherwise a just-closed bar (next candle not
@@ -270,7 +224,6 @@ async function processPair(args: {
   const signal = strategy.evaluateSignal(
     pair.symbol,
     candles,
-    indicators,
     price,
     new Date(),
     portfolio?.getSnapshot(price),

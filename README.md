@@ -34,7 +34,6 @@ Edit `.env`:
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `STRATEGY`                            | `strategy.registry` id. Implementation is `src/strategy/mode/<id>/index.ts`           |
-| `HTF`                                 | Higher-timeframe for trend / S/R: `4h` (default) or `1d`. Volatility is always 1h.    |
 | `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default), `binance`, or `birdeye`                     |
 | `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool               |
 | `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
@@ -72,13 +71,12 @@ Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade
 
 Set both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable Telegram via [grammY](https://grammy.dev/). You get outbound alerts for **BUY/SELL** signals and paper fills (**HOLD** stays console/Timescale only), plus inbound commands from the configured chat:
 
-| Command      | Reply                                                    |
-| ------------ | -------------------------------------------------------- |
-| `/start`     | Greeting and command list                                |
-| `/report`    | Last signal per pair (including HOLD)                    |
-| `/market`    | HTF trend chart (EMA50/200, ADX, S/R) plus 1h volatility |
-| `/chart`     | OHLCV candle chart with strategy overlays                |
-| `/portfolio` | Current paper or live portfolio                          |
+| Command      | Reply                                     |
+| ------------ | ----------------------------------------- |
+| `/start`     | Greeting and command list                 |
+| `/report`    | Last signal per pair (including HOLD)     |
+| `/chart`     | OHLCV candle chart with strategy overlays |
+| `/portfolio` | Current paper or live portfolio           |
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Message your bot once, then get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)).
@@ -156,7 +154,7 @@ Live trading (on-chain Jupiter swaps; spends real tokens):
 pnpm trade
 ```
 
-Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. When the position is flat and native SOL is below `SOL_RESERVE_MIN`, the bot buys SOL up to `SOL_RESERVE_MAX`. Other swaps abort below the minimum so the wallet can still pay fees. For `SOL/USDC`, only SOL above `SOL_RESERVE_MAX` is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.portfolios` / `bot.trades` (`mode=live`) with the transaction signature. A SOL reserve top-up is not stored as a strategy trade.
+Requires `WALLET_KEYPAIR_PATH` pointing at a Solana CLI JSON keypair **outside this repo**. When the position is flat and native SOL is below `SOL_RESERVE_MIN`, the bot buys SOL up to `SOL_RESERVE_MAX`. Other swaps abort below the minimum so the wallet can still pay fees. For `SOL/USDC`, only SOL above `SOL_RESERVE_MAX` is treated as a tradable long. Fills are labeled **LIVE** (not simulated) and stored in `bot.virtual_accounts`, `bot.positions`, and `bot.trades` (`mode=live`) with the transaction signature. A SOL reserve top-up is not stored as a strategy trade.
 
 Print on-chain live portfolio (sync + snapshot, no swaps). Each pair includes native SOL. When native SOL is below `SOL_RESERVE_MIN`, the report warns with the shortfall up to `SOL_RESERVE_MAX`.
 
@@ -236,16 +234,6 @@ pnpm tune -- --from 01-01-2026 --to 01-10-2026 --max-trials 48
 
 Tune searches the numeric axes exported by the active strategy. The default replay uses the synthetic OHLC path. `--quotes 1m` uses the same minute-close fills as backtest.
 
-Offline **regime** replay (same HTF 4h/1d + 1h close cadence as backtest, no fills). Prints every trend/volatility switch, which strategy/risk params would activate, time-in-regime, and a CLI candlestick chart with regime bands:
-
-```bash
-pnpm regime
-pnpm regime -- --days 14
-pnpm regime -- --from 01-01-2026 --to 01-08-2026
-```
-
-Regime accepts `--days` / `--from` / `--to`. Strategy comes from env `STRATEGY`. Candles come from `CANDLE_SOURCE`.
-
 Single iteration (smoke test):
 
 ```bash
@@ -254,7 +242,7 @@ pnpm exec tsx src/index.ts paper --once
 pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in `market.signals`. Paper mode persists cash, position, P&L, and trades in `bot.portfolios` / `bot.trades` (`mode=paper`, scoped by `BOT_ID`; restored on restart). Live mode uses the same tables with `mode=live` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete that bot's paper rows. Mint/decimals come from `solana.tokens`; Gecko pool addresses from `solana.pools` (seeded with SOL/USDC on `pnpm migrate`). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/market`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in `market.signals`. Paper mode persists cash, position, P&L, and trades in `bot.virtual_accounts`, `bot.positions`, and `bot.trades` (`mode=paper`, scoped by `BOT_ID`; restored on restart). Live mode uses the same tables with `mode=live` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete that bot's paper rows. Mint/decimals come from `solana.tokens`; Gecko pool addresses from `solana.pools` (seeded with SOL/USDC on `pnpm migrate`). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
 
 ## TimescaleDB
 
@@ -329,7 +317,7 @@ journalctl -u bot -f
 journalctl -u miniapp -f
 journalctl -u bot --since "1 hour ago"
 
-psql "$DATABASE_URL" -c "SELECT pair, cash_usdc, position_side FROM bot.portfolios WHERE mode = 'paper';"
+psql "$DATABASE_URL" -c "SELECT i.pair, a.cash_usdc, COALESCE(p.side, 'flat') AS position_side FROM bot.virtual_accounts a JOIN strategy.instances i ON i.id = a.strategy_id LEFT JOIN bot.positions p ON p.strategy_id = a.strategy_id AND p.bot_id = a.bot_id AND p.mode = a.mode WHERE a.mode = 'paper';"
 psql "$DATABASE_URL" -c "SELECT symbol, mint, decimals FROM solana.tokens;"
 psql "$DATABASE_URL" -c "SELECT address, base_mint, quote_mint FROM solana.pools;"
 psql "$DATABASE_URL" -c "SELECT at, pair, side, price FROM market.signals ORDER BY at DESC LIMIT 20;"
@@ -350,7 +338,7 @@ One position per pair: `long`, `short`, or `flat`.
 
 The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
-`SimpleStrategyManager` computes **MarketIndicators** from two timeframes. **HTF** candles (`HTF`, default 4h) supply 200-EMA, 50-EMA, ADX, +DI/−DI, ATR, clustered swing **support/resistance** (volume-weighted, within ~8 ATR of price), and **global trend**: `bullish` when ADX ≥ 20, +DI > −DI, and `close > EMA50 > EMA200`; `bearish` is the mirror; mixed stack or weak ADX is `flat`; missing EMA warmup is `unknown`. A new trend is published only after **2 consecutive HTF closes** agree (one-bar ADX/stack blips stay on the previous trend; the first label after `unknown` is immediate). **1h** candles supply **volatility**: TTM-style squeeze when Bollinger(20, 2) sits inside Keltner(20, 1.5×ATR); otherwise `high` if ATR% is above the **80th** percentile of the last 100 ATR% values (stays high until ATR% falls to the **60th** or below); else `low` (`unknown` until warm). A new vol label is published only after **2 consecutive 1h closes** agree. HTF and 1h OHLCV are loaded via the Timescale candle cache on each poll; indicators are recomputed every tick. Telegram `/market` shows the HTF candle chart (EMA50/200, S/R, ADX) and lists trend, 1h volatility, and key levels in the caption. The risk manager is `GenericRiskManager` in every regime (hard stop and max deposit). Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file. A Telegram message is sent when the trend or volatility changes.
+`SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. The risk manager is `GenericRiskManager` (hard stop and max deposit). Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 
@@ -376,22 +364,18 @@ src/
   market/birdeye/          # BirdeyeMarket pair OHLCV; public entry index.ts
   market/cached/           # CachedMarket (Timescale gap fill); public entry index.ts
   market/manager.ts        # createMarket(CandleSource)
-  market/htf.ts            # HTF EMA stack + DMI trend + S/R; 1h squeeze/high/low vol
-  market/htf-indicators.ts # HTF + 1h MarketIndicators refresh (OHLCV cache)
-  market/levels.ts         # swing-pivot S/R clusters
   exchange/jupiter/        # spot long (Swap API V2) + perps short
   exchange/emulated/       # backtest fill model + EmulatedExchange
   risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/           # one <id>/ package per strategy (index.ts exports strategyModule)
-  strategy/strategy-manager.ts # discovers mode/<id>/index; HTF trend / 1h vol; getActiveStrategy/RiskManager
-  strategy/market-state-svg.ts # HTF candles + EMA50/200 + S/R + ADX for /market
+  strategy/strategy-manager.ts # discovers mode/<id>/index; loads id + optional param patch
   chart/render-png.ts      # SVG → PNG (@resvg/resvg-js)
   portfolio/paper/         # simulated cash book + Timescale mode=paper
   portfolio/live/          # on-chain cash/size + ledger
   portfolio/wallet/        # JSON keypair + RPC balances
   notify/console.ts
-  notify/telegram.ts       # optional grammY alerts + /start /report /market /chart /portfolio
+  notify/telegram.ts       # optional grammY alerts + /start /report /chart /portfolio
   engine/tick.ts           # shared paper/trade poll loop
   engine/watch.ts
   engine/paper.ts

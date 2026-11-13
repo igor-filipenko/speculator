@@ -42,11 +42,11 @@ describe("migrations", () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'market' AND c.relname = 'candles' AND a.attname = 'timeframe'
       UNION ALL
-      SELECT 'portfolios.mode', format_type(a.atttypid, a.atttypmod)
+      SELECT 'virtual_accounts.mode', format_type(a.atttypid, a.atttypmod)
       FROM pg_attribute a
       JOIN pg_class c ON c.oid = a.attrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'bot' AND c.relname = 'portfolios' AND a.attname = 'mode'
+      WHERE n.nspname = 'bot' AND c.relname = 'virtual_accounts' AND a.attname = 'mode'
       UNION ALL
       SELECT 'trades.mode', format_type(a.atttypid, a.atttypmod)
       FROM pg_attribute a
@@ -57,7 +57,7 @@ describe("migrations", () => {
     );
     const byCol = new Map(rows.map((r) => [r.col, r.typ]));
     assert.equal(byCol.get("candles.timeframe"), "market.timeframe");
-    assert.equal(byCol.get("portfolios.mode"), "bot.mode");
+    assert.equal(byCol.get("virtual_accounts.mode"), "bot.mode");
     assert.equal(byCol.get("trades.mode"), "bot.mode");
 
     const labels = await query<{ label: string }>(

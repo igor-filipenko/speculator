@@ -45,7 +45,7 @@ export interface PersistablePortfolio {
 }
 
 /**
- * Load paper state from `bot.portfolios` / `bot.trades` (mode=paper).
+ * Load paper state from `bot.virtual_accounts` / `bot.positions` / `bot.trades` (mode=paper).
  * Empty tables → null.
  */
 export async function loadPaperState(): Promise<PersistedPaperState | null> {

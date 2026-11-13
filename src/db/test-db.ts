@@ -4,6 +4,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { resolveBinary } from "dbmate";
 import { query, resetSpeculatorDbCache, setBotId } from "./db.js";
 import { migrationsDir } from "./migrate.js";
+import { listImplementedStrategyIds } from "../strategy/strategy-manager.js";
 
 export const TIMESCALEDB_IMAGE = "timescale/timescaledb:2.29.2-pg18";
 
@@ -48,7 +49,7 @@ async function startContainer(): Promise<StartedPostgreSqlContainer> {
   try {
     return await new PostgreSqlContainer(TIMESCALEDB_IMAGE)
       .withDatabase("speculator")
-      .withEnvironment({ SPECULATOR_SCHEMA: "dbmate-22-timeframe-1m" })
+      .withEnvironment({ SPECULATOR_SCHEMA: "dbmate-25-virtual-accounts-1" })
       .withReuse()
       .start();
   } catch (err) {
@@ -73,10 +74,28 @@ export async function useTestDb(botId = `test-${randomUUID()}`): Promise<string>
   process.env["BOT_ID"] = botId;
   setBotId(botId);
   await runMigrations(url);
+  await seedImplementedStrategies();
   await truncateBotAndMarket();
   return botId;
 }
 
+/** Migrations seed bollinger and donchian. Tests also load every module on disk. */
+async function seedImplementedStrategies(): Promise<void> {
+  const ids = await listImplementedStrategyIds();
+  for (const id of ids) {
+    await query(
+      `
+      INSERT INTO strategy.registry (id, name, type)
+      VALUES ($1, $1, 'mean-reversion')
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [id],
+    );
+  }
+}
+
 export async function truncateBotAndMarket(): Promise<void> {
-  await query(`TRUNCATE market.candles, market.signals, bot.positions, bot.portfolios, bot.trades`);
+  await query(
+    `TRUNCATE market.candles, market.signals, bot.trades, bot.positions, exchange.positions, bot.virtual_accounts, bot.wallets, bot.exchange_accounts, bot.accounts, bot.strategies, bot.selection, strategy.instances`,
+  );
 }

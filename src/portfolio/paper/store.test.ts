@@ -27,6 +27,8 @@ describe("paper store", () => {
       at: new Date("2026-07-31T10:00:00.000Z"),
       simulated: true,
       priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 90,
     });
     assert.ok(trade);
 
@@ -69,11 +71,17 @@ describe("paper store", () => {
     assert.equal(position.side, "long");
     assert.equal(position.strategyId, "bollinger");
     assert.equal(position.slPrice, 0.9);
-    const stored = await query<{ strategy_data: unknown }>(
-      `SELECT strategy_data FROM bot.positions WHERE pair = $1`,
+    const stored = await query<{ registry_id: string; linked: boolean }>(
+      `
+      SELECT i.registry_id, p.exchange_position_id IS NOT NULL AS linked
+      FROM bot.positions p
+      JOIN strategy.instances i ON i.id = p.strategy_id
+      WHERE p.pair = $1
+      `,
       ["JUP/USDC"],
     );
-    assert.deepEqual(stored[0]?.strategy_data, {});
+    assert.equal(stored[0]?.registry_id, "bollinger");
+    assert.equal(stored[0]?.linked, true);
     assert.equal(position.entryPrice, 1);
 
     portfolio.applyOrderSync({
@@ -105,6 +113,8 @@ describe("paper store", () => {
       at: new Date("2026-07-31T10:00:00.000Z"),
       simulated: true,
       priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 90,
     });
     await savePaperState(new Map([["SOL/USDC", sol]]));
 
@@ -119,6 +129,8 @@ describe("paper store", () => {
       at: new Date("2026-07-31T11:00:00.000Z"),
       simulated: true,
       priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 0.000009,
     });
     await savePaperState(new Map([["BONK/USDC", other]]));
 

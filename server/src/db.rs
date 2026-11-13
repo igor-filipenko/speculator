@@ -55,18 +55,26 @@ impl Db {
         sqlx::query_as::<_, PortfolioRow>(
             r#"
             SELECT
-              pair,
-              cash_usdc,
-              realized_pnl,
-              position_side,
-              position_size,
-              entry_price,
-              opened_at,
-              updated_at,
+              i.pair,
+              COALESCE(a.cash_usdc, 0) AS cash_usdc,
+              COALESCE(a.realized_pnl, 0) AS realized_pnl,
+              COALESCE(p.side, 'flat') AS position_side,
+              COALESCE(p.size, 0) AS position_size,
+              COALESCE(p.entry_price, 0) AS entry_price,
+              p.opened_at,
+              COALESCE(a.updated_at, p.updated_at, now()) AS updated_at,
               ($2 = 'paper') AS simulated
-            FROM bot.portfolios
-            WHERE bot_id = $1 AND mode = $2::bot.mode
-            ORDER BY pair
+            FROM strategy.instances i
+            LEFT JOIN bot.virtual_accounts a
+              ON a.strategy_id = i.id
+             AND a.bot_id = $1
+             AND a.mode = $2::bot.mode
+            LEFT JOIN bot.positions p
+              ON p.strategy_id = i.id
+             AND p.bot_id = $1
+             AND p.mode = $2::bot.mode
+            WHERE a.strategy_id IS NOT NULL OR p.strategy_id IS NOT NULL
+            ORDER BY i.pair, i.id
             "#,
         )
         .bind(bot_id)

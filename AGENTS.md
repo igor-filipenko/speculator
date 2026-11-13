@@ -40,7 +40,7 @@ src/ highlights:
   index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | tune
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
-  db/                   # Timescale access (portfolios, positions, trades, signals, candles, tokens, pools, strategies)
+  db/                   # Timescale access (accounts, positions, trades, signals, candles, tokens, pools, strategies)
   market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache
   exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators, one package per strategy under mode/<id>/, optional svg charts

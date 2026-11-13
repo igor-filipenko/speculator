@@ -47,6 +47,8 @@ function buyOrder(overrides: Partial<Order> = {}): Order {
     simulated: false,
     priorityFeeUsdc: 0,
     txSignature: "BuySig",
+    strategyId: "bollinger",
+    slPrice: 90,
     ...overrides,
   };
 }

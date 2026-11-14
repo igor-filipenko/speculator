@@ -1,14 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { getStrategy, listStrategies, type RegisteredStrategy } from "../db/strategies.js";
-import { GenericRiskManager } from "./risk-manager.js";
-import type {
-  RiskManager,
-  Strategy,
-  StrategyManager,
-  StrategyModule,
-  StrategyParamPatch,
-} from "../types.js";
+import type { Strategy, StrategyManager, StrategyModule, StrategyParamPatch } from "../types.js";
 
 export type { StrategyParamPatch };
 
@@ -19,17 +12,12 @@ export interface SimpleStrategyManagerOptions {
   paramPatch?: StrategyParamPatch;
 }
 
-/**
- * Active strategy id comes from env/CLI and must exist in `strategy.registry`.
- * The risk manager is the hard stop and max deposit.
- */
+/** Active strategy id comes from env/CLI and must exist in `strategy.registry`. */
 export class SimpleStrategyManager implements StrategyManager {
   private readonly strategy: Strategy;
-  private readonly riskManager: RiskManager;
 
   private constructor(strategy: Strategy) {
     this.strategy = strategy;
-    this.riskManager = new GenericRiskManager();
   }
 
   static async create(options: SimpleStrategyManagerOptions): Promise<SimpleStrategyManager> {
@@ -39,10 +27,6 @@ export class SimpleStrategyManager implements StrategyManager {
 
   getActiveStrategy(): Strategy {
     return this.strategy;
-  }
-
-  getActiveRiskManager(): RiskManager {
-    return this.riskManager;
   }
 }
 

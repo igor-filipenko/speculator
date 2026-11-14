@@ -15,6 +15,7 @@ import {
 } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import { LivePortfolio } from "../portfolio/live/portfolio.js";
+import { GenericRiskManager } from "../risk/risk-manager.js";
 import { loadKeypairFromFile, WalletBalances } from "../portfolio/wallet/wallet.js";
 import {
   isOrder,
@@ -196,7 +197,7 @@ async function processPair(args: {
   const tryUseCache = nowMinute % 2 === 1;
 
   const strategy = strategyManager.getActiveStrategy();
-  const riskManager = strategyManager.getActiveRiskManager();
+  const riskManager = new GenericRiskManager();
 
   const requiredCandles = strategy.getRequiredCandles();
   const interval = candleIntervalSeconds(requiredCandles.timeframe);

@@ -362,7 +362,7 @@ One position per pair: `long`, `short`, or `flat`.
 
 The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
-`SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. The risk manager is `GenericRiskManager` (hard stop and max deposit). Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
+`SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. `src/risk/risk-manager.ts` sizes the deposit from the hard stop and writes a tighter stop onto the book. Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 
@@ -390,7 +390,7 @@ src/
   market/manager.ts        # createMarket(CandleSource)
   exchange/jupiter/        # spot long (Swap API V2) + perps short
   exchange/emulated/       # backtest fill model + EmulatedExchange
-  risk/risk-manager.ts     # GenericRiskManager + HighRiskManager + RiskParams (ATR/cooldown)
+  risk/risk-manager.ts     # hard stop, deposit cap, and a tighter stop written onto the book
   strategy/indicators.ts   # hand-rolled EMA/RSI/Stochastic/ATR/ADX/DMI/Bollinger/Keltner/Donchian/SMA
   strategy/mode/           # one <id>/ package per strategy (index.ts exports strategyModule)
   strategy/strategy-manager.ts # discovers mode/<id>/index; loads id + optional param patch

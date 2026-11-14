@@ -3,7 +3,6 @@ import { after, before, describe, it } from "node:test";
 import { resetSpeculatorDbCache } from "../db/db.js";
 import { listStrategies } from "../db/strategies.js";
 import { useTestDb } from "../db/test-db.js";
-import { GenericRiskManager } from "./risk-manager.js";
 import {
   listImplementedStrategyIds,
   loadStrategy,
@@ -35,7 +34,7 @@ describe("loadStrategy", () => {
 });
 
 describe("SimpleStrategyManager", () => {
-  it("applies a search patch and keeps the risk manager", async () => {
+  it("applies a search patch", async () => {
     const [strategyId] = await listImplementedStrategyIds();
     assert.ok(strategyId);
     const probe = await loadStrategy(strategyId);
@@ -50,6 +49,5 @@ describe("SimpleStrategyManager", () => {
     });
     assert.equal(manager.getActiveStrategy().getSearchDefaults()[axis.key], next);
     assert.equal(manager.getActiveStrategy().getId(), strategyId);
-    assert.ok(manager.getActiveRiskManager() instanceof GenericRiskManager);
   });
 });

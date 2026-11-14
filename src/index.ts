@@ -179,6 +179,7 @@ async function runPaperCommand(argv: string[]): Promise<void> {
   const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
     config.pairs,
     config.paperCashUsdc,
+    config.strategy,
   );
 
   const programState: ProgramState = {

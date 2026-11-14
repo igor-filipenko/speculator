@@ -1,3 +1,4 @@
+import { portfolioForRegistry, assignedDepositUsdc } from "../../db/bot.js";
 import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
 import { tighterStopPrice } from "../../risk/risk-manager.js";
@@ -33,13 +34,15 @@ export interface PaperSnapshot extends PortfolioSnapshot {
 }
 
 /**
- * Single-pair virtual long-only portfolio.
- * Applies simulated exchange orders (not raw strategy signals).
+ * Virtual book for one strategy instance.
+ * Opening a long debits this book's cash. A short leaves cash until its PnL is realized.
  */
 export class PaperPortfolio implements Portfolio {
   private cashUsdc: number;
   private position: Position;
   private realizedPnl = 0;
+  private instanceId: string | undefined;
+  private registryId: string | undefined;
   private readonly trades: PaperTrade[] = [];
 
   constructor(pair: string, startingCashUsdc: number) {
@@ -54,11 +57,16 @@ export class PaperPortfolio implements Portfolio {
     };
   }
 
-  static async load(pairs: PairConfig[], defaultCashUsdc: number): Promise<Map<string, Portfolio>> {
+  static async load(
+    pairs: PairConfig[],
+    defaultCashUsdc: number,
+    registryId: string,
+  ): Promise<Map<string, Portfolio>> {
     const portfolios = new Map<string, Portfolio>();
     const saved = await loadPaperState();
     for (const pair of pairs) {
-      const persisted = saved?.portfolios[pair.symbol];
+      const persisted =
+        saved == null ? undefined : portfolioForRegistry(saved.portfolios, pair.symbol, registryId);
       if (persisted) {
         const portfolio = PaperPortfolio.fromPersisted(persisted);
         portfolios.set(pair.symbol, portfolio);
@@ -71,7 +79,8 @@ export class PaperPortfolio implements Portfolio {
           `Restored paper ${pair.symbol}: cash=${snap.cashUsdc.toFixed(4)} USDC | position=${pos} | realizedPnl=${snap.realizedPnl.toFixed(4)} | trades=${snap.trades.length}`,
         );
       } else {
-        portfolios.set(pair.symbol, new PaperPortfolio(pair.symbol, defaultCashUsdc));
+        const deposit = await assignedDepositUsdc(pair.symbol, registryId);
+        portfolios.set(pair.symbol, new PaperPortfolio(pair.symbol, deposit ?? defaultCashUsdc));
       }
     }
     return portfolios;
@@ -98,6 +107,9 @@ export class PaperPortfolio implements Portfolio {
       position.paidFee = data.position.paidFee;
     }
     portfolio.position = position;
+    portfolio.instanceId = data.instanceId;
+    portfolio.registryId =
+      data.registryId ?? (position.strategyId === "" ? undefined : position.strategyId);
 
     for (const t of data.trades) {
       const trade: PaperTrade = {
@@ -153,12 +165,20 @@ export class PaperPortfolio implements Portfolio {
       return trade;
     });
 
+    const registryId =
+      this.registryId ?? (this.position.strategyId === "" ? undefined : this.position.strategyId);
     return {
       cashUsdc: this.cashUsdc,
       realizedPnl: this.realizedPnl,
       position,
       trades,
+      ...(this.instanceId !== undefined ? { instanceId: this.instanceId } : {}),
+      ...(registryId !== undefined ? { registryId } : {}),
     };
+  }
+
+  noteInstance(instanceId: string): void {
+    this.instanceId = instanceId;
   }
 
   getSnapshot(markPrice: number): PaperSnapshot {
@@ -198,7 +218,8 @@ export class PaperPortfolio implements Portfolio {
   /** Tighten the stored stop and upsert the paper book. Does not insert a trade. */
   async applyPositionData(data: PositionData): Promise<void> {
     if (!this.applyPositionDataSync(data)) return;
-    await upsertPaperPortfolio(this.toPersisted());
+    const instanceId = await upsertPaperPortfolio(this.toPersisted());
+    if (instanceId != null) this.noteInstance(instanceId);
   }
 
   /**
@@ -227,10 +248,11 @@ export class PaperPortfolio implements Portfolio {
 
     if (nextTrade != null) {
       const persisted = this.toPersisted();
-      await upsertPaperPortfolio(persisted);
+      const instanceId = await upsertPaperPortfolio(persisted);
+      if (instanceId != null) this.noteInstance(instanceId);
       const last = persisted.trades.at(-1);
       if (last != null) {
-        await insertPaperTrade(last);
+        await insertPaperTrade(last, instanceId);
       }
     }
 

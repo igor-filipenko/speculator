@@ -1,4 +1,5 @@
 import { match } from "ts-pattern";
+import { assignedDepositUsdc, portfolioForRegistry } from "../../db/bot.js";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
 import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
@@ -36,6 +37,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private cashUsdc = 0;
   private position: Position;
   private realizedPnl = 0;
+  private instanceId: string | undefined;
+  private registryId: string | undefined;
   private readonly trades: Trade[] = [];
   private readonly pairConfig: PairConfig;
   private readonly balances: BalanceSource;
@@ -44,12 +47,20 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
   private readonly positions: PositionSource | undefined;
   private shortCollateralUsd = 0;
 
-  constructor(pair: PairConfig, balances: BalanceSource, options: LivePortfolioOptions) {
+  constructor(
+    pair: PairConfig,
+    balances: BalanceSource,
+    options: LivePortfolioOptions,
+    startingCashUsdc: number | null = null,
+  ) {
     this.pairConfig = pair;
     this.balances = balances;
     this.solReserveMin = options.solReserveMin;
     this.solReserveMax = options.solReserveMax;
     this.positions = options.positions;
+    if (startingCashUsdc != null) {
+      this.cashUsdc = startingCashUsdc;
+    }
     this.position = {
       pair: pair.symbol,
       side: "flat",
@@ -64,14 +75,21 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     pairs: PairConfig[],
     balances: BalanceSource,
     options: LivePortfolioOptions,
+    registryId: string,
   ): Promise<Map<string, Portfolio>> {
     const portfolios = new Map<string, Portfolio>();
     const saved = await loadLiveState();
     for (const pair of pairs) {
-      const persisted = saved?.portfolios[pair.symbol];
+      const persisted =
+        saved == null ? undefined : portfolioForRegistry(saved.portfolios, pair.symbol, registryId);
       const portfolio = persisted
         ? LivePortfolio.fromPersisted(pair, balances, options, persisted)
-        : new LivePortfolio(pair, balances, options);
+        : new LivePortfolio(
+            pair,
+            balances,
+            options,
+            await assignedDepositUsdc(pair.symbol, registryId),
+          );
       portfolios.set(pair.symbol, portfolio);
       const snap = portfolio.toPersisted();
       const pos =
@@ -110,6 +128,9 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       position.paidFee = data.position.paidFee;
     }
     portfolio.position = position;
+    portfolio.instanceId = data.instanceId;
+    portfolio.registryId =
+      data.registryId ?? (position.strategyId === "" ? undefined : position.strategyId);
 
     for (const t of data.trades) {
       const trade: Trade = {
@@ -166,12 +187,20 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       return trade;
     });
 
+    const registryId =
+      this.registryId ?? (this.position.strategyId === "" ? undefined : this.position.strategyId);
     return {
       cashUsdc: this.cashUsdc,
       realizedPnl: this.realizedPnl,
       position,
       trades,
+      ...(this.instanceId !== undefined ? { instanceId: this.instanceId } : {}),
+      ...(registryId !== undefined ? { registryId } : {}),
     };
+  }
+
+  noteInstance(instanceId: string): void {
+    this.instanceId = instanceId;
   }
 
   getSnapshot(markPrice: number): PortfolioSnapshot {
@@ -198,7 +227,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     const before = snapshotKey(this);
     await this.overlayChain(markPrice);
     if (snapshotKey(this) !== before) {
-      await upsertLivePortfolio(this.toPersisted());
+      const instanceId = await upsertLivePortfolio(this.toPersisted());
+      if (instanceId != null) this.noteInstance(instanceId);
     }
   }
 
@@ -212,7 +242,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     );
     if (next == null || data.pair !== this.position.pair) return;
     this.position = { ...this.position, slPrice: next };
-    await upsertLivePortfolio(this.toPersisted());
+    const instanceId = await upsertLivePortfolio(this.toPersisted());
+    if (instanceId != null) this.noteInstance(instanceId);
   }
 
   async applyOrder(order: Order): Promise<Trade | null> {
@@ -266,10 +297,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       });
     }
     const persisted = this.toPersisted();
-    await upsertLivePortfolio(persisted);
+    const instanceId = await upsertLivePortfolio(persisted);
+    if (instanceId != null) this.noteInstance(instanceId);
     const last = persisted.trades.at(-1);
     if (last != null) {
-      await insertLiveTrade(last);
+      await insertLiveTrade(last, instanceId);
     }
     return nextTrade;
   }

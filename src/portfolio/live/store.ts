@@ -23,12 +23,16 @@ export interface PersistedLiveTrade {
   txSignature?: string;
 }
 
-/** One pair's durable live ledger. */
+/** One strategy instance's durable live ledger. */
 export interface PersistedLivePortfolio {
   cashUsdc: number;
   realizedPnl: number;
   position: PersistedLivePosition;
   trades: PersistedLiveTrade[];
+  /** `strategy.instances` id. Set once the ledger row exists, including while flat. */
+  instanceId?: string;
+  /** `strategy.registry` id. Set even when the position is flat. */
+  registryId?: string;
 }
 
 /** Live state envelope (versioned for loaders). */

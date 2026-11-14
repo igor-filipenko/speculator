@@ -182,7 +182,7 @@ describe("opening command", () => {
     }
   });
 
-  it("caps a BUY budget so a stop-out loses at most MAX_RISK_PERCENT of equity", () => {
+  it("caps a BUY budget so a stop-out loses at most 2 percent of equity", () => {
     const portfolio = new PaperPortfolio("SOL/USDC", 1000);
     const signal: Signal = {
       pair: "SOL/USDC",
@@ -202,6 +202,27 @@ describe("opening command", () => {
       assert.equal(result.command.intent, "open-long");
       // 2% of 1000 equity is 20 USDC; an 8% stop allows 250 USDC notional.
       assert.equal(result.command.quoteBudgetUsdc, 250);
+    }
+  });
+
+  it("sizes the same stop from the instance risk percent", () => {
+    const portfolio = new PaperPortfolio("SOL/USDC", 1000);
+    const signal: Signal = {
+      pair: "SOL/USDC",
+      strategyId: "bollinger",
+      side: "BUY",
+      reason: "cross",
+      price: 100,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      slPrice: 92,
+      tpPrices: [],
+      minRewardRisk: 0.1,
+    };
+    const result = new GenericRiskManager(1).check(signal, portfolio.getSnapshot(100), []);
+    assert.equal(result.kind, "command");
+    if (result.kind === "command") {
+      // 1% of 1000 equity is 10 USDC; an 8% stop allows 125 USDC notional.
+      assert.equal(result.command.quoteBudgetUsdc, 125);
     }
   });
 

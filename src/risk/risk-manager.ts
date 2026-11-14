@@ -13,30 +13,29 @@ import type {
 } from "../types.js";
 
 /**
- * One position per pair (long or short). Opens copy the strategy hard stop and
- * size the USDC budget so a stop-out loses at most {@link MAX_RISK_PERCENT} of
- * equity. An open position closes when price trades through `slPrice`. A signal
- * may close a fraction and attach a new stop for the remainder; the stop still
- * closes whatever size is left. A tighter `slPrice` on a signal that does not
- * open, close, or scale out becomes a position-data update and is not sent to
- * the exchange.
+ * One open position on the book in the snapshot. Opens copy the strategy hard
+ * stop and size the USDC budget so a stop-out loses at most this risk percent
+ * of that book's equity. An open position closes when price trades through
+ * `slPrice`. A signal may close a fraction and attach a new stop for the
+ * remainder; the stop still closes whatever size is left. A tighter `slPrice`
+ * on a signal that does not open, close, or scale out becomes a position-data
+ * update and is not sent to the exchange.
  */
 export class GenericRiskManager implements RiskManager {
+  constructor(private readonly riskPercent = 2) {}
+
   getDisplayName(): string {
     return "Generic risk manager";
   }
 
   check(signal: Signal, snapshot: PortfolioSnapshot, _candles: Candle[]): RiskOrCommand {
-    return checkDirected(signal, snapshot);
+    return checkDirected(signal, snapshot, this.riskPercent);
   }
 }
 
 function asCommand(command: Command): RequiredCommand {
   return { kind: "command", command };
 }
-
-/** Max loss at the hard stop, as a percent of equity. */
-export const MAX_RISK_PERCENT = 2;
 
 /** Minimum USDC to spend on an opening order. */
 export const MIN_OPEN_DEPOSIT_USDC = 10;
@@ -64,31 +63,37 @@ function signalCloseSize(signal: Signal, positionSize: number): number {
 }
 
 /**
- * Quote notional that loses `MAX_RISK_PERCENT` of equity if price trades from
+ * Quote notional that loses `riskPercent` of equity if price trades from
  * `price` to `slPrice`. Null when the stop distance is missing.
  */
-function maxDepositUsdc(equity: number, price: number, slPrice: number): number | null {
+function maxDepositUsdc(
+  equity: number,
+  price: number,
+  slPrice: number,
+  riskPercent: number,
+): number | null {
   const distance = Math.abs(price - slPrice);
-  if (!(equity > 0) || !(price > 0) || !(distance > 0)) {
+  if (!(equity > 0) || !(price > 0) || !(distance > 0) || !(riskPercent > 0)) {
     return null;
   }
-  return ((equity * MAX_RISK_PERCENT) / 100) * (price / distance);
+  return ((equity * riskPercent) / 100) * (price / distance);
 }
 
 /**
  * USDC to spend on an opening order. Caps cash so a stop-out loses at most
- * {@link MAX_RISK_PERCENT} of equity. Returns a block reason when the stop
+ * `riskPercent` of this book's equity. Returns a block reason when the stop
  * distance cannot size a deposit.
  */
 function openingQuoteBudget(
   signal: Signal,
   snapshot: PortfolioSnapshot,
+  riskPercent: number,
 ): { usdc: number } | { reason: string } {
   const sl = signal.slPrice;
   if (sl == null || !(sl > 0)) {
     return { usdc: snapshot.cashUsdc };
   }
-  const maxDeposit = maxDepositUsdc(snapshot.equity, signal.price, sl);
+  const maxDeposit = maxDepositUsdc(snapshot.equity, signal.price, sl, riskPercent);
   if (maxDeposit == null || !(maxDeposit >= MIN_OPEN_DEPOSIT_USDC)) {
     return { reason: "stop is at the entry price" };
   }
@@ -193,7 +198,11 @@ function exitIfSlPriceReached(signal: Signal, snapshot: PortfolioSnapshot): Comm
   return null;
 }
 
-function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrCommand {
+function checkDirected(
+  signal: Signal,
+  snapshot: PortfolioSnapshot,
+  riskPercent: number,
+): RiskOrCommand {
   if (snapshot.position.side === "flat" && snapshot.insufficientSol > 0) {
     return asCommand(
       positionCommand(signal, {
@@ -254,7 +263,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     if (snapshot.cashUsdc <= 0 || signal.price <= 0) {
       return blocked(signal, "no cash or invalid price");
     }
-    const budget = openingQuoteBudget(signal, snapshot);
+    const budget = openingQuoteBudget(signal, snapshot, riskPercent);
     if ("reason" in budget) {
       return blocked(signal, budget.reason);
     }
@@ -298,7 +307,7 @@ function checkDirected(signal: Signal, snapshot: PortfolioSnapshot): RiskOrComma
     if (snapshot.cashUsdc <= 0 || signal.price <= 0) {
       return blocked(signal, "no cash or invalid price");
     }
-    const budget = openingQuoteBudget(signal, snapshot);
+    const budget = openingQuoteBudget(signal, snapshot, riskPercent);
     if ("reason" in budget) {
       return blocked(signal, budget.reason);
     }

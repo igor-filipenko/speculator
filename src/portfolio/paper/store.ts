@@ -24,12 +24,16 @@ export interface PersistedTrade {
   simulated: true;
 }
 
-/** One pair's durable paper ledger. */
+/** One strategy instance's durable paper ledger. */
 export interface PersistedPortfolio {
   cashUsdc: number;
   realizedPnl: number;
   position: PersistedPosition;
   trades: PersistedTrade[];
+  /** `strategy.instances` id. Set once the ledger row exists, including while flat. */
+  instanceId?: string;
+  /** `strategy.registry` id. Set even when the position is flat. */
+  registryId?: string;
 }
 
 /** Paper state envelope (versioned for loaders). */
@@ -42,6 +46,8 @@ export interface PersistedPaperState {
 /** Anything that can be written into paper persistence. */
 export interface PersistablePortfolio {
   toPersisted(): PersistedPortfolio;
+  /** Remember the instance id returned by the ledger write. */
+  noteInstance(instanceId: string): void;
 }
 
 /**
@@ -72,6 +78,9 @@ export async function loadPaperState(): Promise<PersistedPaperState | null> {
  */
 export async function savePaperState(portfolios: Map<string, PersistablePortfolio>): Promise<void> {
   for (const portfolio of portfolios.values()) {
-    await syncPaperPortfolio(portfolio.toPersisted());
+    const instanceId = await syncPaperPortfolio(portfolio.toPersisted());
+    if (instanceId != null) {
+      portfolio.noteInstance(instanceId);
+    }
   }
 }

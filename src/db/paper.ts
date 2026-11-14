@@ -15,14 +15,17 @@ export async function loadAllPaperPortfolios(): Promise<Record<string, Persisted
   return loadAll();
 }
 
-export async function upsertPaperPortfolio(portfolio: PersistedPortfolio): Promise<void> {
-  await upsert(portfolio);
+export async function upsertPaperPortfolio(portfolio: PersistedPortfolio): Promise<string | null> {
+  return upsert(portfolio);
 }
 
-export async function insertPaperTrade(trade: PersistedTrade): Promise<void> {
-  await insert(trade);
+export async function insertPaperTrade(
+  trade: PersistedTrade,
+  instanceId: string | null,
+): Promise<void> {
+  await insert(trade, instanceId);
 }
 
-export async function syncPaperPortfolio(portfolio: PersistedPortfolio): Promise<void> {
-  await sync(portfolio);
+export async function syncPaperPortfolio(portfolio: PersistedPortfolio): Promise<string | null> {
+  return sync(portfolio);
 }

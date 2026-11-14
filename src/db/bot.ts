@@ -181,18 +181,18 @@ export async function loadAllPortfolios(
 ): Promise<Record<string, PersistedLivePortfolio>> {
   const portfolioRows = await query<Record<string, unknown>>(
     `
-    SELECT i.pair, a.cash_usdc, a.realized_pnl
+    SELECT a.strategy_id::text AS instance_id, i.registry_id, i.pair, a.cash_usdc, a.realized_pnl
     FROM bot.virtual_accounts a
     JOIN strategy.instances i ON i.id = a.strategy_id
     WHERE a.bot_id = $1 AND a.mode = $2
-    ORDER BY i.pair
+    ORDER BY a.strategy_id
     `,
     [botId, mode],
   );
 
   const tradeRows = await query<Record<string, unknown>>(
     `
-    SELECT pair, side, price, size, realized_pnl, "at", simulated, tx_signature
+    SELECT pair, side, price, size, realized_pnl, "at", simulated, tx_signature, strategy_id::text
     FROM bot.trades
     WHERE bot_id = $1 AND mode = $2
     ORDER BY "at", id
@@ -203,6 +203,8 @@ export async function loadAllPortfolios(
   const positionRows = await query<Record<string, unknown>>(
     `
     SELECT
+      p.strategy_id::text AS instance_id,
+      i.registry_id,
       i.pair,
       i.registry_id AS strategy_id,
       p.side, p.size, p.entry_price, p.sl_price, p.paid_fee, p.opened_at
@@ -212,40 +214,119 @@ export async function loadAllPortfolios(
     `,
     [botId, mode],
   );
-  const positionByPair = new Map<string, Record<string, unknown>>();
-  for (const row of positionRows) {
-    positionByPair.set(asString(row["pair"], "pair"), row);
-  }
-
-  const tradesByPair = new Map<string, PersistedLiveTrade[]>();
-  for (const row of tradeRows) {
-    const trade = rowToTrade(row);
-    const list = tradesByPair.get(trade.pair) ?? [];
-    list.push(trade);
-    tradesByPair.set(trade.pair, list);
-  }
 
   const portfolios: Record<string, PersistedLivePortfolio> = {};
   for (const row of portfolioRows) {
+    const instanceId = asString(row["instance_id"], "instance_id");
     const pair = asString(row["pair"], "pair");
-    portfolios[pair] = {
+    portfolios[instanceId] = {
+      instanceId,
+      registryId: asString(row["registry_id"], "registry_id"),
       cashUsdc: Number(row["cash_usdc"]),
       realizedPnl: Number(row["realized_pnl"]),
       position: flatPosition(pair),
-      trades: tradesByPair.get(pair) ?? [],
+      trades: [],
     };
   }
-  for (const [pair, stored] of positionByPair) {
-    const book = portfolios[pair] ?? {
+  for (const row of positionRows) {
+    const instanceId = asString(row["instance_id"], "instance_id");
+    const pair = asString(row["pair"], "pair");
+    const book = portfolios[instanceId] ?? {
+      instanceId,
+      registryId: asString(row["registry_id"], "registry_id"),
       cashUsdc: 0,
       realizedPnl: 0,
       position: flatPosition(pair),
-      trades: tradesByPair.get(pair) ?? [],
+      trades: [],
     };
-    book.position = overlayPosition(book.position, stored);
-    portfolios[pair] = book;
+    book.position = overlayPosition(book.position, row);
+    portfolios[instanceId] = book;
+  }
+
+  const booksOnPair = new Map<string, PersistedLivePortfolio[]>();
+  for (const book of Object.values(portfolios)) {
+    const list = booksOnPair.get(book.position.pair) ?? [];
+    list.push(book);
+    booksOnPair.set(book.position.pair, list);
+  }
+  for (const row of tradeRows) {
+    const trade = rowToTrade(row);
+    const owner = row["strategy_id"];
+    if (typeof owner === "string" && portfolios[owner]) {
+      portfolios[owner].trades.push(trade);
+      continue;
+    }
+    if (owner != null) {
+      continue;
+    }
+    const books = booksOnPair.get(trade.pair) ?? [];
+    if (books.length === 1) {
+      books[0]?.trades.push(trade);
+    }
   }
   return portfolios;
+}
+
+/**
+ * The one saved book for this registry id on this pair.
+ * Two books for the same registry and pair are left for the multi-instance loop.
+ */
+export function portfolioForRegistry<T extends { position: { pair: string }; registryId?: string }>(
+  portfolios: Record<string, T>,
+  pair: string,
+  registryId: string,
+): T | undefined {
+  const matches = Object.values(portfolios).filter(
+    (book) => book.position.pair === pair && book.registryId === registryId,
+  );
+  if (matches.length > 1) {
+    throw new Error(
+      `${pair} has ${matches.length} ${registryId} books; this process still runs one strategy`,
+    );
+  }
+  return matches[0];
+}
+
+/** Risk percent of the instance this process trades. Two matches prefer the selection. */
+export async function riskPercentFor(pair: string, registryId: string): Promise<number> {
+  const rows = await query<{ risk_percent: string | number }>(
+    `
+    SELECT i.risk_percent
+    FROM strategy.instances i
+    LEFT JOIN bot.strategies b ON b.strategy_id = i.id AND b.bot_id = $1
+    LEFT JOIN bot.selection s ON s.bot_id = $1 AND s.strategy_id = i.id
+    WHERE i.registry_id = $2 AND i.pair = $3
+    ORDER BY (b.strategy_id IS NOT NULL) DESC, (s.strategy_id IS NOT NULL) DESC, i.id
+    LIMIT 1
+    `,
+    [getBotId(), registryId, pair],
+  );
+  const value = rows[0]?.risk_percent;
+  return value == null ? 2 : Number(value);
+}
+
+/**
+ * Deposit of the single instance assigned to this bot for the registry id and pair.
+ * Null when none is assigned, or when more than one is.
+ */
+export async function assignedDepositUsdc(
+  pair: string,
+  registryId: string,
+): Promise<number | null> {
+  const rows = await query<{ deposit_usdc: string | number }>(
+    `
+    SELECT b.deposit_usdc
+    FROM bot.strategies b
+    JOIN strategy.instances i ON i.id = b.strategy_id
+    WHERE b.bot_id = $1 AND i.registry_id = $2 AND i.pair = $3
+    `,
+    [getBotId(), registryId, pair],
+  );
+  if (rows.length !== 1) {
+    return null;
+  }
+  const value = rows[0]?.deposit_usdc;
+  return value == null ? null : Number(value);
 }
 
 function flatPosition(pair: string): PersistedLivePortfolio["position"] {
@@ -292,10 +373,8 @@ const UPSERT_POSITION_SQL = `
 `;
 
 const DELETE_POSITION_SQL = `
-  DELETE FROM bot.positions AS p
-  USING strategy.instances AS i
-  WHERE p.strategy_id = i.id
-    AND p.bot_id = $1 AND p.mode = $2 AND i.pair = $3
+  DELETE FROM bot.positions
+  WHERE bot_id = $1 AND mode = $2 AND strategy_id = $3::uuid
 `;
 
 const DELETE_UNUSED_EXCHANGE_SQL = `
@@ -308,10 +387,10 @@ const DELETE_UNUSED_EXCHANGE_SQL = `
 
 const INSERT_TRADE_SQL = `
   INSERT INTO bot.trades (
-    bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature
+    bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature, strategy_id
   )
   VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11::uuid
   )
 `;
 
@@ -351,23 +430,20 @@ async function syncPosition(
 ): Promise<void> {
   const open = openPositionValues(position);
   if (open == null) {
-    await run(DELETE_POSITION_SQL, [botId, mode, position.pair]);
+    await run(DELETE_POSITION_SQL, [botId, mode, instanceId]);
     await run(DELETE_UNUSED_EXCHANGE_SQL, [botId, mode, position.pair]);
     return;
   }
   const integrationId = mode === "paper" ? "emulated" : "jupiter";
-  const exchangeRows = await run(UPSERT_EXCHANGE_SQL, [
+  const exchangeId = await exchangePositionId(
+    run,
     botId,
     mode,
+    position,
+    instanceId,
     integrationId,
-    position.pair,
-    open.side,
-    open.size,
-  ]);
-  const exchangeId = exchangeRows[0]?.["id"];
-  if (typeof exchangeId !== "string") {
-    throw new Error(`failed to store the exchange position for ${position.pair}`);
-  }
+    open,
+  );
   await run(UPSERT_POSITION_SQL, [
     botId,
     mode,
@@ -383,7 +459,12 @@ async function syncPosition(
   ]);
 }
 
-function tradeValues(botId: string, mode: BotMode, trade: PersistedLiveTrade) {
+function tradeValues(
+  botId: string,
+  mode: BotMode,
+  trade: PersistedLiveTrade,
+  instanceId: string | null,
+) {
   return [
     botId,
     mode,
@@ -395,25 +476,74 @@ function tradeValues(botId: string, mode: BotMode, trade: PersistedLiveTrade) {
     trade.at,
     trade.simulated,
     trade.txSignature ?? null,
+    instanceId,
   ] as const;
+}
+
+/**
+ * Venue row this book links to. A second book on the pair links to the existing
+ * row and leaves its size alone; netting that size is a later phase.
+ */
+async function exchangePositionId(
+  run: RunSql,
+  botId: string,
+  mode: BotMode,
+  position: PersistedPosition,
+  instanceId: string,
+  integrationId: string,
+  open: { side: "long" | "short"; size: number },
+): Promise<string> {
+  const existing = await run(
+    `
+    SELECT id::text AS id
+    FROM exchange.positions
+    WHERE bot_id = $1 AND mode = $2 AND pair = $3
+    `,
+    [botId, mode, position.pair],
+  );
+  const others = await run(
+    `
+    SELECT 1
+    FROM bot.positions
+    WHERE bot_id = $1 AND mode = $2 AND pair = $3 AND strategy_id <> $4::uuid
+    LIMIT 1
+    `,
+    [botId, mode, position.pair, instanceId],
+  );
+  const existingId = existing[0]?.["id"];
+  if (others.length > 0 && typeof existingId === "string") {
+    return existingId;
+  }
+  const exchangeRows = await run(UPSERT_EXCHANGE_SQL, [
+    botId,
+    mode,
+    integrationId,
+    position.pair,
+    open.side,
+    open.size,
+  ]);
+  const exchangeId = exchangeRows[0]?.["id"];
+  if (typeof exchangeId !== "string") {
+    throw new Error(`failed to store the exchange position for ${position.pair}`);
+  }
+  return exchangeId;
 }
 
 export async function upsertPortfolio(
   botId: string,
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
-): Promise<void> {
-  await withTransaction(async (client) => {
-    await writeBook(client, botId, mode, portfolio, false);
-  });
+): Promise<string | null> {
+  return withTransaction(async (client) => writeBook(client, botId, mode, portfolio, false));
 }
 
 export async function insertTrade(
   botId: string,
   mode: BotMode,
   trade: PersistedLiveTrade,
+  instanceId: string | null,
 ): Promise<void> {
-  await query(INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade)]);
+  await query(INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade, instanceId)]);
 }
 
 async function writeBook(
@@ -422,14 +552,23 @@ async function writeBook(
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
   replaceTrades: boolean,
-): Promise<void> {
+): Promise<string | null> {
   const run: RunSql = (text, values) => queryWith(client, text, values);
   const pair = portfolio.position.pair;
-  const instanceId = await instanceIdForBook(run, botId, mode, pair, portfolio.position.strategyId);
+  const named = portfolio.instanceId?.trim() ?? "";
+  const instanceId = isUuid(named)
+    ? named
+    : await instanceIdForBook(
+        run,
+        botId,
+        mode,
+        pair,
+        portfolio.registryId ?? portfolio.position.strategyId,
+      );
   // Chain overlays can arrive before any strategy instance exists. Cash for those
   // books has nowhere to live until an instance is assigned.
   if (instanceId == null) {
-    return;
+    return null;
   }
   await run(UPSERT_ACCOUNT_SQL, [
     botId,
@@ -440,26 +579,25 @@ async function writeBook(
   ]);
   await syncPosition(run, botId, mode, portfolio.position, instanceId);
   if (!replaceTrades) {
-    return;
+    return instanceId;
   }
-  await queryWith(client, `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2 AND pair = $3`, [
-    botId,
-    mode,
-    pair,
-  ]);
+  await queryWith(
+    client,
+    `DELETE FROM bot.trades WHERE bot_id = $1 AND mode = $2 AND strategy_id = $3::uuid`,
+    [botId, mode, instanceId],
+  );
   for (const trade of portfolio.trades) {
-    await queryWith(client, INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade)]);
+    await queryWith(client, INSERT_TRADE_SQL, [...tradeValues(botId, mode, trade, instanceId)]);
   }
+  return instanceId;
 }
 
 export async function syncPortfolio(
   botId: string,
   mode: BotMode,
   portfolio: PersistedLivePortfolio,
-): Promise<void> {
-  await withTransaction(async (client) => {
-    await writeBook(client, botId, mode, portfolio, true);
-  });
+): Promise<string | null> {
+  return withTransaction(async (client) => writeBook(client, botId, mode, portfolio, true));
 }
 
 export async function replaceBotLedgers(
@@ -498,8 +636,8 @@ export async function paperPortfolioCount(): Promise<number> {
 export async function loadAllPaperPortfolios(): Promise<Record<string, PersistedPortfolio>> {
   const all = await loadAllPortfolios(getBotId(), "paper");
   const out: Record<string, PersistedPortfolio> = {};
-  for (const [pair, p] of Object.entries(all)) {
-    out[pair] = {
+  for (const [id, p] of Object.entries(all)) {
+    out[id] = {
       cashUsdc: p.cashUsdc,
       realizedPnl: p.realizedPnl,
       position: p.position,
@@ -512,21 +650,26 @@ export async function loadAllPaperPortfolios(): Promise<Record<string, Persisted
         simulated: true as const,
         ...(t.realizedPnl !== undefined ? { realizedPnl: t.realizedPnl } : {}),
       })),
+      ...(p.instanceId !== undefined ? { instanceId: p.instanceId } : {}),
+      ...(p.registryId !== undefined ? { registryId: p.registryId } : {}),
     };
   }
   return out;
 }
 
-export async function upsertPaperPortfolio(portfolio: PersistedPortfolio): Promise<void> {
-  await upsertPortfolio(getBotId(), "paper", toLiveShape(portfolio));
+export async function upsertPaperPortfolio(portfolio: PersistedPortfolio): Promise<string | null> {
+  return upsertPortfolio(getBotId(), "paper", toLiveShape(portfolio));
 }
 
-export async function insertPaperTrade(trade: PersistedTrade): Promise<void> {
-  await insertTrade(getBotId(), "paper", { ...trade, simulated: true });
+export async function insertPaperTrade(
+  trade: PersistedTrade,
+  instanceId: string | null,
+): Promise<void> {
+  await insertTrade(getBotId(), "paper", { ...trade, simulated: true }, instanceId);
 }
 
-export async function syncPaperPortfolio(portfolio: PersistedPortfolio): Promise<void> {
-  await syncPortfolio(getBotId(), "paper", toLiveShape(portfolio));
+export async function syncPaperPortfolio(portfolio: PersistedPortfolio): Promise<string | null> {
+  return syncPortfolio(getBotId(), "paper", toLiveShape(portfolio));
 }
 
 function toLiveShape(portfolio: PersistedPortfolio): PersistedLivePortfolio {
@@ -543,5 +686,7 @@ function toLiveShape(portfolio: PersistedPortfolio): PersistedLivePortfolio {
       simulated: true,
       ...(t.realizedPnl !== undefined ? { realizedPnl: t.realizedPnl } : {}),
     })),
+    ...(portfolio.instanceId !== undefined ? { instanceId: portfolio.instanceId } : {}),
+    ...(portfolio.registryId !== undefined ? { registryId: portfolio.registryId } : {}),
   };
 }

@@ -10,12 +10,17 @@ export async function loadAllLivePortfolios(): Promise<Record<string, PersistedL
   return loadAllPortfolios(getBotId(), "live");
 }
 
-export async function upsertLivePortfolio(portfolio: PersistedLivePortfolio): Promise<void> {
-  await upsertPortfolio(getBotId(), "live", portfolio);
+export async function upsertLivePortfolio(
+  portfolio: PersistedLivePortfolio,
+): Promise<string | null> {
+  return upsertPortfolio(getBotId(), "live", portfolio);
 }
 
-export async function insertLiveTrade(trade: PersistedLiveTrade): Promise<void> {
-  await insertTrade(getBotId(), "live", trade);
+export async function insertLiveTrade(
+  trade: PersistedLiveTrade,
+  instanceId: string | null,
+): Promise<void> {
+  await insertTrade(getBotId(), "live", trade, instanceId);
 }
 
 export async function loadLiveState(): Promise<{

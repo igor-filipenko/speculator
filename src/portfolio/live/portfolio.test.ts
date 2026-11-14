@@ -86,7 +86,7 @@ describe("LivePortfolio", () => {
     assert.ok(snap.position.size > 0);
 
     const loaded = await loadAllLivePortfolios();
-    const persisted = loaded["SOL/USDC"];
+    const persisted = Object.values(loaded).find((book) => book.position.pair === "SOL/USDC");
     assert.ok(persisted);
     assert.equal(persisted.trades.length, 1);
     assert.equal(persisted.trades[0]?.simulated, false);

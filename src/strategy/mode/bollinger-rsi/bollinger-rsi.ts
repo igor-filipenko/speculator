@@ -809,6 +809,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "bollinger-rsi",
+  defaults: () => bollingerRsiParamsFor(),
   create(patch) {
     return new BollingerRsiStrategy(applySearchPatch(bollingerRsiParamsFor(), patch));
   },

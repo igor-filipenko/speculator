@@ -799,6 +799,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "bollinger",
+  defaults: () => bollingerParamsFor(),
   create(patch) {
     return new BollingerStrategy(applySearchPatch(bollingerParamsFor(), patch));
   },

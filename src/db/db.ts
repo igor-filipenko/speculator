@@ -96,7 +96,8 @@ export function readPoolLimits(): DbPoolLimits {
  * Strip those modes from the URL and disable SSL so local Docker and Testcontainers work.
  * `require` / `verify-*` stay on the connection string so hosted TLS is unchanged.
  */
-function poolOptions(): PoolConfig {
+/** Connection settings shared by the pool and one-off clients such as privilege grants. */
+export function dbClientConfig(): PoolConfig {
   const limits = readPoolLimits();
   const raw = readDatabaseUrl();
   const url = new URL(raw);
@@ -119,7 +120,7 @@ function poolOptions(): PoolConfig {
 /** Shared `pg.Pool` (singleton). */
 export function getDbPool(): Pool {
   if (pool === undefined) {
-    pool = new Pool(poolOptions());
+    pool = new Pool(dbClientConfig());
     pool.on("connect", (client) => {
       client.on("notice", () => {
         /* Timescale emits notices during hypertable setup */

@@ -353,6 +353,7 @@ function fmt(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "macd-crossover",
+  defaults: () => macdCrossoverParamsFor(),
   create(patch) {
     return new MacdCrossoverStrategy(applySearchPatch(macdCrossoverParamsFor(), patch));
   },

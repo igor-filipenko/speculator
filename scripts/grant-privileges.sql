@@ -1,7 +1,7 @@
 -- Privileges for role speculator on database speculator. Does not change owners.
--- Run as the object owner after schema migrations that add/drop schemas, tables,
--- sequences, or types:
---   psql postgres://OWNER@host:5432/speculator?sslmode=require -f scripts/grant-privileges.sql
+-- `pnpm migrate` applies this file as the DATABASE_URL role after dbmate up.
+-- That role must own the objects. Re-run after schema changes the same way:
+--   pnpm migrate
 --
 --   public, solana : SELECT
 --   market         : SELECT, INSERT, UPDATE (candles); SELECT, INSERT (signals + seq); USAGE on chain

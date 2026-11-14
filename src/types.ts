@@ -374,6 +374,8 @@ export interface Strategy extends SearchSpace {
 export interface StrategyModule {
   id: string;
   create(patch?: StrategyParamPatch): Strategy;
+  /** Full knob object from that module's `*ParamsFor()`. Copied onto a new instance. */
+  defaults(): object;
 }
 
 export interface Risk {

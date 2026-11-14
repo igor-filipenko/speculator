@@ -130,4 +130,5 @@ REMOTE
 
 echo "Bot deploy complete."
 echo "Logs: journalctl -u bot -f"
-echo "After first deploy, set secrets in $REMOTE_PATH/.env and run: ssh $HOST 'cd $REMOTE_PATH && pnpm migrate'"
+echo "After first deploy, set secrets in $REMOTE_PATH/.env."
+echo "Copy DATABASE_URL from /root/speculator-database-url (deploy/db.sh)."

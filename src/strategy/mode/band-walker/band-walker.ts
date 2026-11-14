@@ -594,6 +594,7 @@ function searchDefaults(params: BandWalkerParams): Record<string, number> {
 
 export const strategyModule: StrategyModule = {
   id: "band-walker",
+  defaults: () => bandWalkerParamsFor(),
   create(patch) {
     return new BandWalkerStrategy(applySearchPatch(bandWalkerParamsFor(), patch));
   },

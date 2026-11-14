@@ -717,6 +717,7 @@ function fmt(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "donchian",
+  defaults: () => donchianParamsFor(),
   create(patch) {
     return new DonchianStrategy(applySearchPatch(donchianParamsFor(), patch));
   },

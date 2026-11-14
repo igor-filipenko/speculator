@@ -37,7 +37,7 @@ scripts/
   grant-privileges.sql  # keep in sync with migrations/
 
 src/ highlights:
-  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | backtest | tune
+  index.ts              # CLI entry: MODE env or watch | paper | trade | wallet | positions | strategy | backtest | tune
   config.ts             # zod + dotenv
   types.ts              # Candle, Signal, Position, Order, Trade
   db/                   # Timescale access (accounts, positions, trades, signals, candles, tokens, pools, strategies)
@@ -47,7 +47,7 @@ src/ highlights:
   risk/risk-manager.ts
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
-  engine/               # watch | paper | trade (shared loop) | wallet | backtest | tune
+  engine/               # watch | paper | trade (shared loop) | wallet | positions | strategy | backtest | tune
   chart/render-png.ts
 ```
 

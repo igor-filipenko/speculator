@@ -10,6 +10,7 @@ import {
 import { parseTuneArgs, printTuneReport, runTune } from "./engine/tune.js";
 import { runPaper } from "./engine/paper.js";
 import { positionsUsage, runPositions } from "./engine/positions.js";
+import { runStrategy, strategyUsage } from "./engine/strategy.js";
 import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWallet, runWalletExport } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
@@ -26,9 +27,10 @@ function usage(): never {
   pnpm trade          # recommendations + live Jupiter swaps
   pnpm wallet         # live portfolio; --buy-sol tops up the SOL reserve
   pnpm positions      # list or open/close the live long or short
+  pnpm strategy       # list, add, use, set, or remove a strategy instance
   pnpm backtest       # Replay OHLCV with emulated Jupiter fills
   pnpm tune           # Walk-forward search for strategy parameters
-  pnpm migrate        # dbmate up (TimescaleDB)
+  pnpm migrate        # dbmate up, then scripts/grant-privileges.sql
 
   tsx src/index.ts watch|paper|trade [--once]
   tsx src/index.ts wallet [--buy-sol]
@@ -37,6 +39,11 @@ function usage(): never {
   tsx src/index.ts positions close long
   tsx src/index.ts positions open short <usdc>
   tsx src/index.ts positions close short
+  tsx src/index.ts strategy list
+  tsx src/index.ts strategy add <registryId> <pair> --candle-source <source> --deposit <usdc>
+  tsx src/index.ts strategy use <uuid>
+  tsx src/index.ts strategy set <uuid> [--candle-source <source>] [--pair <pair>] [--deposit <usdc>] [--risk-percent <n>] [key=value ...]
+  tsx src/index.ts strategy remove <uuid>
   tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
   tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
 
@@ -62,7 +69,14 @@ Options:
 }
 
 const ENGINE_MODES = ["watch", "paper", "trade"] as const;
-const CLI_COMMANDS = [...ENGINE_MODES, "wallet", "positions", "backtest", "tune"] as const;
+const CLI_COMMANDS = [
+  ...ENGINE_MODES,
+  "wallet",
+  "positions",
+  "strategy",
+  "backtest",
+  "tune",
+] as const;
 
 type CliCommand = (typeof CLI_COMMANDS)[number];
 
@@ -117,6 +131,9 @@ async function main(): Promise<void> {
       return;
     case "positions":
       await runPositionsCommand(rest);
+      return;
+    case "strategy":
+      await runStrategyCommand(rest);
       return;
   }
 }
@@ -230,6 +247,15 @@ async function runPositionsCommand(argv: string[]): Promise<void> {
   }
   const config = await loadConfig();
   await runPositions(config, argv);
+}
+
+async function runStrategyCommand(argv: string[]): Promise<void> {
+  if (argv.length === 0) {
+    console.error(strategyUsage());
+    usage();
+  }
+  await loadConfig();
+  await runStrategy(argv);
 }
 
 async function runWalletCommand(argv: string[]): Promise<void> {

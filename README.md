@@ -65,7 +65,7 @@ Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 pnpm start
 ```
 
-Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot), `pnpm positions` (open or close the live long or short).
+Explicit commands still override `MODE`: `pnpm watch`, `pnpm paper`, `pnpm trade`, `pnpm wallet` (live portfolio snapshot), `pnpm positions` (open or close the live long or short), `pnpm strategy` (assign instances to this bot).
 
 ### Telegram (optional)
 
@@ -181,6 +181,16 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
+Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Backtest and tune still take `STRATEGY` until a later phase reads this selection.
+
+```bash
+pnpm strategy list
+pnpm strategy add bollinger SOL/USDC --candle-source gecko-terminal --deposit 1000
+pnpm strategy use 00000000-0000-4000-8000-000000000000
+pnpm strategy set 00000000-0000-4000-8000-000000000000 period=14 --risk-percent 1
+pnpm strategy remove 00000000-0000-4000-8000-000000000000
+```
+
 Offline backtest (replay cached/fetched OHLCV with emulated fill costs):
 
 ```bash
@@ -254,7 +264,7 @@ pnpm migrate
 pnpm paper
 ```
 
-Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up` via the package script; a second run is a no-op). Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`. After migrations that add or drop schemas/tables/sequences/types, re-run [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) as the object owner so role `speculator` stays aligned.
+Apply schema with `pnpm migrate` ([dbmate](https://github.com/amacneil/dbmate) `up`, then [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) as the `DATABASE_URL` role). A second run is a no-op for schema and reapplies grants. Engines do **not** auto-migrate; they exit if the database is behind the files in `migrations/`. The `DATABASE_URL` role must own the objects. Remote Timescale with a self-signed certificate needs `sslmode=no-verify` so the Node client uses TLS.
 
 ## Deploy (Ubuntu VPS + systemd)
 
@@ -262,7 +272,21 @@ Build on your machine and copy each process with [deploy/bot.sh](./deploy/bot.sh
 
 ### 1. Host prerequisites
 
-On the VPS: Node ≥ 24, `pnpm`, and SSH sudo for the deploy user.
+From your machine, install TimescaleDB on the VPS (PostgreSQL 18, role and database `speculator`):
+
+```bash
+SPECULATOR_PASSWORD='…' ./deploy/db.sh user@vps.example.com
+```
+
+PostgreSQL listens on `127.0.0.1`. The local app URL is written on the host at `/root/speculator-database-url`. For remote clients over TLS (`sslmode=require`, port 5432):
+
+```bash
+SPECULATOR_PASSWORD='…' SPECULATOR_DB_PUBLIC=1 ./deploy/db.sh user@vps.example.com
+```
+
+`SPECULATOR_DB_HOST` overrides the hostname stored for those clients (default: the SSH host). Schema is still applied with `pnpm migrate` after `.env` is in place, then [scripts/grant-privileges.sql](./scripts/grant-privileges.sql) as the object owner.
+
+Also install Node ≥ 24, `pnpm`, and SSH sudo for the deploy user.
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
@@ -284,7 +308,7 @@ Requires SSH access and `pnpm` on the host (bot only). Builds locally, then scp�
 ./deploy/miniapp.sh user@vps.example.com /opt/speculator
 ```
 
-First time: edit secrets on the host, then migrate:
+First time: copy `DATABASE_URL` from `/root/speculator-database-url` into the host env, migrate, then restart:
 
 ```bash
 ssh user@vps.example.com

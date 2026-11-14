@@ -725,6 +725,7 @@ function pct(n: number): string {
 
 export const strategyModule: StrategyModule = {
   id: "keltner-stoch",
+  defaults: () => keltnerStochParamsFor(),
   create(patch) {
     return new KeltnerStochStrategy(applySearchPatch(keltnerStochParamsFor(), patch));
   },

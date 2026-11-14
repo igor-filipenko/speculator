@@ -84,7 +84,7 @@ export function isPublicSolanaRpc(url: string): boolean {
   return url === DEFAULT_SOLANA_RPC;
 }
 
-async function resolvePair(symbol: string): Promise<PairConfig> {
+export async function resolvePair(symbol: string): Promise<PairConfig> {
   const normalized = symbol.trim().toUpperCase();
   const parts = normalized.split("/");
   if (parts.length !== 2 || !parts[0] || !parts[1]) {

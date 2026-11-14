@@ -3,6 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { getBotId, query, resetSpeculatorDbCache } from "../db/db.js";
 import { truncateBotAndMarket, useTestDb } from "../db/test-db.js";
 import { applyStrategyCommand, parseStrategyArgs } from "./strategy.js";
+import { loadAssignedInstances, loadSelectedInstance } from "./tick.js";
 
 const UNUSED = "00000000-0000-4000-8000-000000000000";
 
@@ -242,6 +243,47 @@ describe("strategy commands", () => {
         }),
       /unknown candle source/,
     );
+  });
+
+  it("loads the assignment and the selection", async () => {
+    await assert.rejects(() => loadSelectedInstance(), /no strategy selected/);
+    await applyStrategyCommand({
+      kind: "add",
+      registryId: "bollinger",
+      pair: "SOL/USDC",
+      candleSource: "gecko-terminal",
+      depositUsdc: 1000,
+    });
+    const instances = await loadAssignedInstances();
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0]?.registryId, "bollinger");
+    assert.equal(instances[0]?.pair.symbol, "SOL/USDC");
+    assert.equal(instances[0]?.depositUsdc, 1000);
+    assert.equal(instances[0]?.riskPercent, 2);
+    const selected = await loadSelectedInstance();
+    assert.equal(selected.id, instances[0]?.id);
+  });
+
+  it("rejects two exchanges on one pair", async () => {
+    const botId = getBotId();
+    const inserted = await query<{ id: string }>(
+      `
+      INSERT INTO strategy.instances (registry_id, pair, candle_source, exchange_id, risk_percent, params)
+      VALUES
+        ('bollinger', 'SOL/USDC', 'gecko-terminal', 'jupiter', 2, '{}'::jsonb),
+        ('donchian', 'SOL/USDC', 'gecko-terminal', 'emulated', 2, '{}'::jsonb)
+      RETURNING id::text AS id
+      `,
+    );
+    assert.equal(inserted.length, 2);
+    await query(
+      `
+      INSERT INTO bot.strategies (bot_id, strategy_id, deposit_usdc)
+      SELECT $1, id::uuid, 10 FROM strategy.instances WHERE pair = 'SOL/USDC'
+      `,
+      [botId],
+    );
+    await assert.rejects(() => loadAssignedInstances(), /same exchange/);
   });
 });
 

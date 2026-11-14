@@ -1,4 +1,3 @@
-import { assert } from "console";
 import { renderConsoleChart } from "../chart/render-console.js";
 import type { AppConfig } from "../config.js";
 import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
@@ -8,12 +7,13 @@ import { createMarket } from "../market/manager.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
 import { riskPercentFor } from "../db/bot.js";
 import { GenericRiskManager } from "../risk/risk-manager.js";
+import { runInstanceTick } from "./tick.js";
 import {
-  isOrder,
   type Candle,
   type Market,
   type Order,
   type PairConfig,
+  type Portfolio,
   type Strategy,
   type StrategyManager,
   type Trade,
@@ -30,8 +30,6 @@ export interface BacktestCliOptions {
   toTime?: number;
   /** Print simulated trades and chart; when false, metrics only. */
   verbose: boolean;
-  /** CLI override for strategy (takes precedence over env STRATEGY). */
-  strategy?: string;
   /**
    * Number of Monte Carlo runs with randomized intra-bar paths.
    * When set, `BacktestResult.monteCarlo` is printed after the main report.
@@ -207,6 +205,8 @@ export interface RunWalkForwardOptions {
   quotes?: "1m";
   /** Injected 1m candles used when `quotes` is `1m`. Fetched when omitted. */
   minuteCandles?: Candle[];
+  /** Instance risk percent. When omitted, the replay looks up the registry row. */
+  riskPercent?: number;
 }
 
 export interface RunBacktestOptions {
@@ -228,6 +228,8 @@ export interface RunBacktestOptions {
    * Each run uses a deterministic seed so results are reproducible.
    */
   monteCarloRuns?: number;
+  /** Instance risk percent. When omitted, the replay looks up the registry row. */
+  riskPercent?: number;
 }
 
 /**
@@ -274,6 +276,11 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       candles,
     });
 
+    const riskPercent = await resolveRiskPercent(
+      pair.symbol,
+      strategy.getId(),
+      options.riskPercent,
+    );
     const pairArgs = {
       pair,
       strategyManager,
@@ -281,6 +288,7 @@ export async function runBacktest(options: RunBacktestOptions): Promise<Backtest
       startingCashUsdc: options.config.paperCashUsdc,
       fromTime: candles[0]!.time,
       toTime: candles[candles.length - 1]!.time + 1,
+      riskPercent,
       ...(minuteCandles !== undefined ? { minuteCandles } : {}),
     };
     const result = await replayPair(pairArgs);
@@ -338,6 +346,11 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
       candles: allCandles,
     });
 
+    const riskPercent = await resolveRiskPercent(
+      pair.symbol,
+      strategy.getId(),
+      options.riskPercent,
+    );
     const foldSlices = splitCandlesIntoFolds(allCandles, options.walkForwardFolds);
     if (foldSlices.length < 2) {
       throw new Error(
@@ -358,6 +371,7 @@ export async function runWalkForward(options: RunWalkForwardOptions): Promise<Wa
         startingCashUsdc: options.config.paperCashUsdc,
         fromTime: foldFrom,
         toTime: foldTo,
+        riskPercent,
         ...(minuteCandles !== undefined ? { minuteCandles } : {}),
       });
       foldResults.push({
@@ -481,6 +495,30 @@ function minutesForBar(
   return minutes.slice(start, index);
 }
 
+function memoryBook(portfolio: PaperPortfolio): Portfolio {
+  return {
+    getSnapshot: (markPrice) => portfolio.getSnapshot(markPrice),
+    syncFromChain: async () => {
+      /* Replay keeps the book in memory. */
+    },
+    applyOrder: (order) => Promise.resolve(portfolio.applyOrderSync(order)),
+    applyPositionData: (data) => {
+      portfolio.applyPositionDataSync(data);
+      return Promise.resolve();
+    },
+  };
+}
+
+async function resolveRiskPercent(
+  pair: string,
+  registryId: string,
+  override: number | undefined,
+): Promise<number> {
+  if (override !== undefined) return override;
+  if ((process.env["BOT_ID"]?.trim() ?? "") === "") return 2;
+  return riskPercentFor(pair, registryId);
+}
+
 async function replayPair(args: {
   pair: PairConfig;
   strategyManager: StrategyManager;
@@ -495,6 +533,7 @@ async function replayPair(args: {
   minuteCandles?: Candle[];
   /** When set, intra-bar prices use random OHLC orderings (Monte Carlo mode). */
   rng?: () => number;
+  riskPercent: number;
 }): Promise<BacktestResult> {
   if (args.minuteCandles !== undefined && args.rng !== undefined) {
     throw new Error("--quotes 1m and --monte-carlo cannot be combined");
@@ -514,12 +553,8 @@ async function replayPair(args: {
 
   // Undefined for a pair without a Jupiter Perps market: the strategy stays long-only.
   const perpsFees = await exchange.perpsFeeSchedule(pair);
-  const registryId = strategyManager.getActiveStrategy().getId();
-  const riskPercent =
-    (process.env["BOT_ID"]?.trim() ?? "") === ""
-      ? 2
-      : await riskPercentFor(pair.symbol, registryId);
-  const riskManager = new GenericRiskManager(riskPercent);
+  const riskManager = new GenericRiskManager(args.riskPercent);
+  const book = memoryBook(portfolio);
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
@@ -545,36 +580,22 @@ async function replayPair(args: {
       const window = closed.concat(tick.forming);
       const price = tick.price;
       exchange.setMidPrice(price);
-
-      const strategy = strategyManager.getActiveStrategy();
-
-      const signal = strategy.evaluateSignal(
-        pair.symbol,
-        window,
+      const outcome = await runInstanceTick({
+        strategy: strategyManager.getActiveStrategy(),
+        riskManager,
+        exchange,
+        pair,
+        candles: window,
         price,
-        new Date(tick.atSec * 1000),
-        portfolio.getSnapshot(price),
-        perpsFees,
-      );
-
-      const result = riskManager.check(signal, portfolio.getSnapshot(price), window);
-      if (result.kind === "position-data") {
-        portfolio.applyPositionDataSync(result.data);
-        continue;
-      }
-      if (result.kind === "command" || result.kind === "protective-command") {
-        const command = result.command;
-        // Protective exits fill at the stop/trail level; cross signals use the tick price.
-        exchange.setMidPrice(command.priceHint > 0 ? command.priceHint : price);
-        const order = await exchange.execute(command, pair);
-        assert(isOrder(order), "Expected order, got error");
-        if (!isOrder(order)) {
-          continue;
-        }
-        const trade = portfolio.applyOrderSync(order);
-        if (trade) {
-          accumulateCosts(costs, trade, order);
-        }
+        at: new Date(tick.atSec * 1000),
+        ...(perpsFees !== undefined ? { perpsFees } : {}),
+        portfolio: book,
+        prepareFill: (hint) => {
+          exchange.setMidPrice(hint > 0 ? hint : price);
+        },
+      });
+      if (outcome.book.kind === "filled") {
+        accumulateCosts(costs, outcome.book.trade, outcome.book.order);
       }
     }
 
@@ -818,6 +839,7 @@ async function runMonteCarloForPair(args: {
   startingCashUsdc: number;
   fromTime: number;
   toTime: number;
+  riskPercent: number;
   runs: number;
 }): Promise<MonteCarloStats> {
   const { runs, ...replayArgs } = args;
@@ -1016,7 +1038,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   let verbose = false;
   let fromTime: number | undefined;
   let toTime: number | undefined;
-  let strategy: string | undefined;
   let monteCarloRuns: number | undefined;
   let walkForwardFolds: number | undefined;
   let quotes: "1m" | undefined;
@@ -1036,12 +1057,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
         throw new Error("--quotes only accepts 1m");
       }
       quotes = "1m";
-      i = nextIndex;
-      continue;
-    }
-    if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
-      const { value, nextIndex } = readFlagValue(argv, i, "--strategy");
-      strategy = value;
       i = nextIndex;
       continue;
     }
@@ -1093,9 +1108,6 @@ export function parseBacktestArgs(argv: string[]): BacktestCliOptions {
   }
   if (toTime !== undefined) {
     result.toTime = toTime;
-  }
-  if (strategy !== undefined) {
-    result.strategy = strategy;
   }
   if (monteCarloRuns !== undefined) {
     result.monteCarloRuns = monteCarloRuns;

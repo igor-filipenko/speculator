@@ -86,6 +86,28 @@ export class PaperPortfolio implements Portfolio {
     return portfolios;
   }
 
+  /** One book per instance. A missing ledger starts at that instance's deposit. */
+  static async openInstances(
+    instances: readonly {
+      id: string;
+      symbol: string;
+      registryId: string;
+      depositUsdc: number;
+    }[],
+  ): Promise<Map<string, Portfolio>> {
+    const saved = await loadPaperState();
+    const portfolios = new Map<string, Portfolio>();
+    for (const instance of instances) {
+      const persisted = saved?.portfolios[instance.id];
+      const portfolio = persisted
+        ? PaperPortfolio.fromPersisted(persisted)
+        : new PaperPortfolio(instance.symbol, instance.depositUsdc);
+      portfolio.bind(instance.id, instance.registryId);
+      portfolios.set(instance.id, portfolio);
+    }
+    return portfolios;
+  }
+
   /** Restore a portfolio from persisted state. */
   static fromPersisted(data: PersistedPortfolio): PaperPortfolio {
     const portfolio = new PaperPortfolio(data.position.pair, 0);
@@ -179,6 +201,11 @@ export class PaperPortfolio implements Portfolio {
 
   noteInstance(instanceId: string): void {
     this.instanceId = instanceId;
+  }
+
+  bind(instanceId: string, registryId: string): void {
+    this.instanceId = instanceId;
+    this.registryId = registryId;
   }
 
   getSnapshot(markPrice: number): PaperSnapshot {

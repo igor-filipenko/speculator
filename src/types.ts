@@ -437,6 +437,8 @@ export interface Exchange {
 
 export interface ProgramState {
   readonly strategy: Strategy;
+  /** Instance id → strategy, so a chart uses that instance's overlay. */
+  readonly strategies?: ReadonlyMap<string, Strategy>;
   readonly lastSignals: Map<string, Signal>;
   readonly lastCandles: Map<string, Candle[]>;
   readonly portfolios: Map<string, Portfolio>;

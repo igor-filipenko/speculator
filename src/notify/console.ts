@@ -101,8 +101,8 @@ export function logPortfolio(pair: string, snapshot: PortfolioSnapshot): void {
 }
 
 /** Persist one signal to Timescale for later analysis. */
-export async function persistSignal(signal: Signal): Promise<void> {
-  await insertSignal(signal);
+export async function persistSignal(signal: Signal, instanceId?: string): Promise<void> {
+  await insertSignal(signal, instanceId);
 }
 
 function formatOpenPosition(position: { side: string; size: number; entryPrice: number }): string {

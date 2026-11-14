@@ -15,9 +15,10 @@ import { createLiveRuntime, runTrade } from "./engine/trade.js";
 import { runWallet, runWalletExport } from "./engine/wallet.js";
 import { runWatch } from "./engine/watch.js";
 import { Telegram } from "./notify/telegram.js";
+import { loadAssignedInstances, loadSelectedInstance, paramsToPatch } from "./engine/tick.js";
+import { LivePortfolio } from "./portfolio/live/portfolio.js";
 import { PaperPortfolio } from "./portfolio/paper/portfolio.js";
-import { SimpleStrategyManager } from "./strategy/strategy-manager.js";
-import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal } from "./types.js";
+import type { Candle, Portfolio, ProgramState, ShutdownCb, Signal, Strategy } from "./types.js";
 
 function usage(): never {
   console.log(`Usage:
@@ -44,8 +45,8 @@ function usage(): never {
   tsx src/index.ts strategy use <uuid>
   tsx src/index.ts strategy set <uuid> [--candle-source <source>] [--pair <pair>] [--deposit <usdc>] [--risk-percent <n>] [key=value ...]
   tsx src/index.ts strategy remove <uuid>
-  tsx src/index.ts backtest [--from <date> [--to <date>]] [--strategy <name>] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
-  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--strategy <name>] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
+  tsx src/index.ts backtest [--from <date> [--to <date>]] [--verbose] [--quotes 1m] [--monte-carlo <n> | --walk-forward <n>]
+  tsx src/index.ts tune [--days <n> | --from <date> [--to <date>]] [--folds <n>] [--max-trials <n>] [--seed <n>] [--min-trades <n>] [--max-dd <pct>] [--jobs <n>] [--quotes 1m]
 
 Options:
   --once            Run a single poll iteration and exit (watch/paper/trade)
@@ -53,7 +54,6 @@ Options:
   --days <n>        Replay lookback in days (tune only; default: 365)
   --from <date>     Replay range start (YYYY-MM-DD or DD-MM-YYYY, UTC)
   --to <date>       Replay range end inclusive (default: now; requires --from)
-  --strategy <name> Override strategy (backtest only; default: env STRATEGY)
   --verbose, -v     Print simulated trades and chart (backtest only; default: metrics)
   --quotes 1m       Replay quotes on 1m closes (backtest and tune; default: synthetic OHLC path; excludes --monte-carlo)
   --monte-carlo <n> Run N Monte Carlo intra-bar path samples (backtest only; ≥ 1)
@@ -138,19 +138,28 @@ async function main(): Promise<void> {
   }
 }
 
+function programStateFor(
+  instances: readonly { id: string; strategy: Strategy }[],
+  portfolios: Map<string, Portfolio> = new Map<string, Portfolio>(),
+): ProgramState {
+  const strategy = instances[0]?.strategy;
+  if (strategy === undefined) {
+    throw new Error("no strategies assigned to this bot; run strategy add");
+  }
+  return {
+    strategy,
+    strategies: new Map(instances.map((instance) => [instance.id, instance.strategy])),
+    lastSignals: new Map<string, Signal>(),
+    lastCandles: new Map<string, Candle[]>(),
+    portfolios,
+  };
+}
+
 async function runWatchCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = await SimpleStrategyManager.create({
-    strategyId: config.strategy,
-  });
-  const strategy = strategyManager.getActiveStrategy();
-  const programState: ProgramState = {
-    strategy,
-    lastSignals: new Map<string, Signal>(),
-    lastCandles: new Map<string, Candle[]>(),
-    portfolios: new Map<string, Portfolio>(),
-  };
+  const instances = await loadAssignedInstances(config.botId);
+  const programState = programStateFor(instances);
 
   const telegram = Telegram.start(once ? undefined : config.telegram, programState);
   const shutdownCb: ShutdownCb = once
@@ -161,33 +170,27 @@ async function runWatchCommand(argv: string[]): Promise<void> {
 
   await runWatch({
     config,
-    strategyManager,
     state: programState,
     telegram,
     once,
     shutdownCb,
+    instances,
   });
 }
 
 async function runPaperCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = await SimpleStrategyManager.create({
-    strategyId: config.strategy,
-  });
-  const strategy = strategyManager.getActiveStrategy();
-  const portfolios: Map<string, Portfolio> = await PaperPortfolio.load(
-    config.pairs,
-    config.paperCashUsdc,
-    config.strategy,
+  const instances = await loadAssignedInstances(config.botId);
+  const portfolios = await PaperPortfolio.openInstances(
+    instances.map((instance) => ({
+      id: instance.id,
+      symbol: instance.pair.symbol,
+      registryId: instance.registryId,
+      depositUsdc: instance.depositUsdc,
+    })),
   );
-
-  const programState: ProgramState = {
-    strategy,
-    lastSignals: new Map<string, Signal>(),
-    lastCandles: new Map<string, Candle[]>(),
-    portfolios,
-  };
+  const programState = programStateFor(instances, portfolios);
 
   const telegram = Telegram.start(once ? undefined : config.telegram, programState);
   const shutdownCb: ShutdownCb = once
@@ -198,30 +201,35 @@ async function runPaperCommand(argv: string[]): Promise<void> {
 
   await runPaper({
     config,
-    strategyManager,
     state: programState,
     telegram,
     once,
     shutdownCb,
+    instances,
   });
 }
 
 async function runTradeCommand(argv: string[]): Promise<void> {
   const once = argv.includes("--once");
   const config = await loadConfig();
-  const strategyManager = await SimpleStrategyManager.create({
-    strategyId: config.strategy,
-  });
-  const strategy = strategyManager.getActiveStrategy();
-  const runtime = await createLiveRuntime(config);
+  const instances = await loadAssignedInstances(config.botId);
+  const runtime = await createLiveRuntime(config, { loadBooks: false });
   console.log(`Wallet ${runtime.walletAddress}`);
-
-  const programState: ProgramState = {
-    strategy,
-    lastSignals: new Map<string, Signal>(),
-    lastCandles: new Map<string, Candle[]>(),
-    portfolios: runtime.portfolios,
-  };
+  const portfolios = await LivePortfolio.openInstances(
+    instances.map((instance) => ({
+      id: instance.id,
+      pair: instance.pair,
+      registryId: instance.registryId,
+      depositUsdc: instance.depositUsdc,
+    })),
+    runtime.balances,
+    {
+      solReserveMin: config.solReserveMin,
+      solReserveMax: config.solReserveMax,
+      positions: runtime.exchange,
+    },
+  );
+  const programState = programStateFor(instances, portfolios);
 
   const telegram = Telegram.start(once ? undefined : config.telegram, programState);
   const shutdownCb: ShutdownCb = once
@@ -232,12 +240,12 @@ async function runTradeCommand(argv: string[]): Promise<void> {
 
   await runTrade({
     config,
-    strategyManager,
     exchange: runtime.exchange,
     state: programState,
     telegram,
     once,
     shutdownCb,
+    instances,
   });
 }
 
@@ -287,15 +295,22 @@ async function runWalletCommand(argv: string[]): Promise<void> {
 async function runBacktestCommand(argv: string[]): Promise<void> {
   const flags = parseBacktestArgs(argv);
   const config = await loadConfig();
-
-  const strategyManager = await SimpleStrategyManager.create({
-    strategyId: flags.strategy ?? config.strategy,
-  });
+  const selected = await loadSelectedInstance(config.botId);
+  const strategyManager = {
+    getActiveStrategy: () => selected.strategy,
+  };
+  const replayConfig = {
+    ...config,
+    pairs: [selected.pair],
+    candleSource: selected.candleSource,
+    paperCashUsdc: selected.depositUsdc,
+  };
 
   if (flags.walkForwardFolds !== undefined) {
     const results = await runWalkForward({
-      config,
+      config: replayConfig,
       strategyManager,
+      riskPercent: selected.riskPercent,
       walkForwardFolds: flags.walkForwardFolds,
       ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
       ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
@@ -308,8 +323,9 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
   }
 
   const results = await runBacktest({
-    config,
+    config: replayConfig,
     strategyManager,
+    riskPercent: selected.riskPercent,
     ...(flags.fromTime !== undefined ? { fromTime: flags.fromTime } : {}),
     ...(flags.toTime !== undefined ? { toTime: flags.toTime } : {}),
     ...(flags.monteCarloRuns !== undefined ? { monteCarloRuns: flags.monteCarloRuns } : {}),
@@ -327,9 +343,17 @@ async function runBacktestCommand(argv: string[]): Promise<void> {
 async function runTuneCommand(argv: string[]): Promise<void> {
   const flags = parseTuneArgs(argv);
   const config = await loadConfig();
+  const selected = await loadSelectedInstance(config.botId);
   const results = await runTune({
-    config,
-    strategyId: flags.strategy ?? config.strategy,
+    config: {
+      ...config,
+      pairs: [selected.pair],
+      candleSource: selected.candleSource,
+      paperCashUsdc: selected.depositUsdc,
+    },
+    strategyId: selected.registryId,
+    paramPatch: paramsToPatch(selected.params),
+    riskPercent: selected.riskPercent,
     folds: flags.folds,
     maxTrials: flags.maxTrials,
     seed: flags.seed,

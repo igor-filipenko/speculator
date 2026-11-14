@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) from the strategy named by `STRATEGY` on GeckoTerminal OHLCV, with optional **paper** portfolio filled from Jupiter swap quotes, **live** Jupiter swaps (`pnpm trade`), offline **backtest** replay, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
+**speculator** — TypeScript CLI that emits Solana trade _recommendations_ (`BUY` / `SELL` / `HOLD`) for every strategy instance assigned to `BOT_ID`. Paper fills come from Jupiter swap quotes, live swaps run with `pnpm trade`, backtest and tune replay the selected instance, plus a read-only **Telegram Mini App** (`server/` Axum HTTP + `web/` React SPA).
 
 Build/run: [README.md](./README.md).
 

@@ -3,7 +3,7 @@ import { instanceIdForPair } from "./bot.js";
 import { getBotId, query } from "./db.js";
 
 /** Persist one signal for later analysis. */
-export async function insertSignal(signal: Signal): Promise<void> {
+export async function insertSignal(signal: Signal, instanceId?: string): Promise<void> {
   const botId = getBotId();
   const emaFast = signal.meta?.emaFast ?? null;
   const emaSlow = signal.meta?.emaSlow ?? null;
@@ -11,11 +11,13 @@ export async function insertSignal(signal: Signal): Promise<void> {
   const trendEma = signal.meta?.trendEma ?? null;
   const atr = signal.meta?.atr ?? null;
   const adx = signal.meta?.adx ?? null;
-  const strategyId = await instanceIdForPair(
-    (text, values) => query(text, values),
-    signal.pair,
-    signal.strategyId,
-  );
+  const strategyId =
+    instanceId ??
+    (await instanceIdForPair(
+      (text, values) => query(text, values),
+      signal.pair,
+      signal.strategyId,
+    ));
   await query(
     `
     INSERT INTO market.signals (

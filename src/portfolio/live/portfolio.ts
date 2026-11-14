@@ -103,6 +103,30 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     return portfolios;
   }
 
+  /** One book per instance. A missing ledger starts at that instance's deposit. */
+  static async openInstances(
+    instances: readonly {
+      id: string;
+      pair: PairConfig;
+      registryId: string;
+      depositUsdc: number;
+    }[],
+    balances: BalanceSource,
+    options: LivePortfolioOptions,
+  ): Promise<Map<string, Portfolio>> {
+    const saved = await loadLiveState();
+    const portfolios = new Map<string, Portfolio>();
+    for (const instance of instances) {
+      const persisted = saved?.portfolios[instance.id];
+      const portfolio = persisted
+        ? LivePortfolio.fromPersisted(instance.pair, balances, options, persisted)
+        : new LivePortfolio(instance.pair, balances, options, instance.depositUsdc);
+      portfolio.bind(instance.id, instance.registryId);
+      portfolios.set(instance.id, portfolio);
+    }
+    return portfolios;
+  }
+
   static fromPersisted(
     pair: PairConfig,
     balances: BalanceSource,
@@ -201,6 +225,11 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
 
   noteInstance(instanceId: string): void {
     this.instanceId = instanceId;
+  }
+
+  bind(instanceId: string, registryId: string): void {
+    this.instanceId = instanceId;
+    this.registryId = registryId;
   }
 
   getSnapshot(markPrice: number): PortfolioSnapshot {

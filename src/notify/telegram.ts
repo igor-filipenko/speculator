@@ -310,14 +310,17 @@ function formatPortfolioMessage(
   }
 
   const blocks: string[] = ["💼 *Portfolio*"];
-  for (const [pair, portfolio] of portfolios) {
-    const markPrice = lastSignals.get(pair)?.price ?? 0;
+  for (const [key, portfolio] of portfolios) {
+    const signal = lastSignals.get(key);
+    const markPrice = signal?.price ?? 0;
     const snapshot = portfolio.getSnapshot(markPrice);
+    const pair = signal?.pair ?? snapshot.position.pair;
+    const label = signal ? `${pair} ${signal.strategyId}` : pair;
     const pos = formatPosition(snapshot.position);
 
     blocks.push(
       "",
-      `*${escapeMd(pair)}*`,
+      `*${escapeMd(label)}*`,
       `Cash ${code(`${snapshot.cashUsdc.toFixed(4)} USDC`)}`,
       `Position ${code(pos)}`,
       `Equity ${code(snapshot.equity.toFixed(4))}`,
@@ -442,17 +445,19 @@ async function sendCharts(ctx: Context, state: ProgramState): Promise<void> {
   }
 
   let sent = 0;
-  for (const [pair, candles] of state.lastCandles) {
+  for (const [key, candles] of state.lastCandles) {
     if (candles.length === 0) {
       continue;
     }
+    const signal = state.lastSignals.get(key);
+    const pair = signal?.pair ?? key;
     try {
       const png = renderOhlcvPng({
         pair,
         candles,
-        strategy: state.strategy,
+        strategy: state.strategies?.get(key) ?? state.strategy,
       });
-      const caption = formatChartCaption(pair, state.lastSignals.get(pair));
+      const caption = formatChartCaption(pair, signal);
       await ctx.replyWithPhoto(new InputFile(png, `${pair.replace("/", "-")}-chart.png`), {
         caption,
         parse_mode: PARSE_MODE,

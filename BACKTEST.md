@@ -1,6 +1,6 @@
 # Backtest Guide
 
-Replay OHLCV candles through the active strategy with emulated Jupiter fills.  
+Replay OHLCV candles through the selected strategy instance with emulated Jupiter fills. Pair, candle source, params, risk, and deposit come from that instance.  
 Three analysis modes: plain backtest, Monte Carlo path sampling, and walk-forward validation.
 
 ---
@@ -13,9 +13,6 @@ pnpm backtest
 
 # Custom window, print trades + chart
 pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --verbose
-
-# Override STRATEGY with another registry id
-pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy <id>
 ```
 
 ---
@@ -26,7 +23,6 @@ pnpm backtest -- --from 01-09-2026 --to 30-09-2026 --strategy <id>
 | -------------------- | ----------------------------------------------------------------------------------- |
 | `--from <date>`      | Range start. Formats: `YYYY-MM-DD` or `DD-MM-YYYY` (UTC)                            |
 | `--to <date>`        | Range end inclusive (exclusive in code). Requires `--from`                          |
-| `--strategy <name>`  | Override `STRATEGY` from `.env` with a `strategy.registry` id                       |
 | `--verbose` / `-v`   | Print every simulated fill + ASCII chart                                            |
 | `--monte-carlo <n>`  | Run N additional replays with randomised intra-bar paths (≥ 1)                      |
 | `--walk-forward <n>` | Split period into N sequential folds (≥ 2; mutually exclusive with `--monte-carlo`) |
@@ -201,7 +197,7 @@ Check:
 Run the same window once per `strategy.registry` id:
 
 ```bash
-pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --strategy <id> --walk-forward 6
+pnpm backtest -- --from 01-07-2026 --to 30-09-2026 --walk-forward 6
 ```
 
 Compare by `N/N folds beat B&H`, not by total return. Total return can be inflated by a single lucky fold.

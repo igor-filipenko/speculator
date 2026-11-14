@@ -62,7 +62,6 @@ export interface TuneCliOptions {
   toTime?: number;
   /** Set only when `--days` is passed. */
   days?: number;
-  strategy?: string;
   folds: number;
   maxTrials: number;
   seed: number;
@@ -149,6 +148,10 @@ export interface RunTuneOptions {
   space?: SearchSpace;
   /** Signal candles. When set, skips the network and reuses this series for every pair. */
   candles?: Candle[];
+  /** Instance knobs. Trial patches overlay this and are not written back. */
+  paramPatch?: StrategyParamPatch;
+  /** Instance risk percent. When omitted, each replay looks up the registry row. */
+  riskPercent?: number;
 }
 
 /** Axis values taken from `source`. Each axis key must be present. */
@@ -263,7 +266,6 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
   let fromTime: number | undefined;
   let toTime: number | undefined;
   let days: number | undefined;
-  let strategy: string | undefined;
   let folds = TUNE_DEFAULT_FOLDS;
   let maxTrials = TUNE_DEFAULT_MAX_TRIALS;
   let seed = TUNE_DEFAULT_SEED;
@@ -292,12 +294,6 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
     if (arg === "--days" || arg?.startsWith("--days=")) {
       const { value, nextIndex } = readFlagValue(argv, i, "--days");
       days = positiveInt(value, "--days");
-      i = nextIndex;
-      continue;
-    }
-    if (arg === "--strategy" || arg?.startsWith("--strategy=")) {
-      const { value, nextIndex } = readFlagValue(argv, i, "--strategy");
-      strategy = value;
       i = nextIndex;
       continue;
     }
@@ -407,7 +403,6 @@ export function parseTuneArgs(argv: string[]): TuneCliOptions {
   if (fromTime !== undefined) result.fromTime = fromTime;
   if (toTime !== undefined) result.toTime = toTime;
   if (days !== undefined) result.days = days;
-  if (strategy !== undefined) result.strategy = strategy;
   if (quotes !== undefined) result.quotes = quotes;
   return result;
 }
@@ -421,6 +416,7 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
   const window = replayWindow(options);
   const probe = await SimpleStrategyManager.create({
     strategyId: options.strategyId,
+    ...(options.paramPatch !== undefined ? { paramPatch: options.paramPatch } : {}),
   });
   const strategy = probe.getActiveStrategy();
   const space = options.space ?? strategy;
@@ -496,6 +492,8 @@ export async function runTune(options: RunTuneOptions): Promise<TuneResult[]> {
             : {}),
         },
         jobs: options.jobs ?? 1,
+        ...(options.paramPatch !== undefined ? { basePatch: options.paramPatch } : {}),
+        ...(options.riskPercent !== undefined ? { riskPercent: options.riskPercent } : {}),
       }),
     );
   }
@@ -592,6 +590,8 @@ interface ReplayContext {
   altCandles: Record<string, Candle[]>;
   /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
   minuteCandles?: Candle[];
+  basePatch?: StrategyParamPatch;
+  riskPercent?: number;
   pool?: ReplayPool;
 }
 
@@ -660,6 +660,9 @@ async function tunePair(args: {
   jobs: number;
   /** Time-sorted 1m candles covering the signal series. */
   minuteCandles?: Candle[];
+  /** Instance knobs under every trial patch. */
+  basePatch?: StrategyParamPatch;
+  riskPercent?: number;
 }): Promise<TuneResult> {
   const bounds = foldBounds(args.candles, args.folds);
   const sample = sampleSearchSpace(args.space, args.maxTrials, args.seed, args.defaults);
@@ -673,6 +676,8 @@ async function tunePair(args: {
           candles: args.candles,
           altCandles: args.altCandles,
           ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
+          ...(args.basePatch !== undefined ? { basePatch: args.basePatch } : {}),
+          ...(args.riskPercent !== undefined ? { riskPercent: args.riskPercent } : {}),
         })
       : undefined;
   try {
@@ -691,6 +696,8 @@ async function tunePair(args: {
       candles: args.candles,
       altCandles: args.altCandles,
       ...(args.minuteCandles !== undefined ? { minuteCandles: args.minuteCandles } : {}),
+      ...(args.basePatch !== undefined ? { basePatch: args.basePatch } : {}),
+      ...(args.riskPercent !== undefined ? { riskPercent: args.riskPercent } : {}),
       ...(pool !== undefined ? { pool } : {}),
     };
     const first = await runRequests(
@@ -959,6 +966,8 @@ async function replaySlice(ctx: ReplayContext, request: ReplayRequest): Promise<
     strategyId: ctx.strategyId,
     candles: replayCandles(ctx.candles, ctx.altCandles, request),
     ...(ctx.minuteCandles !== undefined ? { minuteCandles: ctx.minuteCandles } : {}),
+    ...(ctx.basePatch !== undefined ? { basePatch: ctx.basePatch } : {}),
+    ...(ctx.riskPercent !== undefined ? { riskPercent: ctx.riskPercent } : {}),
     ...(request.patch !== undefined ? { patch: request.patch } : {}),
   });
 }
@@ -987,21 +996,39 @@ async function loadTuneMinutes(args: {
   });
 }
 
+function mergeStrategyPatch(
+  base: StrategyParamPatch | undefined,
+  trial: StrategyParamPatch | undefined,
+): StrategyParamPatch | undefined {
+  if (base === undefined) return trial;
+  if (trial === undefined) return base;
+  const merged: StrategyParamPatch = {
+    values: { ...(base.values ?? {}), ...(trial.values ?? {}) },
+  };
+  const timeframe = trial.timeframe ?? base.timeframe;
+  if (timeframe !== undefined) merged.timeframe = timeframe;
+  return merged;
+}
+
 async function replayMetrics(args: {
   config: AppConfig;
   strategyId: string;
   candles: Candle[];
   minuteCandles?: Candle[];
   patch?: StrategyParamPatch;
+  basePatch?: StrategyParamPatch;
+  riskPercent?: number;
 }): Promise<BacktestMetrics> {
+  const paramPatch = mergeStrategyPatch(args.basePatch, args.patch);
   const strategyManager = await SimpleStrategyManager.create({
     strategyId: args.strategyId,
-    ...(args.patch !== undefined ? { paramPatch: args.patch } : {}),
+    ...(paramPatch !== undefined ? { paramPatch } : {}),
   });
   const [result] = await runBacktest({
     config: args.config,
     strategyManager,
     candles: args.candles,
+    ...(args.riskPercent !== undefined ? { riskPercent: args.riskPercent } : {}),
     ...(args.minuteCandles !== undefined
       ? { quotes: "1m" as const, minuteCandles: args.minuteCandles }
       : {}),
@@ -1380,6 +1407,8 @@ interface PoolInit {
   altCandles: Record<string, Candle[]>;
   /** Time-sorted 1m candles. Present only for a `--quotes 1m` tune. */
   minuteCandles?: Candle[];
+  basePatch?: StrategyParamPatch;
+  riskPercent?: number;
 }
 
 interface WorkerInitMessage {
@@ -1389,6 +1418,8 @@ interface WorkerInitMessage {
   candles: CandlePayload[];
   altCandles: Record<string, CandlePayload[]>;
   minuteCandles?: CandlePayload[];
+  basePatch?: StrategyParamPatch;
+  riskPercent?: number;
 }
 
 interface WorkerJobMessage {
@@ -1478,6 +1509,8 @@ class ReplayPool {
       ...(init.minuteCandles !== undefined
         ? { minuteCandles: candlePayload(init.minuteCandles) }
         : {}),
+      ...(init.basePatch !== undefined ? { basePatch: init.basePatch } : {}),
+      ...(init.riskPercent !== undefined ? { riskPercent: init.riskPercent } : {}),
     };
     return new Promise((resolve, reject) => {
       const onError = (error: Error): void => {
@@ -1647,6 +1680,8 @@ function startReplayWorker(): void {
         ...(message.minuteCandles !== undefined
           ? { minuteCandles: message.minuteCandles.map((row) => createCandle(row)) }
           : {}),
+        ...(message.basePatch !== undefined ? { basePatch: message.basePatch } : {}),
+        ...(message.riskPercent !== undefined ? { riskPercent: message.riskPercent } : {}),
       };
       port.postMessage({ kind: "ready" } satisfies WorkerOutbound);
       return;
@@ -1669,6 +1704,8 @@ function startReplayWorker(): void {
         ...(message.patch !== undefined ? { patch: message.patch } : {}),
       }),
       ...(current.minuteCandles !== undefined ? { minuteCandles: current.minuteCandles } : {}),
+      ...(current.basePatch !== undefined ? { basePatch: current.basePatch } : {}),
+      ...(current.riskPercent !== undefined ? { riskPercent: current.riskPercent } : {}),
       ...(message.patch !== undefined ? { patch: message.patch } : {}),
     }).then(
       (metrics) => {

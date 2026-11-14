@@ -1,17 +1,18 @@
 import type { AppConfig } from "../config.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
-import type { ProgramState, ShutdownCb, StrategyManager } from "../types.js";
+import type { ProgramState, ShutdownCb } from "../types.js";
 import { Telegram } from "../notify/telegram.js";
 import { runTradingLoop } from "./trade.js";
+import type { TradingInstance } from "./tick.js";
 
 export interface WatchOptions {
   config: AppConfig;
-  strategyManager: StrategyManager;
   state: ProgramState;
   telegram: Telegram;
   /** When true, run a single iteration then exit (useful for smoke tests). */
   once?: boolean;
   shutdownCb: ShutdownCb;
+  instances: TradingInstance[];
 }
 
 /**
@@ -23,5 +24,6 @@ export async function runWatch(options: WatchOptions): Promise<void> {
     ...options,
     exchange,
     modeLabel: "watch",
+    instances: options.instances,
   });
 }

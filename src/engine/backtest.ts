@@ -6,6 +6,7 @@ import { emulateFillPrice, liquidityTierForPair } from "../exchange/emulated/emu
 import { candleIntervalSeconds } from "../market/candle.js";
 import { createMarket } from "../market/manager.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
+import { GenericRiskManager } from "../risk/risk-manager.js";
 import {
   isOrder,
   type Candle,
@@ -512,6 +513,7 @@ async function replayPair(args: {
 
   // Undefined for a pair without a Jupiter Perps market: the strategy stays long-only.
   const perpsFees = await exchange.perpsFeeSchedule(pair);
+  const riskManager = new GenericRiskManager();
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
@@ -539,7 +541,6 @@ async function replayPair(args: {
       exchange.setMidPrice(price);
 
       const strategy = strategyManager.getActiveStrategy();
-      const riskManager = strategyManager.getActiveRiskManager();
 
       const signal = strategy.evaluateSignal(
         pair.symbol,

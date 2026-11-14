@@ -126,10 +126,7 @@ export function bollingerDecayTarget(input: {
   };
 }
 
-/**
- * Float slack so a ratio that lands a few ULPs under the floor still passes.
- * Same idea as the risk manager's reward:risk gate.
- */
+/** Float slack so a ratio that lands a few ULPs under the floor still passes. */
 const REWARD_RISK_EPSILON = 1e-9;
 
 /** Slippage + pool fee on a spot leg. Perps legs pay slippage only (no pool fee). */

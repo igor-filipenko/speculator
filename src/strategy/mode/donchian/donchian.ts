@@ -216,7 +216,7 @@ export function evaluateDonchian(input: DonchianInput): Signal {
     at,
     meta,
     tpPrices: [] as number[],
-    // No take-profit, so the reward:risk gate is skipped.
+    // Donchian lists no take-profit.
     minRewardRisk: 0,
   };
 

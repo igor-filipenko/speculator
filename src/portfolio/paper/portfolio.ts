@@ -1,6 +1,6 @@
 import { insertPaperTrade, upsertPaperPortfolio } from "../../db/paper.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { tighterStopPrice } from "../../strategy/risk-manager.js";
+import { tighterStopPrice } from "../../risk/risk-manager.js";
 import type {
   Order,
   PairConfig,

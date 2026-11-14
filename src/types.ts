@@ -71,13 +71,12 @@ export interface Signal {
   /**
    * Take-profit prices, nearest first.
    * Bollinger sets the middle band. Donchian sets none (empty).
-   * The risk manager uses the furthest price for the reward:risk gate.
    */
   tpPrices: number[];
   /**
    * Minimum reward per unit of stop risk for an opening signal.
-   * Bollinger holds below 0.2 after round-trip fees. The risk manager applies
-   * the same floor to the gross target. Unused when `tpPrices` is empty (Donchian sets 0).
+   * Bollinger, bollinger-rsi, and keltner-stoch apply this floor inside evaluate.
+   * Donchian sets 0.
    */
   minRewardRisk: number;
   /**
@@ -418,10 +417,9 @@ export interface RiskManager {
   check(signal: Signal, snapshot: PortfolioSnapshot, candles: Candle[]): RiskOrCommand;
 }
 
-/** Active strategy and risk manager for one process. */
+/** Active strategy for one process. */
 export interface StrategyManager {
   getActiveStrategy(): Strategy;
-  getActiveRiskManager(): RiskManager;
 }
 
 /** Quote + fill venue (Jupiter paper, live swap, or emulated backtest). */

@@ -2,7 +2,7 @@ import { match } from "ts-pattern";
 import { insertLiveTrade, loadLiveState, upsertLivePortfolio } from "../../db/live.js";
 import { tradableBaseSize } from "../../exchange/jupiter/amounts.js";
 import { perpsOpenFeeUsdc, shortCloseFeePct } from "../../exchange/jupiter/perps-fees.js";
-import { tighterStopPrice } from "../../strategy/risk-manager.js";
+import { tighterStopPrice } from "../../risk/risk-manager.js";
 import type {
   BalanceSource,
   Order,

@@ -5,12 +5,10 @@ import type { AppConfig } from "../config.js";
 import { TIER_COSTS, emulateFillPrice } from "../exchange/emulated/emulated-quote.js";
 import { createCandle } from "../market/candle.js";
 import { PaperPortfolio } from "../portfolio/paper/portfolio.js";
-import { GenericRiskManager } from "../strategy/risk-manager.js";
 import { loadStrategy, SimpleStrategyManager } from "../strategy/strategy-manager.js";
 import type {
   Candle,
   Order,
-  RiskManager,
   Signal,
   SignalSide,
   Strategy,
@@ -59,15 +57,10 @@ function makeConfig(cash = 1000): AppConfig {
   };
 }
 
-function makeRisk(): GenericRiskManager {
-  return new GenericRiskManager();
-}
-
 /** Test adapter: wrap a fixture Strategy the same way ticks read StrategyManager. */
-function managerFor(strategy: Strategy, riskManager: RiskManager = makeRisk()): StrategyManager {
+function managerFor(strategy: Strategy): StrategyManager {
   return {
     getActiveStrategy: () => strategy,
-    getActiveRiskManager: () => riskManager,
   };
 }
 

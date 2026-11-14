@@ -44,7 +44,7 @@ src/ highlights:
   market/               # OHLCV clients (gecko, binance, birdeye), Timescale cache
   exchange/             # emulated, or jupiter (spot long + perps short)
   strategy/             # indicators, one package per strategy under mode/<id>/, optional svg charts
-  risk/risk-manager.ts
+  risk/risk-manager.ts  # hard stop, deposit cap, tighter stop
   portfolio/            # live, paper, wallet (keypair + RPC balances)
   notify/               # console + Telegram grammY
   engine/               # watch | paper | trade (shared loop) | wallet | positions | strategy | backtest | tune

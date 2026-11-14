@@ -181,7 +181,7 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
-Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Backtest and tune still take `STRATEGY` until a later phase reads this selection.
+Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Each book keeps that instance's cash and position, so two instances on one pair do not share a deposit. The risk manager sizes an open from that instance's risk percent. Backtest and tune still take `STRATEGY` until a later phase reads this selection.
 
 ```bash
 pnpm strategy list
@@ -362,7 +362,7 @@ One position per pair: `long`, `short`, or `flat`.
 
 The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
-`SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. `src/risk/risk-manager.ts` sizes the deposit from the hard stop and writes a tighter stop onto the book. Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
+`SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. `src/risk/risk-manager.ts` sizes the deposit from the instance risk percent and the book equity, and writes a tighter stop onto that book. Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
 
 Paper fills are **simulated** (no on-chain fees, slippage, or MEV). Live fills (`pnpm trade`) are real Jupiter swaps. Backtest fills use emulated Jupiter-like costs on intra-bar OHLC ticks (stop level for ATR exits).
 

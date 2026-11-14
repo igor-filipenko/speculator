@@ -15,6 +15,7 @@ import {
 } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import { LivePortfolio } from "../portfolio/live/portfolio.js";
+import { riskPercentFor } from "../db/bot.js";
 import { GenericRiskManager } from "../risk/risk-manager.js";
 import { loadKeypairFromFile, WalletBalances } from "../portfolio/wallet/wallet.js";
 import {
@@ -84,11 +85,16 @@ export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime>
     solReserveMin: config.solReserveMin,
     solReserveMax: config.solReserveMax,
   });
-  const portfolios = await LivePortfolio.load(config.pairs, balances, {
-    solReserveMin: config.solReserveMin,
-    solReserveMax: config.solReserveMax,
-    positions: exchange,
-  });
+  const portfolios = await LivePortfolio.load(
+    config.pairs,
+    balances,
+    {
+      solReserveMin: config.solReserveMin,
+      solReserveMax: config.solReserveMax,
+      positions: exchange,
+    },
+    config.strategy,
+  );
 
   return {
     portfolios,
@@ -197,7 +203,7 @@ async function processPair(args: {
   const tryUseCache = nowMinute % 2 === 1;
 
   const strategy = strategyManager.getActiveStrategy();
-  const riskManager = new GenericRiskManager();
+  const riskManager = new GenericRiskManager(await riskPercentFor(pair.symbol, strategy.getId()));
 
   const requiredCandles = strategy.getRequiredCandles();
   const interval = candleIntervalSeconds(requiredCandles.timeframe);

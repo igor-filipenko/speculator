@@ -31,33 +31,32 @@ pnpm migrate
 
 Edit `.env`:
 
-| Variable                              | Meaning                                                                               |
-| ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `STRATEGY`                            | `strategy.registry` id. Implementation is `src/strategy/mode/<id>/index.ts`           |
-| `CANDLE_SOURCE`                       | OHLCV vendor: `gecko-terminal` (default), `binance`, or `birdeye`                     |
-| `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool               |
-| `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)              |
-| `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                  |
-| `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                 |
-| `DATABASE_POOL_MAX`                   | pg.Pool max clients (default `2`)                                                     |
-| `DATABASE_POOL_MIN`                   | pg.Pool min clients (default `0`)                                                     |
-| `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `15000`)                               |
-| `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `30000`)                                     |
-| `PGAPPNAME`                           | Postgres `application_name` (default `speculator/<BOT_ID>`)                           |
-| `JUPITER_API_KEY`                     | From [portal.jup.ag](https://portal.jup.ag/) — recommended                            |
-| `WATCHLIST`                           | `BASE/QUOTE` pairs resolved via `solana.tokens` + `solana.pools` (default `SOL/USDC`) |
-| `POLL_INTERVAL_MS`                    | Poll interval (default `60000`)                                                       |
-| `PAPER_CASH_USDC`                     | Starting virtual USDC for paper mode (when this `BOT_ID` has no paper rows)           |
-| `WALLET_KEYPAIR_PATH`                 | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo        |
-| `SOLANA_RPC_URL`                      | RPC for live balance reads (default public mainnet; use a dedicated RPC)              |
-| `SLIPPAGE_BPS`                        | Jupiter swap slippage (default `50`)                                                  |
-| `SOL_RESERVE_MIN`                     | Refill native SOL when below this (default `0.03`)                                    |
-| `SOL_RESERVE_MAX`                     | Target after refill; SOL below this is not sold (default `0.05`)                      |
-| `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                          |
-| `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                              |
-| `TELEGRAM_ALLOWED_USER_ID`            | Mini App allowlist (defaults to `TELEGRAM_CHAT_ID`)                                   |
-| `WEB_LISTEN`                          | Mini App listen addr (default `127.0.0.1:8787`)                                       |
-| `WEB_STATIC_DIR`                      | SPA directory (default `web/dist`)                                                    |
+| Variable                              | Meaning                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------ |
+| `CANDLE_SOURCE`                       | Unused by watch, paper, trade, backtest, and tune. An instance stores its own source |
+| `BIRDEYE_API_KEY`                     | Required when `CANDLE_SOURCE=birdeye`. Pair OHLCV for the selected pool              |
+| `MODE`                                | Engine for `pnpm start`: `watch` \| `paper` \| `trade` (default `paper`)             |
+| `BOT_ID`                              | Unique id for this process (isolates paper/live ledgers and signals)                 |
+| `DATABASE_URL`                        | TimescaleDB connection URI (required)                                                |
+| `DATABASE_POOL_MAX`                   | pg.Pool max clients (default `2`)                                                    |
+| `DATABASE_POOL_MIN`                   | pg.Pool min clients (default `0`)                                                    |
+| `DATABASE_POOL_IDLE_TIMEOUT_MS`       | Close idle clients after this many ms (default `15000`)                              |
+| `DATABASE_POOL_CONNECTION_TIMEOUT_MS` | Fail connect after this many ms (default `30000`)                                    |
+| `PGAPPNAME`                           | Postgres `application_name` (default `speculator/<BOT_ID>`)                          |
+| `JUPITER_API_KEY`                     | From [portal.jup.ag](https://portal.jup.ag/) — recommended                           |
+| `WATCHLIST`                           | Pairs for `wallet` and `positions`. Watch, paper, and trade use assigned instances   |
+| `POLL_INTERVAL_MS`                    | Poll interval (default `60000`)                                                      |
+| `PAPER_CASH_USDC`                     | Unused. Paper cash starts at each instance's deposit                                 |
+| `WALLET_KEYPAIR_PATH`                 | Solana CLI JSON keypair — **required for `pnpm trade`**. Keep outside the repo       |
+| `SOLANA_RPC_URL`                      | RPC for live balance reads (default public mainnet; use a dedicated RPC)             |
+| `SLIPPAGE_BPS`                        | Jupiter swap slippage (default `50`)                                                 |
+| `SOL_RESERVE_MIN`                     | Refill native SOL when below this (default `0.03`)                                   |
+| `SOL_RESERVE_MAX`                     | Target after refill; SOL below this is not sold (default `0.05`)                     |
+| `TELEGRAM_BOT_TOKEN`                  | Optional bot token from [@BotFather](https://t.me/BotFather)                         |
+| `TELEGRAM_CHAT_ID`                    | Optional chat id for alerts and commands                                             |
+| `TELEGRAM_ALLOWED_USER_ID`            | Mini App allowlist (defaults to `TELEGRAM_CHAT_ID`)                                  |
+| `WEB_LISTEN`                          | Mini App listen addr (default `127.0.0.1:8787`)                                      |
+| `WEB_STATIC_DIR`                      | SPA directory (default `web/dist`)                                                   |
 
 Set `MODE` in `.env` (`watch` | `paper` | `trade`), then:
 
@@ -181,7 +180,7 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
-Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Each book keeps that instance's cash and position, so two instances on one pair do not share a deposit. The risk manager sizes an open from that instance's risk percent. Backtest and tune still take `STRATEGY` until a later phase reads this selection.
+Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Each book keeps that instance's cash and position, so two instances on one pair do not share a deposit. The risk manager sizes an open from that instance's risk percent. Watch, paper, and trade run every assigned instance. Backtest and tune run the selected instance and read its pair, candle source, params, risk, and deposit.
 
 ```bash
 pnpm strategy list
@@ -208,7 +207,7 @@ pnpm backtest -- --verbose
 
 Without `--from`/`--to`, lookback is **90** days from now.
 
-OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from `CANDLE_SOURCE` (default GeckoTerminal; `binance` uses spot klines; `birdeye` uses the Solana pool). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
+OHLCV candles are stored in Timescale **`market.candles`** (hypertable, keyed by source, pool address, timeframe, and open time) and reused on later runs and by other processes sharing `DATABASE_URL`. Missing ranges are filled from the instance candle source (`gecko-terminal`, `binance` spot klines, or `birdeye` on the Solana pool). Vendor fetches and Timescale reads/upserts retry on transient failures until the window is filled. Each bar is replayed as a **forming** candle (open → low → high → close on green bars, open → high → low → close on red) so signals see the same incomplete last bar as live. Fills use the intra-bar tick as mid, then apply adverse costs (not live Jupiter):
 
 | Pair tier           | Slippage | Pool fee | Priority fee                |
 | ------------------- | -------- | -------- | --------------------------- |
@@ -231,7 +230,6 @@ pnpm tune -- --from 01-01-2026 --to 01-10-2026 --max-trials 48
 | -------------------- | ------------------------------------------------------------------------- |
 | `--days <n>`         | Lookback from now (default **365**; not with `--from`)                    |
 | `--from` / `--to`    | Same UTC dates as backtest                                                |
-| `--strategy <name>`  | `strategy.registry` id (default: env `STRATEGY`)                          |
 | `--folds <n>`        | Sequential folds, first is train-only (default **4**, minimum 2)          |
 | `--max-trials <n>`   | Trials per train window before neighbor fill (default **96**)             |
 | `--seed <n>`         | Latin-hypercube seed (default **1**)                                      |
@@ -360,7 +358,7 @@ Useful controls: `sudo systemctl stop bot` · `sudo systemctl restart miniapp` �
 
 One position per pair: `long`, `short`, or `flat`.
 
-The active strategy is `STRATEGY` or `--strategy`. That id must exist in `strategy.registry`. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
+Each running instance names a `strategy.registry` id. The implementation is `src/strategy/mode/<id>/index.ts`, which exports `strategyModule`. Adding a strategy is that folder, a test inside it, and `INSERT INTO strategy.registry (id, name, type)`. The directory name is the id. No other file lists strategy ids.
 
 `SimpleStrategyManager` loads that id and an optional parameter patch. Each strategy evaluates only its own candles. `src/risk/risk-manager.ts` sizes the deposit from the instance risk percent and the book equity, and writes a tighter stop onto that book. Tune searches the axes that strategy exports. Defaults, filters, and the `/chart` overlay live in the strategy file.
 

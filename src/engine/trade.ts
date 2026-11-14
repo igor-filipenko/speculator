@@ -15,11 +15,10 @@ import {
 } from "../notify/console.js";
 import { Telegram } from "../notify/telegram.js";
 import { LivePortfolio } from "../portfolio/live/portfolio.js";
-import { riskPercentFor } from "../db/bot.js";
 import { GenericRiskManager } from "../risk/risk-manager.js";
+import { runInstanceTick, type TradingInstance } from "./tick.js";
 import { loadKeypairFromFile, WalletBalances } from "../portfolio/wallet/wallet.js";
 import {
-  isOrder,
   type Candle,
   type Exchange,
   type Market,
@@ -27,41 +26,43 @@ import {
   type Portfolio,
   type PositionSource,
   type ProgramState,
-  type RiskManager,
   type ShutdownCb,
   type Signal,
-  type StrategyManager,
 } from "../types.js";
 
 export interface TradeOptions {
   config: AppConfig;
-  strategyManager: StrategyManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;
   once?: boolean;
   shutdownCb: ShutdownCb;
+  instances: TradingInstance[];
 }
 
 export interface LiveRuntime {
   portfolios: Map<string, Portfolio>;
   exchange: Exchange & PositionSource;
+  balances: import("../types.js").BalanceSource;
   walletAddress: string;
 }
 
 export interface TradingLoopOptions {
   config: AppConfig;
-  strategyManager: StrategyManager;
   exchange: Exchange;
   state: ProgramState;
   telegram: Telegram;
   once?: boolean;
   shutdownCb: ShutdownCb;
   modeLabel: string;
+  instances: TradingInstance[];
 }
 
-/** Shared wallet + exchange + live portfolios (one BalanceSource for all pairs). */
-export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime> {
+/** Shared wallet + exchange. Books load from the watchlist unless `loadBooks` is false. */
+export async function createLiveRuntime(
+  config: AppConfig,
+  options?: { loadBooks?: boolean },
+): Promise<LiveRuntime> {
   assertTradeConfig(config);
 
   const keypair = await loadKeypairFromFile(config.walletKeypairPath);
@@ -85,20 +86,24 @@ export async function createLiveRuntime(config: AppConfig): Promise<LiveRuntime>
     solReserveMin: config.solReserveMin,
     solReserveMax: config.solReserveMax,
   });
-  const portfolios = await LivePortfolio.load(
-    config.pairs,
-    balances,
-    {
-      solReserveMin: config.solReserveMin,
-      solReserveMax: config.solReserveMax,
-      positions: exchange,
-    },
-    config.strategy,
-  );
+  const portfolios =
+    options?.loadBooks === false
+      ? new Map<string, Portfolio>()
+      : await LivePortfolio.load(
+          config.pairs,
+          balances,
+          {
+            solReserveMin: config.solReserveMin,
+            solReserveMax: config.solReserveMax,
+            positions: exchange,
+          },
+          config.strategy,
+        );
 
   return {
     portfolios,
     exchange,
+    balances,
     walletAddress: keypair.publicKey.toBase58(),
   };
 }
@@ -118,15 +123,20 @@ export async function runTrade(options: TradeOptions): Promise<void> {
  * Watch mode skips fills when no portfolio is loaded for a pair.
  */
 export async function runTradingLoop(options: TradingLoopOptions): Promise<void> {
-  const { config, strategyManager, exchange, once = false, modeLabel } = options;
-  const market = createMarket(config.candleSource, config.birdeyeApiKey);
-  const strategy = strategyManager.getActiveStrategy();
+  const { config, exchange, once = false, modeLabel, instances } = options;
+  if (instances.length === 0) {
+    throw new Error("no strategies assigned to this bot; run strategy add");
+  }
+  const markets = new Map<string, Market>();
   const portfolios = options.state.portfolios;
   const lastSignals = options.state.lastSignals;
   const lastCandles = options.state.lastCandles;
   const telegram = options.telegram;
   const shutdown = options.shutdownCb;
-  const startMsg = `Starting ${modeLabel} mode | strategy=${strategy.getDisplayName()} | pairs=${config.watchlist.join(",")} | poll=${config.pollIntervalMs}ms`;
+  const names = instances
+    .map((instance) => `${instance.registryId} ${instance.pair.symbol}`)
+    .join(", ");
+  const startMsg = `Starting ${modeLabel} mode | ${names} | poll=${config.pollIntervalMs}ms`;
   console.log(startMsg);
 
   const ok = await telegram.notify({ type: "start" });
@@ -136,12 +146,12 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 
   const tick = async (): Promise<Delay> => {
     let nextDelay: Delay = Delay.any();
-    for (const pair of config.pairs) {
+    for (const instance of instances) {
+      const market = marketFor(markets, instance.candleSource, config.birdeyeApiKey);
       try {
-        const requiredNextDelay = await processPair({
-          pair,
+        const requiredNextDelay = await processInstance({
+          instance,
           market,
-          strategyManager,
           exchange,
           portfolios,
           lastSignals,
@@ -151,8 +161,8 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
         nextDelay = nextDelay.min(requiredNextDelay);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[${pair.symbol}] tick failed: ${message}`);
-        await options.telegram.notify({ type: "error", pair: pair.symbol, message });
+        console.error(`[${instance.registryId} ${instance.pair.symbol}] tick failed: ${message}`);
+        await options.telegram.notify({ type: "error", pair: instance.pair.symbol, message });
       }
     }
     return nextDelay;
@@ -174,38 +184,26 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
 }
 
 /**
- * Process one pair. Returns when the current signal candle closes (for poll scheduling).
+ * One instance: fetch its candles, decide, and book. Returns when its signal
+ * candle closes so the poll can wait for the soonest close.
  */
-async function processPair(args: {
-  pair: PairConfig;
+async function processInstance(args: {
+  instance: TradingInstance;
   market: Market;
-  strategyManager: StrategyManager;
   exchange: Exchange;
   portfolios: Map<string, Portfolio>;
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
   telegram: Telegram;
 }): Promise<Delay> {
-  const {
-    pair,
-    market,
-    strategyManager,
-    exchange,
-    portfolios,
-    lastSignals,
-    lastCandles,
-    telegram,
-  } = args;
-
+  const { instance, market, exchange, portfolios, lastSignals, lastCandles, telegram } = args;
+  const pair = instance.pair;
   const price = await exchange.spotPrice(pair);
   const nowSec = Math.floor(Date.now() / 1000);
   const nowMinute = Math.floor(nowSec / 60);
   const tryUseCache = nowMinute % 2 === 1;
 
-  const strategy = strategyManager.getActiveStrategy();
-  const riskManager = new GenericRiskManager(await riskPercentFor(pair.symbol, strategy.getId()));
-
-  const requiredCandles = strategy.getRequiredCandles();
+  const requiredCandles = instance.strategy.getRequiredCandles();
   const interval = candleIntervalSeconds(requiredCandles.timeframe);
   const isFirstMinute = isCandleFirstMinute(nowSec, interval);
   const tryUseCacheForWtf = tryUseCache && !isFirstMinute;
@@ -217,117 +215,97 @@ async function processPair(args: {
     toTime: nowSec,
     ...(tryUseCacheForWtf ? { tryUseCache } : {}),
   });
-  const lastCandle = candles[candles.length - 1]!;
-
-  const portfolio = portfolios.get(pair.symbol);
-  if (portfolio) {
-    await portfolio.syncFromChain(price);
+  const lastCandle = candles[candles.length - 1];
+  if (lastCandle === undefined) {
+    throw new Error(`no candles for ${pair.symbol}`);
   }
 
+  const portfolio = portfolios.get(instance.id);
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   logPerpsFees(pair.symbol, perpsFees);
   // Wall clock, not candle open: otherwise a just-closed bar (next candle not
   // published yet) is treated as still forming and stripped from the signal.
-  const signal = strategy.evaluateSignal(
-    pair.symbol,
-    candles,
-    price,
-    new Date(),
-    portfolio?.getSnapshot(price),
-    perpsFees,
-  );
-
-  lastCandles.set(pair.symbol, candles);
-  lastSignals.set(pair.symbol, signal);
-  logSignal(signal);
-  await persistSignal(signal);
-  await telegram.notify({ type: "signal", signal });
-
-  const ok = await processSignal(
-    signal,
-    price,
-    candles,
-    portfolio,
+  const outcome = await runInstanceTick({
+    strategy: instance.strategy,
+    riskManager: new GenericRiskManager(instance.riskPercent),
     exchange,
-    riskManager,
     pair,
-    telegram,
-  );
-  if (ok) {
-    const candleCloseAtMs =
-      (lastCandle.time + candleIntervalSeconds(requiredCandles.timeframe)) * 1000;
-    const candleCloseAfterMs = candleCloseAtMs - Date.now();
-    const alreadyClosed = candleCloseAfterMs <= 0;
-    const ts = new Date().toISOString();
-    if (alreadyClosed) {
-      console.log(`[${ts}] [${pair.symbol}] last candle already closed`);
-      return Delay.any();
-    }
-    console.log(`[${ts}] [${pair.symbol}] last candle close in ${candleCloseAfterMs}ms`);
-    return Delay.fromMs(candleCloseAfterMs);
+    candles,
+    price,
+    at: new Date(),
+    ...(perpsFees !== undefined ? { perpsFees } : {}),
+    ...(portfolio !== undefined ? { portfolio } : {}),
+  });
+
+  lastCandles.set(instance.id, candles);
+  lastSignals.set(instance.id, outcome.signal);
+  logSignal(outcome.signal);
+  await persistSignal(outcome.signal, instance.id);
+  await telegram.notify({ type: "signal", signal: outcome.signal });
+
+  const ok = await reportBook(outcome.book, outcome.signal, price, portfolio, pair, telegram);
+  if (!ok) return Delay.any();
+  const candleCloseAtMs =
+    (lastCandle.time + candleIntervalSeconds(requiredCandles.timeframe)) * 1000;
+  const candleCloseAfterMs = candleCloseAtMs - Date.now();
+  const ts = new Date().toISOString();
+  if (candleCloseAfterMs <= 0) {
+    console.log(`[${ts}] [${pair.symbol}] last candle already closed`);
+    return Delay.any();
   }
-  return Delay.any();
+  console.log(`[${ts}] [${pair.symbol}] last candle close in ${candleCloseAfterMs}ms`);
+  return Delay.fromMs(candleCloseAfterMs);
 }
 
-async function processSignal(
+async function reportBook(
+  book: Awaited<ReturnType<typeof runInstanceTick>>["book"],
   signal: Signal,
   price: number,
-  candles: Candle[],
   portfolio: Portfolio | undefined,
-  exchange: Exchange,
-  riskManager: RiskManager,
   pair: PairConfig,
   telegram: Telegram,
 ): Promise<boolean> {
-  if (!portfolio) {
-    // Watch mode: signal-only, no portfolio to fill.
+  if (book.kind === "signal" || book.kind === "hold") {
+    if (portfolio) logSnapshot(portfolio.getSnapshot(price));
     return true;
   }
-
-  const result = riskManager.check(signal, portfolio.getSnapshot(price), candles);
-  if (result.kind === "risk") {
-    logRisk(result.risk);
-    logSnapshot(portfolio.getSnapshot(price));
-    await telegram.notify({ type: "risk", risk: result.risk });
+  if (book.kind === "risk") {
+    const risk = { signal, reason: book.reason };
+    logRisk(risk);
+    if (portfolio) logSnapshot(portfolio.getSnapshot(price));
+    await telegram.notify({ type: "risk", risk });
     return true;
   }
-  if (result.kind === "no-command") {
-    logSnapshot(portfolio.getSnapshot(price));
+  if (book.kind === "position-data") {
+    logPositionData(book.data);
+    if (portfolio) logSnapshot(portfolio.getSnapshot(price));
     return true;
   }
-  if (result.kind === "position-data") {
-    await portfolio.applyPositionData(result.data);
-    logPositionData(result.data);
-    logSnapshot(portfolio.getSnapshot(price));
-    return true;
-  }
-  const command = result.command;
-  const protective = result.kind === "protective-command";
-
-  const order = await exchange.execute(command, pair);
-  if (!isOrder(order)) {
-    console.error(`[${pair.symbol}] ${order.message}`);
-    await telegram.notify({ type: "error", pair: pair.symbol, message: order.message });
+  if (book.kind === "rejected") {
+    console.error(`[${pair.symbol}] ${book.message}`);
+    await telegram.notify({ type: "error", pair: pair.symbol, message: book.message });
     return false;
   }
-
-  if (order.intent === "buy-sol") {
-    await portfolio.applyOrder(order);
-    logOrder(order);
-    logSnapshot(portfolio.getSnapshot(price));
+  if (book.kind === "sol") {
+    logOrder(book.order);
+    if (portfolio) logSnapshot(portfolio.getSnapshot(price));
     return true;
   }
-
-  const trade = await portfolio.applyOrder(order);
-  if (!trade) {
-    logSnapshot(portfolio.getSnapshot(price));
-    console.error(`[${pair.symbol}] no trade, portfolio returned null`);
-    return false;
-  }
-
-  logTrade(trade);
-  await telegram.notify(protective ? { type: "protective", trade } : { type: "trade", trade });
+  logTrade(book.trade);
+  await telegram.notify(
+    book.protective
+      ? { type: "protective", trade: book.trade }
+      : { type: "trade", trade: book.trade },
+  );
   return true;
+}
+
+function marketFor(markets: Map<string, Market>, source: string, birdeyeApiKey: string): Market {
+  const cached = markets.get(source);
+  if (cached !== undefined) return cached;
+  const market = createMarket(source as import("../types.js").CandleSource, birdeyeApiKey);
+  markets.set(source, market);
+  return market;
 }
 
 class Delay {

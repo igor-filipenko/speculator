@@ -1,5 +1,8 @@
 import { Connection } from "@solana/web3.js";
 import { assertTradeConfig, isPublicSolanaRpc, type AppConfig } from "../config.js";
+import { exchangeSignedSize, type BotMode } from "../db/bot.js";
+import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
+import { tradableBaseSize } from "../exchange/jupiter/amounts.js";
 import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
 import { candleIntervalSeconds, isCandleFirstMinute } from "../market/candle.js";
 import { createMarket } from "../market/manager.js";
@@ -16,13 +19,24 @@ import {
 import { Telegram } from "../notify/telegram.js";
 import { LivePortfolio } from "../portfolio/live/portfolio.js";
 import { GenericRiskManager } from "../risk/risk-manager.js";
-import { runInstanceTick, type TradingInstance } from "./tick.js";
+import {
+  decideInstance,
+  exchangeDrifted,
+  settlePair,
+  type PendingFill,
+  type TickBook,
+  type TradingInstance,
+} from "./tick.js";
 import { loadKeypairFromFile, WalletBalances } from "../portfolio/wallet/wallet.js";
 import {
+  isOrder,
+  type BalanceSource,
   type Candle,
+  type Command,
   type Exchange,
   type Market,
   type PairConfig,
+  type PerpsFees,
   type Portfolio,
   type PositionSource,
   type ProgramState,
@@ -38,6 +52,15 @@ export interface TradeOptions {
   once?: boolean;
   shutdownCb: ShutdownCb;
   instances: TradingInstance[];
+  /** Live wallet. Paper and watch leave this unset, so quote is not gated. */
+  liveWallet?: LiveWallet;
+}
+
+export interface LiveWallet {
+  balances: BalanceSource;
+  solReserveMin: number;
+  solReserveMax: number;
+  positions: PositionSource;
 }
 
 export interface LiveRuntime {
@@ -56,6 +79,7 @@ export interface TradingLoopOptions {
   shutdownCb: ShutdownCb;
   modeLabel: string;
   instances: TradingInstance[];
+  liveWallet?: LiveWallet;
 }
 
 /** Shared wallet + exchange. Books load from the watchlist unless `loadBooks` is false. */
@@ -145,25 +169,53 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
   }
 
   const tick = async (): Promise<Delay> => {
+    const anchor = instances[0];
+    if (anchor !== undefined && options.liveWallet !== undefined) {
+      await topUpSolReserve(exchange, anchor.pair, options.liveWallet);
+    }
     let nextDelay: Delay = Delay.any();
-    for (const instance of instances) {
-      const market = marketFor(markets, instance.candleSource, config.birdeyeApiKey);
-      try {
-        const requiredNextDelay = await processInstance({
-          instance,
-          market,
-          exchange,
-          portfolios,
-          lastSignals,
-          lastCandles,
-          telegram,
-        });
-        nextDelay = nextDelay.min(requiredNextDelay);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[${instance.registryId} ${instance.pair.symbol}] tick failed: ${message}`);
-        await options.telegram.notify({ type: "error", pair: instance.pair.symbol, message });
+    for (const group of groupByPair(instances)) {
+      const first = group[0];
+      if (first === undefined) continue;
+      let sharedPrice: number | undefined;
+      if (!(exchange instanceof EmulatedExchange)) {
+        sharedPrice = await exchange.spotPrice(first.pair);
       }
+      const perpsFees = await exchange.perpsFeeSchedule(first.pair);
+      logPerpsFees(first.pair.symbol, perpsFees);
+      const prepared: Prepared[] = [];
+      for (const instance of group) {
+        const market = marketFor(markets, instance.candleSource, config.birdeyeApiKey);
+        try {
+          prepared.push(
+            await prepareInstance({
+              instance,
+              market,
+              exchange,
+              portfolios,
+              lastSignals,
+              lastCandles,
+              telegram,
+              ...(sharedPrice !== undefined ? { price: sharedPrice } : {}),
+              ...(perpsFees !== undefined ? { perpsFees } : {}),
+            }),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[${instance.registryId} ${instance.pair.symbol}] tick failed: ${message}`);
+          await options.telegram.notify({ type: "error", pair: instance.pair.symbol, message });
+        }
+      }
+      await settleGroup({
+        group,
+        prepared,
+        exchange,
+        mode: modeLabel === "trade" ? "live" : "paper",
+        simulated: modeLabel !== "trade",
+        ...(options.liveWallet !== undefined ? { liveWallet: options.liveWallet } : {}),
+        telegram,
+      });
+      for (const item of prepared) nextDelay = nextDelay.min(item.delay);
     }
     return nextDelay;
   };
@@ -183,11 +235,32 @@ export async function runTradingLoop(options: TradingLoopOptions): Promise<void>
   }
 }
 
+interface Prepared {
+  instance: TradingInstance;
+  signal: Signal;
+  book?: TickBook;
+  command?: Command;
+  protective: boolean;
+  portfolio?: Portfolio;
+  price: number;
+  delay: Delay;
+}
+
+function groupByPair(instances: readonly TradingInstance[]): TradingInstance[][] {
+  const groups = new Map<string, TradingInstance[]>();
+  for (const instance of instances) {
+    const list = groups.get(instance.pair.symbol) ?? [];
+    list.push(instance);
+    groups.set(instance.pair.symbol, list);
+  }
+  return [...groups.values()];
+}
+
 /**
- * One instance: fetch its candles, decide, and book. Returns when its signal
- * candle closes so the poll can wait for the soonest close.
+ * Fetch one instance's candles and decide. The pair books after every instance
+ * on that pair has decided, so the venue sees one net order.
  */
-async function processInstance(args: {
+async function prepareInstance(args: {
   instance: TradingInstance;
   market: Market;
   exchange: Exchange;
@@ -195,10 +268,11 @@ async function processInstance(args: {
   lastSignals: Map<string, Signal>;
   lastCandles: Map<string, Candle[]>;
   telegram: Telegram;
-}): Promise<Delay> {
+  price?: number;
+  perpsFees?: PerpsFees;
+}): Promise<Prepared> {
   const { instance, market, exchange, portfolios, lastSignals, lastCandles, telegram } = args;
   const pair = instance.pair;
-  const price = await exchange.spotPrice(pair);
   const nowSec = Math.floor(Date.now() / 1000);
   const nowMinute = Math.floor(nowSec / 60);
   const tryUseCache = nowMinute % 2 === 1;
@@ -219,13 +293,16 @@ async function processInstance(args: {
   if (lastCandle === undefined) {
     throw new Error(`no candles for ${pair.symbol}`);
   }
+  let price = args.price;
+  if (price === undefined) {
+    if (exchange instanceof EmulatedExchange) exchange.setMidPrice(lastCandle.close);
+    price = await exchange.spotPrice(pair);
+  }
 
   const portfolio = portfolios.get(instance.id);
-  const perpsFees = await exchange.perpsFeeSchedule(pair);
-  logPerpsFees(pair.symbol, perpsFees);
   // Wall clock, not candle open: otherwise a just-closed bar (next candle not
   // published yet) is treated as still forming and stripped from the signal.
-  const outcome = await runInstanceTick({
+  const decision = await decideInstance({
     strategy: instance.strategy,
     riskManager: new GenericRiskManager(instance.riskPercent),
     exchange,
@@ -233,32 +310,197 @@ async function processInstance(args: {
     candles,
     price,
     at: new Date(),
-    ...(perpsFees !== undefined ? { perpsFees } : {}),
+    ...(args.perpsFees !== undefined ? { perpsFees: args.perpsFees } : {}),
     ...(portfolio !== undefined ? { portfolio } : {}),
   });
 
   lastCandles.set(instance.id, candles);
-  lastSignals.set(instance.id, outcome.signal);
-  logSignal(outcome.signal);
-  await persistSignal(outcome.signal, instance.id);
-  await telegram.notify({ type: "signal", signal: outcome.signal });
+  lastSignals.set(instance.id, decision.signal);
+  logSignal(decision.signal);
+  await persistSignal(decision.signal, instance.id);
+  await telegram.notify({ type: "signal", signal: decision.signal });
 
-  const ok = await reportBook(outcome.book, outcome.signal, price, portfolio, pair, telegram);
-  if (!ok) return Delay.any();
-  const candleCloseAtMs =
-    (lastCandle.time + candleIntervalSeconds(requiredCandles.timeframe)) * 1000;
-  const candleCloseAfterMs = candleCloseAtMs - Date.now();
+  const prepared: Prepared = {
+    instance,
+    signal: decision.signal,
+    protective: decision.protective === true,
+    price,
+    delay: candleDelay(pair.symbol, lastCandle.time, interval),
+    ...(portfolio !== undefined ? { portfolio } : {}),
+  };
+  if (decision.command !== undefined && decision.command.intent !== "buy-sol" && portfolio) {
+    prepared.command = decision.command;
+  } else {
+    prepared.book = decision.book ?? { kind: "hold" };
+  }
+  return prepared;
+}
+
+async function settleGroup(args: {
+  group: readonly TradingInstance[];
+  prepared: Prepared[];
+  exchange: Exchange;
+  mode: BotMode;
+  simulated: boolean;
+  liveWallet?: LiveWallet;
+  telegram: Telegram;
+}): Promise<void> {
+  const { group, prepared, exchange, telegram } = args;
+  const first = group[0];
+  if (first === undefined) return;
+  const pending: PendingFill[] = [];
+  const indexes: number[] = [];
+  for (let i = 0; i < prepared.length; i++) {
+    const item = prepared[i];
+    if (item?.command === undefined || item.portfolio === undefined) continue;
+    indexes.push(i);
+    pending.push({
+      command: item.command,
+      portfolio: item.portfolio,
+      protective: item.protective,
+    });
+  }
+  if (pending.length > 0) {
+    const price = prepared.find((item) => item.price > 0)?.price ?? 0;
+    if (exchange instanceof EmulatedExchange && price > 0) exchange.setMidPrice(price);
+    const currentExchange = await exchangeSignedSize(first.pair.symbol, args.mode);
+    let blockEntries = false;
+    if (args.liveWallet !== undefined) {
+      const chain = await chainSignedSize(first.pair, args.liveWallet);
+      if (exchangeDrifted(chain, currentExchange)) {
+        blockEntries = true;
+        console.error(
+          `[${first.pair.symbol}] exchange position ${currentExchange} differs from chain ${chain}; no new entries until they match`,
+        );
+      }
+    }
+    const freeQuoteUsdc =
+      args.liveWallet !== undefined
+        ? await walletQuoteUsdc(first.pair, args.liveWallet.balances)
+        : undefined;
+    const perpsFees = await args.exchange.perpsFeeSchedule(first.pair);
+    const books = await settlePair({
+      pair: first.pair,
+      exchange,
+      price,
+      pending,
+      currentExchange,
+      simulated: args.simulated,
+      ...(freeQuoteUsdc !== undefined ? { freeQuoteUsdc } : {}),
+      ...(blockEntries ? { blockEntries } : {}),
+      ...(perpsFees !== undefined ? { perpsFees } : {}),
+    });
+    let traded = false;
+    for (let i = 0; i < books.length; i++) {
+      const item = prepared[indexes[i] ?? -1];
+      const book = books[i];
+      if (item === undefined || book === undefined) continue;
+      if (book.kind === "filled") traded = true;
+      const ok = await reportBook(
+        book,
+        item.signal,
+        item.price,
+        item.portfolio,
+        first.pair,
+        telegram,
+      );
+      if (!ok) item.delay = Delay.any();
+    }
+    if (traded && args.liveWallet !== undefined) {
+      await logResidual(first.pair, args.liveWallet.balances, prepared);
+    }
+  }
+  for (const item of prepared) {
+    if (item.command !== undefined || item.book === undefined) continue;
+    const ok = await reportBook(
+      item.book,
+      item.signal,
+      item.price,
+      item.portfolio,
+      item.instance.pair,
+      telegram,
+    );
+    if (!ok) item.delay = Delay.any();
+  }
+}
+
+function candleDelay(symbol: string, openSec: number, intervalSec: number): Delay {
+  const candleCloseAfterMs = (openSec + intervalSec) * 1000 - Date.now();
   const ts = new Date().toISOString();
   if (candleCloseAfterMs <= 0) {
-    console.log(`[${ts}] [${pair.symbol}] last candle already closed`);
+    console.log(`[${ts}] [${symbol}] last candle already closed`);
     return Delay.any();
   }
-  console.log(`[${ts}] [${pair.symbol}] last candle close in ${candleCloseAfterMs}ms`);
+  console.log(`[${ts}] [${symbol}] last candle close in ${candleCloseAfterMs}ms`);
   return Delay.fromMs(candleCloseAfterMs);
 }
 
+async function topUpSolReserve(
+  exchange: Exchange,
+  pair: PairConfig,
+  wallet: LiveWallet,
+): Promise<void> {
+  await wallet.balances.refresh([pair.quoteMint]);
+  const native = wallet.balances.nativeSol();
+  if (native >= wallet.solReserveMin) return;
+  const order = await exchange.execute(
+    {
+      pair: pair.symbol,
+      intent: "buy-sol",
+      orderType: "market",
+      reason: "native SOL below reserve minimum",
+      at: new Date(),
+      priceHint: 0,
+      baseSize: wallet.solReserveMax - native,
+    },
+    pair,
+  );
+  if (!isOrder(order)) {
+    console.error(`[wallet] SOL top-up failed: ${order.message}`);
+    return;
+  }
+  logOrder(order);
+}
+
+async function chainSignedSize(pair: PairConfig, wallet: LiveWallet): Promise<number> {
+  await wallet.balances.refresh([pair.baseMint, pair.quoteMint]);
+  const short = await wallet.positions.findOpenPosition(pair);
+  if (short != null && short.size > 1e-9) return -short.size;
+  const spot = tradableBaseSize({
+    baseMint: pair.baseMint,
+    tokenUi: wallet.balances.tokenUi(pair.baseMint),
+    nativeSol: wallet.balances.nativeSol(),
+    reserveSol: wallet.solReserveMax,
+  });
+  return spot > 1e-9 ? spot : 0;
+}
+
+async function walletQuoteUsdc(pair: PairConfig, balances: BalanceSource): Promise<number> {
+  await balances.refresh([pair.quoteMint]);
+  return balances.tokenUi(pair.quoteMint);
+}
+
+async function logResidual(
+  pair: PairConfig,
+  balances: BalanceSource,
+  prepared: readonly Prepared[],
+): Promise<void> {
+  await balances.refresh([pair.quoteMint]);
+  const walletUsdc = balances.tokenUi(pair.quoteMint);
+  let strategyCash = 0;
+  for (const item of prepared) {
+    if (item.portfolio === undefined) continue;
+    strategyCash += item.portfolio.getSnapshot(item.price).cashUsdc;
+  }
+  const residual = walletUsdc - strategyCash;
+  if (Math.abs(residual) <= 0.01) return;
+  console.log(
+    `[${pair.symbol}] wallet USDC ${walletUsdc.toFixed(4)} vs strategy cash ${strategyCash.toFixed(4)}; residual ${residual.toFixed(4)} stays on the wallet`,
+  );
+}
+
 async function reportBook(
-  book: Awaited<ReturnType<typeof runInstanceTick>>["book"],
+  book: TickBook,
   signal: Signal,
   price: number,
   portfolio: Portfolio | undefined,

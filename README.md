@@ -141,7 +141,7 @@ Recommendations only (forces signal mode):
 pnpm watch
 ```
 
-Paper trading (virtual long-only portfolio, simulated fills from Jupiter quotes):
+Paper trading (virtual portfolio, simulated fills from the emulated venue):
 
 ```bash
 pnpm paper
@@ -180,7 +180,7 @@ pnpm positions open short 10
 pnpm positions close short
 ```
 
-Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Each book keeps that instance's cash and position, so two instances on one pair do not share a deposit. The risk manager sizes an open from that instance's risk percent. Watch, paper, and trade run every assigned instance. Backtest and tune run the selected instance and read its pair, candle source, params, risk, and deposit.
+Assign strategy instances to this `BOT_ID`. `add` copies that module's default knobs, stores `jupiter` as the venue, and risks 2 percent. The first instance added becomes the selection (`strategy use` changes it). `set period=14` merges that knob. `--deposit` assigns an instance that has no deposit yet. `remove` refuses while the instance has an open position. Each book keeps that instance's cash and position, so two instances on one pair do not share a deposit. The risk manager sizes an open from that instance's risk percent. Watch, paper, and trade run every assigned instance. Instances on one pair send one venue order for their net size. Paper and backtest use the emulated venue. Live uses Jupiter, tops up the SOL reserve once per poll, and skips new entries when wallet USDC cannot pay the net or the chain disagrees with the venue row. Backtest and tune run the selected instance and read its pair, candle source, params, risk, and deposit.
 
 ```bash
 pnpm strategy list
@@ -250,7 +250,7 @@ pnpm exec tsx src/index.ts paper --once
 pnpm exec tsx src/index.ts trade --once
 ```
 
-Signals are printed to the console and stored in `market.signals`. Paper mode persists cash, position, P&L, and trades in `bot.virtual_accounts`, `bot.positions`, and `bot.trades` (`mode=paper`, scoped by `BOT_ID`; restored on restart). Live mode uses the same tables with `mode=live` (cash/size are synced from the wallet). To reset paper to `PAPER_CASH_USDC`, delete that bot's paper rows. Mint/decimals come from `solana.tokens`; Gecko pool addresses from `solana.pools` (seeded with SOL/USDC on `pnpm migrate`). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
+Signals are printed to the console and stored in `market.signals`. Paper mode persists cash, position, P&L, and trades in `bot.virtual_accounts`, `bot.positions`, and `bot.trades` (`mode=paper`, scoped by `BOT_ID`; restored on restart). Live mode uses the same tables with `mode=live`. Each instance keeps its own cash; the wallet holds the net and is not copied onto a strategy. To reset paper to `PAPER_CASH_USDC`, delete that bot's paper rows. Mint/decimals come from `solana.tokens`; Gecko pool addresses from `solana.pools` (seeded with SOL/USDC on `pnpm migrate`). With Telegram configured, BUY/SELL (and paper/live fills) are also sent to your chat, and you can query `/report`, `/chart`, and `/portfolio` from that chat.
 
 ## TimescaleDB
 

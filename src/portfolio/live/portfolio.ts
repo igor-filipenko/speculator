@@ -277,11 +277,9 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
 
   async applyOrder(order: Order): Promise<Trade | null> {
     if (order.intent === "buy-sol") {
-      await this.overlayChain(order.price);
       return null;
     }
 
-    const before = this.position.side;
     const nextTrade = match(order.intent)
       .with("open-long", () => this.openLong(order))
       .with("close-long", () => this.closeLong(order))
@@ -293,38 +291,6 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       return null;
     }
 
-    const bookedSize = this.position.size;
-    const bookedSide = this.position.side;
-    await this.overlayChain(order.price);
-    // A lagging balance read still shows the size from before this partial close.
-    if (
-      (order.intent === "close-long" || order.intent === "close-short") &&
-      bookedSide === this.position.side &&
-      (bookedSide === "long" || bookedSide === "short") &&
-      this.position.size > bookedSize
-    ) {
-      this.position = { ...this.position, size: bookedSize };
-    }
-    if (order.intent === "open-long" && before === "flat" && this.position.side !== "long") {
-      // RPC can lag the fill; keep the just-opened long until the next refresh.
-      this.position = openedPosition(this.pairConfig.symbol, "long", order);
-    }
-    if (order.intent === "open-short" && before === "flat" && this.position.side !== "short") {
-      this.shortCollateralUsd = 0;
-      this.position = openedPosition(this.pairConfig.symbol, "short", order);
-    }
-    if (order.intent === "open-long" && this.position.side === "long") {
-      this.position = openedPosition(this.pairConfig.symbol, "long", {
-        ...order,
-        size: this.position.size,
-      });
-    }
-    if (order.intent === "open-short" && this.position.side === "short") {
-      this.position = openedPosition(this.pairConfig.symbol, "short", {
-        ...order,
-        size: this.position.size,
-      });
-    }
     const persisted = this.toPersisted();
     const instanceId = await upsertLivePortfolio(persisted);
     if (instanceId != null) this.noteInstance(instanceId);
@@ -419,6 +385,8 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     }
 
     this.position = openedPosition(this.pairConfig.symbol, "long", order);
+    const spent = order.size * order.price + order.priorityFeeUsdc;
+    this.cashUsdc = Math.max(0, this.cashUsdc - spent);
     this.trades.push(trade);
     return trade;
   }
@@ -449,6 +417,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
       trade.txSignature = order.txSignature;
     }
 
+    this.cashUsdc = Math.max(0, this.cashUsdc + proceeds);
     this.realizedPnl += pnl;
     this.position = reduceOrFlat(this.position, size, order.slPrice);
     this.trades.push(trade);
@@ -512,6 +481,7 @@ export class LivePortfolio implements Portfolio, PersistableLivePortfolio {
     if (order.txSignature !== undefined) {
       trade.txSignature = order.txSignature;
     }
+    this.cashUsdc = Math.max(0, this.cashUsdc + pnl);
     this.realizedPnl += pnl;
     const openSize = this.position.size;
     this.position = reduceOrFlat(this.position, size, order.slPrice);

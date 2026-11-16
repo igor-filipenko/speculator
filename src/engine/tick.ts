@@ -9,8 +9,10 @@ import {
 import type {
   Candle,
   CandleSource,
+  Command,
   Exchange,
   Order,
+  OrderIntent,
   PairConfig,
   PerpsFees,
   Portfolio,
@@ -63,12 +65,98 @@ export interface InstanceTickArgs {
   portfolio?: Portfolio;
   /** Backtest points the emulated mid at the fill before the order is built. */
   prepareFill?: (priceHint: number) => void;
+  /** In-memory venue size for backtest. Paper and live read `exchange.positions`. */
+  ledger?: ExchangeLedger;
 }
 
-/** Decide one instance, then book its own order. Netting across instances is later. */
-export async function runInstanceTick(
-  args: InstanceTickArgs,
-): Promise<{ signal: Signal; book: TickBook }> {
+/** Signed venue size for one pair. Backtest keeps this in memory and does not write it. */
+export interface ExchangeLedger {
+  get(pair: string): number;
+  set(pair: string, signed: number): void;
+}
+
+export interface InstanceDecision {
+  signal: Signal;
+  book?: TickBook;
+  command?: Command;
+  protective?: boolean;
+}
+
+/** One pair's decided orders, before the venue sees them. */
+export interface PendingFill {
+  command: Command;
+  portfolio: Portfolio;
+  protective: boolean;
+  prepareFill?: (priceHint: number) => void;
+}
+
+export interface NetIntent {
+  intent: OrderIntent;
+  /** Signed base change. A long is positive. */
+  signedBase: number;
+}
+
+const SIZE_DUST = 1e-9;
+
+/** Long is positive, short is negative, flat is zero. */
+export function signedPosition(side: string, size: number): number {
+  if (side === "long") return size;
+  if (side === "short") return -size;
+  return 0;
+}
+
+/** Base this command adds to the net. Opens are estimated at `price`. */
+export function commandSignedBase(command: Command, price: number): number {
+  if (command.intent === "open-long") {
+    return price > 0 ? (command.quoteBudgetUsdc ?? 0) / price : 0;
+  }
+  if (command.intent === "open-short") {
+    return price > 0 ? -((command.quoteBudgetUsdc ?? 0) / price) : 0;
+  }
+  if (command.intent === "close-long") return -(command.baseSize ?? 0);
+  if (command.intent === "close-short") return command.baseSize ?? 0;
+  return 0;
+}
+
+/**
+ * Quote a live delta spends. Closing a long or covering a short does not.
+ * Crossing through flat spends only the new side.
+ */
+export function quoteToSpend(current: number, target: number, price: number): number {
+  if (!(price > 0)) return Number.POSITIVE_INFINITY;
+  let spend = 0;
+  if (target > Math.max(current, 0)) spend += (target - Math.max(current, 0)) * price;
+  if (target < Math.min(current, 0)) spend += (Math.min(current, 0) - target) * price;
+  return spend;
+}
+
+/**
+ * Slippage and fee residue stay inside dust. A real extra position does not.
+ * The band is one percent of the larger size, and at least 0.0001 base.
+ */
+export function exchangeDrifted(chain: number, booked: number): boolean {
+  const gap = Math.abs(chain - booked);
+  const dust = Math.max(1e-4, Math.max(Math.abs(chain), Math.abs(booked)) * 0.01);
+  return gap > dust;
+}
+
+/** Drop every new open when the wallet cannot pay the net, or the chain has drifted. Closes stay. */
+export function keepNetIntents<T extends NetIntent>(
+  items: readonly T[],
+  currentExchange: number,
+  price: number,
+  freeQuoteUsdc: number | undefined,
+  blockEntries: boolean,
+): T[] {
+  const target = currentExchange + items.reduce((sum, item) => sum + item.signedBase, 0);
+  const covered =
+    freeQuoteUsdc === undefined || quoteToSpend(currentExchange, target, price) <= freeQuoteUsdc;
+  if (!blockEntries && covered) return [...items];
+  return items.filter((item) => item.intent !== "open-long" && item.intent !== "open-short");
+}
+
+/** Decide one instance. A command is not sent to the venue yet. */
+export async function decideInstance(args: InstanceTickArgs): Promise<InstanceDecision> {
   const { strategy, pair, candles, price, at, portfolio } = args;
   const signal = strategy.evaluateSignal(
     pair.symbol,
@@ -93,29 +181,255 @@ export async function runInstanceTick(
     await portfolio.applyPositionData(result.data);
     return { signal, book: { kind: "position-data", data: result.data } };
   }
+  return {
+    signal,
+    command: result.command,
+    protective: result.kind === "protective-command",
+  };
+}
 
-  args.prepareFill?.(result.command.priceHint);
-  const order = await args.exchange.execute(result.command, pair);
+/**
+ * Decide one instance and, when it is the only order, fill it.
+ * Several instances on one pair go through {@link settlePair} instead.
+ */
+export async function runInstanceTick(
+  args: InstanceTickArgs,
+): Promise<{ signal: Signal; book: TickBook }> {
+  const decision = await decideInstance(args);
+  if (decision.command === undefined || args.portfolio === undefined) {
+    rememberLedger(args);
+    return { signal: decision.signal, book: decision.book ?? { kind: "hold" } };
+  }
+  const book = await fillCommand(
+    {
+      exchange: args.exchange,
+      pair: args.pair,
+      portfolio: args.portfolio,
+      ...(args.prepareFill !== undefined ? { prepareFill: args.prepareFill } : {}),
+    },
+    decision.command,
+    decision.protective === true,
+  );
+  rememberLedger(args);
+  return { signal: decision.signal, book };
+}
+
+export interface SettlePairArgs {
+  pair: PairConfig;
+  exchange: Exchange;
+  price: number;
+  pending: readonly PendingFill[];
+  /** Signed size already on `exchange.positions` for this pair. */
+  currentExchange: number;
+  /** Omitted for paper and backtest, which do not gate on a wallet. */
+  freeQuoteUsdc?: number;
+  /** Live chain size disagrees with the exchange row, so new entries wait. */
+  blockEntries?: boolean;
+  /** Paper and backtest fills are simulated. A live venue order keeps its own flag. */
+  simulated: boolean;
+  perpsFees?: PerpsFees;
+}
+
+/**
+ * One venue order for the pair, then each instance books at that fill price.
+ * A single command is sent through unchanged so its stop and size stay put.
+ */
+export async function settlePair(args: SettlePairArgs): Promise<TickBook[]> {
+  const sized = args.pending.map((item) => ({
+    ...item,
+    intent: item.command.intent,
+    signedBase: commandSignedBase(item.command, args.price),
+  }));
+  const kept = new Set(
+    keepNetIntents(
+      sized,
+      args.currentExchange,
+      args.price,
+      args.freeQuoteUsdc,
+      args.blockEntries === true,
+    ),
+  );
+  const dropReason = args.blockEntries
+    ? "exchange position differs from the chain"
+    : "wallet USDC cannot pay the net";
+
+  if (kept.size === 1) {
+    return Promise.all(
+      sized.map(async (item) => {
+        if (!kept.has(item)) return { kind: "risk" as const, reason: dropReason };
+        if (item.command.intent === "buy-sol") return { kind: "hold" as const };
+        return fillCommand(
+          {
+            exchange: args.exchange,
+            pair: args.pair,
+            portfolio: item.portfolio,
+            ...(item.prepareFill !== undefined ? { prepareFill: item.prepareFill } : {}),
+          },
+          item.command,
+          item.protective,
+        );
+      }),
+    );
+  }
+
+  const delta = [...kept].reduce((sum, item) => sum + item.signedBase, 0);
+  const moves = venueMoves(args.currentExchange, args.currentExchange + delta, args.price);
+  const filled: Order[] = [];
+  let failure: string | undefined;
+  for (const move of moves) {
+    const order = await args.exchange.execute(
+      venueCommand(args.pair.symbol, args.price, new Date(), move),
+      args.pair,
+    );
+    if (!isOrder(order)) {
+      failure = order.message;
+      break;
+    }
+    filled.push(order);
+  }
+
+  return Promise.all(
+    sized.map(async (item) => {
+      if (!kept.has(item)) return { kind: "risk" as const, reason: dropReason };
+      if (item.command.intent === "buy-sol") return { kind: "hold" as const };
+      const venue = filled.find((order) => order.intent === item.command.intent);
+      if (failure !== undefined && venue === undefined) {
+        return { kind: "rejected" as const, message: failure };
+      }
+      const price = venue?.price ?? filled[filled.length - 1]?.price ?? args.price;
+      const simulated = venue?.simulated ?? args.simulated;
+      const order = orderForCommand(item.command, price, simulated, args.perpsFees, venue);
+      return bookOrder(item.portfolio, order, item.protective);
+    }),
+  );
+}
+
+function rememberLedger(args: InstanceTickArgs): void {
+  if (args.ledger === undefined || args.portfolio === undefined) return;
+  const position = args.portfolio.getSnapshot(args.price).position;
+  args.ledger.set(args.pair.symbol, signedPosition(position.side, position.size));
+}
+
+async function fillCommand(
+  args: {
+    exchange: Exchange;
+    pair: PairConfig;
+    portfolio: Portfolio;
+    prepareFill?: (priceHint: number) => void;
+  },
+  command: Command,
+  protective: boolean,
+): Promise<TickBook> {
+  args.prepareFill?.(command.priceHint);
+  const order = await args.exchange.execute(command, args.pair);
   if (!isOrder(order)) {
-    return { signal, book: { kind: "rejected", message: order.message } };
+    return { kind: "rejected", message: order.message };
   }
   if (order.intent === "buy-sol") {
-    await portfolio.applyOrder(order);
-    return { signal, book: { kind: "sol", order } };
+    await args.portfolio.applyOrder(order);
+    return { kind: "sol", order };
+  }
+  return bookOrder(args.portfolio, order, protective);
+}
+
+async function bookOrder(
+  portfolio: Portfolio,
+  order: Order,
+  protective: boolean,
+): Promise<TickBook> {
+  if (!(order.size > 0) || !(order.price > 0)) {
+    return { kind: "rejected", message: "net fill has no size" };
   }
   const trade = await portfolio.applyOrder(order);
   if (trade == null) {
-    return { signal, book: { kind: "rejected", message: "portfolio returned no trade" } };
+    return { kind: "rejected", message: "portfolio returned no trade" };
   }
-  return {
-    signal,
-    book: {
-      kind: "filled",
-      trade,
-      order,
-      protective: result.kind === "protective-command",
-    },
+  return { kind: "filled", trade, order, protective };
+}
+
+interface VenueMove {
+  intent: "open-long" | "close-long" | "open-short" | "close-short";
+  quoteBudgetUsdc?: number;
+  baseSize?: number;
+}
+
+/** Orders that move the venue from `current` to `target`. A sign change is two orders. */
+function venueMoves(current: number, target: number, price: number): VenueMove[] {
+  if (Math.abs(target - current) <= SIZE_DUST) return [];
+  if (current >= -SIZE_DUST && target >= -SIZE_DUST) {
+    if (target > current) {
+      return [{ intent: "open-long", quoteBudgetUsdc: (target - current) * price }];
+    }
+    return [{ intent: "close-long", baseSize: current - target }];
+  }
+  if (current <= SIZE_DUST && target <= SIZE_DUST) {
+    if (target < current) {
+      return [{ intent: "open-short", quoteBudgetUsdc: (current - target) * price }];
+    }
+    return [{ intent: "close-short", baseSize: target - current }];
+  }
+  const moves: VenueMove[] = [];
+  if (current > SIZE_DUST) moves.push({ intent: "close-long", baseSize: current });
+  if (current < -SIZE_DUST) moves.push({ intent: "close-short", baseSize: -current });
+  if (target > SIZE_DUST) moves.push({ intent: "open-long", quoteBudgetUsdc: target * price });
+  if (target < -SIZE_DUST) {
+    moves.push({ intent: "open-short", quoteBudgetUsdc: -target * price });
+  }
+  return moves;
+}
+
+function venueCommand(pair: string, price: number, at: Date, move: VenueMove): Command {
+  const command: Command = {
+    pair,
+    intent: move.intent,
+    orderType: "market",
+    reason: "net",
+    at,
+    priceHint: price,
   };
+  if (move.quoteBudgetUsdc !== undefined) command.quoteBudgetUsdc = move.quoteBudgetUsdc;
+  if (move.baseSize !== undefined) command.baseSize = move.baseSize;
+  return command;
+}
+
+function orderForCommand(
+  command: Command,
+  fillPrice: number,
+  simulated: boolean,
+  perpsFees: PerpsFees | undefined,
+  venue: Order | undefined,
+): Order {
+  const opens = command.intent === "open-long" || command.intent === "open-short";
+  const size = opens ? (command.quoteBudgetUsdc ?? 0) / fillPrice : (command.baseSize ?? 0);
+  const order: Order = {
+    pair: command.pair,
+    type: "market",
+    intent: command.intent,
+    price: fillPrice,
+    size,
+    at: command.at,
+    simulated,
+    reason: command.reason,
+    priorityFeeUsdc: 0,
+  };
+  if (venue?.txSignature !== undefined) order.txSignature = venue.txSignature;
+  const strategyId = command.signal?.strategyId;
+  if (strategyId !== undefined) order.strategyId = strategyId;
+  if (command.slPrice !== undefined) order.slPrice = command.slPrice;
+  const costs = venue?.fillCosts ?? shortCosts(command.intent, fillPrice, perpsFees);
+  if (costs !== undefined) order.fillCosts = costs;
+  return order;
+}
+
+function shortCosts(
+  intent: OrderIntent,
+  price: number,
+  perpsFees: PerpsFees | undefined,
+): Order["fillCosts"] | undefined {
+  if (perpsFees === undefined || (intent !== "open-short" && intent !== "close-short")) {
+    return undefined;
+  }
+  return { mid: price, slippageUsdcPerBase: 0, poolFeeUsdcPerBase: 0, perps: perpsFees };
 }
 
 /** Instances assigned to this bot. Two on one pair must name the same exchange. */

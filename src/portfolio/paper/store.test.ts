@@ -256,7 +256,7 @@ describe("paper store", () => {
       `SELECT size FROM exchange.positions WHERE pair = $1 AND mode = 'paper'`,
       [pair],
     );
-    assert.equal(Number(venue[0]?.size), 1000);
+    assert.equal(Number(venue[0]?.size), 1100);
 
     bollinger.applyOrderSync({
       pair,
@@ -281,7 +281,7 @@ describe("paper store", () => {
       `SELECT size FROM exchange.positions WHERE pair = $1 AND mode = 'paper'`,
       [pair],
     );
-    assert.equal(Number(venueAfter[0]?.size), 1000);
+    assert.equal(Number(venueAfter[0]?.size), 100);
 
     const config: PairConfig = {
       symbol: pair,
@@ -293,6 +293,102 @@ describe("paper store", () => {
     };
     const restored = await PaperPortfolio.load([config], 5, "bollinger");
     assert.equal(restored.get(pair)?.getSnapshot(1).cashUsdc, bollinger.getSnapshot(1).cashUsdc);
+  });
+
+  it("nets a long and a short onto one flat venue row", async () => {
+    const pair = "JUP/USDC";
+    const longId = await insertInstance("bollinger", pair, 2);
+    const shortId = await insertInstance("donchian", pair, 2);
+    await query(
+      `
+      INSERT INTO bot.strategies (bot_id, strategy_id, deposit_usdc)
+      VALUES ($1, $2::uuid, 100), ($1, $3::uuid, 100)
+      `,
+      [getBotId(), longId, shortId],
+    );
+    const openedAt = new Date("2026-08-01T10:00:00.000Z");
+    const long = new PaperPortfolio(pair, 100);
+    long.noteInstance(longId);
+    long.applyOrderSync({
+      pair,
+      type: "market",
+      intent: "open-long",
+      reason: "long",
+      price: 2,
+      size: 5,
+      at: openedAt,
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "bollinger",
+      slPrice: 1,
+    });
+    const short = new PaperPortfolio(pair, 100);
+    short.noteInstance(shortId);
+    short.applyOrderSync({
+      pair,
+      type: "market",
+      intent: "open-short",
+      reason: "short",
+      price: 2,
+      size: 5,
+      at: openedAt,
+      simulated: true,
+      priorityFeeUsdc: 0,
+      strategyId: "donchian",
+      slPrice: 3,
+    });
+    await savePaperState(
+      new Map([
+        [longId, long],
+        [shortId, short],
+      ]),
+    );
+    const venue = await query<{ side: string; size: string | number }>(
+      `SELECT side, size FROM exchange.positions WHERE pair = $1 AND mode = 'paper'`,
+      [pair],
+    );
+    assert.equal(venue.length, 1);
+    assert.equal(venue[0]?.side, "flat");
+    assert.equal(Number(venue[0]?.size), 0);
+    const links = await query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM bot.positions WHERE pair = $1 AND mode = 'paper'`,
+      [pair],
+    );
+    assert.equal(Number(links[0]?.n), 2);
+
+    long.applyOrderSync({
+      pair,
+      type: "market",
+      intent: "close-long",
+      reason: "flat long",
+      price: 2,
+      size: 5,
+      at: new Date("2026-08-01T11:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    short.applyOrderSync({
+      pair,
+      type: "market",
+      intent: "close-short",
+      reason: "flat short",
+      price: 2,
+      size: 5,
+      at: new Date("2026-08-01T11:00:00.000Z"),
+      simulated: true,
+      priorityFeeUsdc: 0,
+    });
+    await savePaperState(
+      new Map([
+        [longId, long],
+        [shortId, short],
+      ]),
+    );
+    const gone = await query(
+      `SELECT 1 FROM exchange.positions WHERE pair = $1 AND mode = 'paper'`,
+      [pair],
+    );
+    assert.equal(gone.length, 0);
   });
 
   it("starts an assigned instance at its deposit", async () => {

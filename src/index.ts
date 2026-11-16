@@ -246,6 +246,12 @@ async function runTradeCommand(argv: string[]): Promise<void> {
     once,
     shutdownCb,
     instances,
+    liveWallet: {
+      balances: runtime.balances,
+      solReserveMin: config.solReserveMin,
+      solReserveMax: config.solReserveMax,
+      positions: runtime.exchange,
+    },
   });
 }
 

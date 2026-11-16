@@ -377,14 +377,6 @@ const DELETE_POSITION_SQL = `
   WHERE bot_id = $1 AND mode = $2 AND strategy_id = $3::uuid
 `;
 
-const DELETE_UNUSED_EXCHANGE_SQL = `
-  DELETE FROM exchange.positions AS e
-  WHERE e.bot_id = $1 AND e.mode = $2 AND e.pair = $3
-    AND NOT EXISTS (
-      SELECT 1 FROM bot.positions AS p WHERE p.exchange_position_id = e.id
-    )
-`;
-
 const INSERT_TRADE_SQL = `
   INSERT INTO bot.trades (
     bot_id, mode, pair, side, price, size, realized_pnl, "at", simulated, tx_signature, strategy_id
@@ -429,21 +421,13 @@ async function syncPosition(
   instanceId: string,
 ): Promise<void> {
   const open = openPositionValues(position);
+  const integrationId = mode === "paper" ? "emulated" : "jupiter";
   if (open == null) {
     await run(DELETE_POSITION_SQL, [botId, mode, instanceId]);
-    await run(DELETE_UNUSED_EXCHANGE_SQL, [botId, mode, position.pair]);
+    await writeExchangeNet(run, botId, mode, position.pair, integrationId);
     return;
   }
-  const integrationId = mode === "paper" ? "emulated" : "jupiter";
-  const exchangeId = await exchangePositionId(
-    run,
-    botId,
-    mode,
-    position,
-    instanceId,
-    integrationId,
-    open,
-  );
+  const exchangeId = await ensureExchangeRow(run, botId, mode, position.pair, integrationId);
   await run(UPSERT_POSITION_SQL, [
     botId,
     mode,
@@ -457,6 +441,7 @@ async function syncPosition(
     open.paidFee,
     open.openedAt,
   ]);
+  await writeExchangeNet(run, botId, mode, position.pair, integrationId);
 }
 
 function tradeValues(
@@ -480,18 +465,39 @@ function tradeValues(
   ] as const;
 }
 
-/**
- * Venue row this book links to. A second book on the pair links to the existing
- * row and leaves its size alone; netting that size is a later phase.
- */
-async function exchangePositionId(
+/** Signed base on the one venue row. Zero when the pair has no row yet. */
+export async function exchangeSignedSize(
+  pair: string,
+  mode: BotMode,
+  botId = getBotId(),
+): Promise<number> {
+  const rows = await query<{ side: string; size: string | number }>(
+    `
+    SELECT side, size
+    FROM exchange.positions
+    WHERE bot_id = $1 AND mode = $2 AND pair = $3
+    `,
+    [botId, mode, pair],
+  );
+  const row = rows[0];
+  if (row === undefined) return 0;
+  return signedBook(row.side, Number(row.size));
+}
+
+const NET_DUST = 1e-9;
+
+function signedBook(side: string, size: number): number {
+  if (side === "long") return size;
+  if (side === "short") return -size;
+  return 0;
+}
+
+async function ensureExchangeRow(
   run: RunSql,
   botId: string,
   mode: BotMode,
-  position: PersistedPosition,
-  instanceId: string,
+  pair: string,
   integrationId: string,
-  open: { side: "long" | "short"; size: number },
 ): Promise<string> {
   const existing = await run(
     `
@@ -499,34 +505,55 @@ async function exchangePositionId(
     FROM exchange.positions
     WHERE bot_id = $1 AND mode = $2 AND pair = $3
     `,
-    [botId, mode, position.pair],
-  );
-  const others = await run(
-    `
-    SELECT 1
-    FROM bot.positions
-    WHERE bot_id = $1 AND mode = $2 AND pair = $3 AND strategy_id <> $4::uuid
-    LIMIT 1
-    `,
-    [botId, mode, position.pair, instanceId],
+    [botId, mode, pair],
   );
   const existingId = existing[0]?.["id"];
-  if (others.length > 0 && typeof existingId === "string") {
-    return existingId;
-  }
-  const exchangeRows = await run(UPSERT_EXCHANGE_SQL, [
-    botId,
-    mode,
-    integrationId,
-    position.pair,
-    open.side,
-    open.size,
-  ]);
-  const exchangeId = exchangeRows[0]?.["id"];
+  if (typeof existingId === "string") return existingId;
+  const inserted = await run(UPSERT_EXCHANGE_SQL, [botId, mode, integrationId, pair, "flat", 0]);
+  const exchangeId = inserted[0]?.["id"];
   if (typeof exchangeId !== "string") {
-    throw new Error(`failed to store the exchange position for ${position.pair}`);
+    throw new Error(`failed to store the exchange position for ${pair}`);
   }
   return exchangeId;
+}
+
+/** Point the venue row at the sum of the bot positions that still link to this pair. */
+async function writeExchangeNet(
+  run: RunSql,
+  botId: string,
+  mode: BotMode,
+  pair: string,
+  integrationId: string,
+): Promise<void> {
+  const rows = await run(
+    `
+    SELECT side, size
+    FROM bot.positions
+    WHERE bot_id = $1 AND mode = $2 AND pair = $3
+    `,
+    [botId, mode, pair],
+  );
+  if (rows.length === 0) {
+    await run(`DELETE FROM exchange.positions WHERE bot_id = $1 AND mode = $2 AND pair = $3`, [
+      botId,
+      mode,
+      pair,
+    ]);
+    return;
+  }
+  let signed = 0;
+  for (const row of rows) {
+    const side = row["side"];
+    const size = Number(row["size"]);
+    if (typeof side === "string" && Number.isFinite(size)) signed += signedBook(side, size);
+  }
+  const net =
+    signed > NET_DUST
+      ? { side: "long", size: signed }
+      : signed < -NET_DUST
+        ? { side: "short", size: -signed }
+        : { side: "flat", size: 0 };
+  await run(UPSERT_EXCHANGE_SQL, [botId, mode, integrationId, pair, net.side, net.size]);
 }
 
 export async function upsertPortfolio(

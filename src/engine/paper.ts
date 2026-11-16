@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config.js";
-import { JupiterExchange } from "../exchange/jupiter/jupiter.js";
+import { EmulatedExchange } from "../exchange/emulated/emulated-exchange.js";
 import type { ProgramState, ShutdownCb } from "../types.js";
 import { Telegram } from "../notify/telegram.js";
 import { runTradingLoop } from "./trade.js";
@@ -16,10 +16,11 @@ export interface PaperOptions {
 }
 
 /**
- * Paper poll loop: candles → signal → risk command → Jupiter quote fill → virtual portfolio.
+ * Paper poll loop: candles → signal → risk command → emulated fill → virtual portfolio.
+ * The emulated venue replaces whatever integration the instance names.
  */
 export async function runPaper(options: PaperOptions): Promise<void> {
-  const exchange = new JupiterExchange({ apiKey: options.config.jupiterApiKey });
+  const exchange = new EmulatedExchange();
   await runTradingLoop({
     ...options,
     exchange,

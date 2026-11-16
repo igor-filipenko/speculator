@@ -555,6 +555,7 @@ async function replayPair(args: {
   const perpsFees = await exchange.perpsFeeSchedule(pair);
   const riskManager = new GenericRiskManager(args.riskPercent);
   const book = memoryBook(portfolio);
+  const exchangeBook = new Map<string, number>();
   const equityCurve: number[] = [];
   let peakEquity = startingCashUsdc;
   let maxDrawdownPct = 0;
@@ -592,6 +593,12 @@ async function replayPair(args: {
         portfolio: book,
         prepareFill: (hint) => {
           exchange.setMidPrice(hint > 0 ? hint : price);
+        },
+        ledger: {
+          get: (symbol) => exchangeBook.get(symbol) ?? 0,
+          set: (symbol, signed) => {
+            exchangeBook.set(symbol, signed);
+          },
         },
       });
       if (outcome.book.kind === "filled") {

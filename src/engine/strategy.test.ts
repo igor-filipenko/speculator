@@ -3,7 +3,22 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { getBotId, query, resetSpeculatorDbCache } from "../db/db.js";
 import { truncateBotAndMarket, useTestDb } from "../db/test-db.js";
 import { applyStrategyCommand, parseStrategyArgs } from "./strategy.js";
-import { loadAssignedInstances, loadSelectedInstance } from "./tick.js";
+import {
+  exchangeDrifted,
+  keepNetIntents,
+  quoteToSpend,
+  settlePair,
+  loadAssignedInstances,
+  loadSelectedInstance,
+} from "./tick.js";
+import type {
+  Command,
+  Exchange,
+  Order,
+  PairConfig,
+  Portfolio,
+  PortfolioSnapshot,
+} from "../types.js";
 
 const UNUSED = "00000000-0000-4000-8000-000000000000";
 
@@ -321,6 +336,153 @@ async function selection(): Promise<string | null> {
     [getBotId()],
   );
   return rows[0]?.id ?? null;
+}
+
+const NET_PAIR: PairConfig = {
+  symbol: "SOL/USDC",
+  baseMint: "base",
+  quoteMint: "quote",
+  baseDecimals: 9,
+  quoteDecimals: 6,
+  poolAddress: "pool",
+};
+
+describe("pair net", () => {
+  it("spends quote only when the net adds exposure", () => {
+    assert.equal(quoteToSpend(0, 2, 10), 20);
+    assert.equal(quoteToSpend(2, 1, 10), 0);
+    assert.equal(quoteToSpend(0, -1, 10), 10);
+    assert.equal(quoteToSpend(1, -1, 10), 10);
+  });
+
+  it("drops opens when the wallet cannot pay or the chain has drifted", () => {
+    const open = { intent: "open-long" as const, signedBase: 1 };
+    const close = { intent: "close-long" as const, signedBase: -0.2 };
+    assert.equal(keepNetIntents([open, close], 0, 10, 0, false).length, 1);
+    assert.equal(keepNetIntents([open], 0, 10, 0, false).length, 0);
+    assert.equal(keepNetIntents([open], 0, 10, undefined, true).length, 0);
+    assert.equal(keepNetIntents([open, close], 0, 10, undefined, false).length, 2);
+    assert.equal(exchangeDrifted(1, 1.00001), false);
+    assert.equal(exchangeDrifted(1, 1.2), true);
+  });
+
+  it("sends one venue order for two opens and books both", async () => {
+    const calls: Command[] = [];
+    const first = fakePortfolio();
+    const second = fakePortfolio();
+    const books = await settlePair({
+      pair: NET_PAIR,
+      exchange: fakeExchange(calls),
+      price: 10,
+      pending: [
+        { command: netCommand("open-long", 50), portfolio: first, protective: false },
+        { command: netCommand("open-long", 50), portfolio: second, protective: false },
+      ],
+      currentExchange: 0,
+      simulated: true,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.intent, "open-long");
+    assert.equal(calls[0]?.quoteBudgetUsdc, 100);
+    assert.equal(books[0]?.kind, "filled");
+    assert.equal(books[1]?.kind, "filled");
+    assert.equal(first.orders.length, 1);
+    assert.equal(second.orders.length, 1);
+  });
+
+  it("keeps a close when the wallet cannot pay a new open", async () => {
+    const calls: Command[] = [];
+    const books = await settlePair({
+      pair: NET_PAIR,
+      exchange: fakeExchange(calls),
+      price: 10,
+      pending: [
+        { command: netCommand("open-long", 50), portfolio: fakePortfolio(), protective: false },
+        { command: netCommand("close-long", 1), portfolio: fakePortfolio(), protective: false },
+      ],
+      currentExchange: 1,
+      freeQuoteUsdc: 0,
+      simulated: true,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.intent, "close-long");
+    assert.equal(books[0]?.kind, "risk");
+    assert.equal(books[1]?.kind, "filled");
+  });
+});
+
+function netCommand(intent: Command["intent"], amount: number): Command {
+  const opens = intent === "open-long" || intent === "open-short";
+  return {
+    pair: NET_PAIR.symbol,
+    intent,
+    orderType: "market",
+    reason: intent,
+    at: new Date("2026-08-01T00:00:00.000Z"),
+    priceHint: 10,
+    ...(opens ? { quoteBudgetUsdc: amount } : { baseSize: amount }),
+  };
+}
+
+function fakePortfolio(): Portfolio & { orders: Order[] } {
+  const orders: Order[] = [];
+  const snapshot = (): PortfolioSnapshot => ({
+    cashUsdc: 1000,
+    position: {
+      pair: "SOL/USDC",
+      side: "flat",
+      size: 0,
+      entryPrice: 0,
+      strategyId: "",
+      slPrice: 0,
+    },
+    realizedPnl: 0,
+    equity: 1000,
+    trades: [],
+    nativeSol: 1,
+    insufficientSol: 0,
+    simulated: true,
+  });
+  return {
+    orders,
+    getSnapshot: snapshot,
+    syncFromChain: () => Promise.resolve(),
+    applyPositionData: () => Promise.resolve(),
+    applyOrder: (order) => {
+      orders.push(order);
+      return Promise.resolve({
+        pair: order.pair,
+        side: order.intent === "open-long" || order.intent === "close-short" ? "BUY" : "SELL",
+        price: order.price,
+        size: order.size,
+        at: order.at,
+        simulated: order.simulated,
+      });
+    },
+  };
+}
+
+function fakeExchange(calls: Command[]): Exchange {
+  return {
+    spotPrice: () => Promise.resolve(10),
+    perpsFeeSchedule: () => Promise.resolve(undefined),
+    execute: (command) => {
+      calls.push(command);
+      const opens = command.intent === "open-long" || command.intent === "open-short";
+      const size = opens ? (command.quoteBudgetUsdc ?? 0) / 10 : (command.baseSize ?? 0);
+      return Promise.resolve({
+        pair: command.pair,
+        type: "market" as const,
+        intent: command.intent,
+        price: 10,
+        size,
+        at: command.at,
+        simulated: true,
+        reason: command.reason,
+        priorityFeeUsdc: 0,
+      });
+    },
+  };
 }
 
 async function captureLog(run: () => Promise<void>): Promise<string> {

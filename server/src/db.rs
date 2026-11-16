@@ -11,6 +11,8 @@ pub struct Db {
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct PortfolioRow {
+    pub id: String,
+    pub strategy_registry_id: String,
     pub pair: String,
     pub cash_usdc: f64,
     pub realized_pnl: f64,
@@ -18,7 +20,7 @@ pub struct PortfolioRow {
     pub position_size: f64,
     pub entry_price: f64,
     pub opened_at: Option<DateTime<Utc>>,
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
     pub simulated: bool,
 }
 
@@ -55,26 +57,29 @@ impl Db {
         sqlx::query_as::<_, PortfolioRow>(
             r#"
             SELECT
+              i.id::text AS id,
+              i.registry_id AS strategy_registry_id,
               i.pair,
-              COALESCE(a.cash_usdc, 0) AS cash_usdc,
+              COALESCE(a.cash_usdc, b.deposit_usdc) AS cash_usdc,
               COALESCE(a.realized_pnl, 0) AS realized_pnl,
               COALESCE(p.side, 'flat') AS position_side,
               COALESCE(p.size, 0) AS position_size,
               COALESCE(p.entry_price, 0) AS entry_price,
               p.opened_at,
-              COALESCE(a.updated_at, p.updated_at, now()) AS updated_at,
+              COALESCE(a.updated_at, p.updated_at) AS updated_at,
               ($2 = 'paper') AS simulated
-            FROM strategy.instances i
+            FROM bot.strategies b
+            JOIN strategy.instances i ON i.id = b.strategy_id
             LEFT JOIN bot.virtual_accounts a
               ON a.strategy_id = i.id
-             AND a.bot_id = $1
+             AND a.bot_id = b.bot_id
              AND a.mode = $2::bot.mode
             LEFT JOIN bot.positions p
               ON p.strategy_id = i.id
-             AND p.bot_id = $1
+             AND p.bot_id = b.bot_id
              AND p.mode = $2::bot.mode
-            WHERE a.strategy_id IS NOT NULL OR p.strategy_id IS NOT NULL
-            ORDER BY i.pair, i.id
+            WHERE b.bot_id = $1
+            ORDER BY i.pair, i.registry_id, i.id
             "#,
         )
         .bind(bot_id)

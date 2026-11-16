@@ -38,9 +38,18 @@ function PortfolioCard({ item }: { item: PortfolioItemDto }) {
             {item.simulated ? "simulated" : "live"}
           </Badge>
         </div>
-        <CardDescription>Updated {new Date(item.updatedAt).toLocaleString()}</CardDescription>
+        <CardDescription>
+          {item.strategyRegistryId}
+          {item.updatedAt
+            ? ` · updated ${new Date(item.updatedAt).toLocaleString()}`
+            : " · not started"}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2 text-sm">
+        <div className="flex justify-between gap-4">
+          <span className="text-muted-foreground">Instance</span>
+          <span className="truncate font-mono text-xs">{item.id}</span>
+        </div>
         <div className="flex justify-between gap-4">
           <span className="text-muted-foreground">Cash</span>
           <span className="font-mono">{formatUsdc(item.cashUsdc)}</span>
@@ -140,7 +149,7 @@ export function PortfolioView() {
       ) : null}
 
       {!loading && !error && data
-        ? data.portfolios.map((item) => <PortfolioCard key={item.pair} item={item} />)
+        ? data.portfolios.map((item) => <PortfolioCard key={item.id} item={item} />)
         : null}
     </div>
   );

@@ -9,13 +9,15 @@ export interface PositionDto {
 }
 
 export interface PortfolioItemDto {
+  id: string;
+  strategyRegistryId: string;
   pair: string;
   cashUsdc: number;
   realizedPnl: number;
   equity: number;
   position: PositionDto;
   simulated: boolean;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export interface PortfolioResponse {

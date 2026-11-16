@@ -33,14 +33,17 @@ pub struct PositionDto {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioItemDto {
+    pub id: String,
+    pub strategy_registry_id: String,
     pub pair: String,
     pub cash_usdc: f64,
     pub realized_pnl: f64,
-    /// Mark-to-market using entry price when long (no live mark in DB).
+    /// Mark-to-market using the entry as the mark (no live quote in the DB).
     pub equity: f64,
     pub position: PositionDto,
     pub simulated: bool,
-    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +94,8 @@ pub async fn portfolio(
                 0.0
             };
             PortfolioItemDto {
+                id: row.id,
+                strategy_registry_id: row.strategy_registry_id,
                 pair: row.pair.clone(),
                 cash_usdc: row.cash_usdc,
                 realized_pnl: row.realized_pnl,
@@ -103,7 +108,7 @@ pub async fn portfolio(
                     opened_at: row.opened_at.map(|t| t.to_rfc3339()),
                 },
                 simulated: row.simulated,
-                updated_at: row.updated_at.to_rfc3339(),
+                updated_at: row.updated_at.map(|t| t.to_rfc3339()),
             }
         })
         .collect();
